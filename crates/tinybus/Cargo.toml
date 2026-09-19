@@ -38,7 +38,7 @@ flate2 = { version = "1", optional = true }
 tar = { version = "0.4", optional = true }
 zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
 tempfile = { version = "3", optional = true }
-toml = { version = "0.8", optional = true }
+toml = { version = "1", optional = true }
 
 [features]
 # `uds` and `macros` are on by default because a bus you cannot connect to over
