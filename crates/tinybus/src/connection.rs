@@ -964,7 +964,7 @@ impl Connection {
         let message =
             Message::streaming_call(destination, path, interface, member, to_body(&args)?);
         let reply = self.call_raw_message(message, timeout).await?;
-        self.decode_streaming_reply(reply.body, reply.header.sender, timeout)
+        self.decode_streaming_reply(reply.body, reply.header.sender)
             .await
     }
 
@@ -972,7 +972,6 @@ impl Connection {
         &self,
         reply: Value,
         sender: Option<BusName>,
-        timeout: Duration,
     ) -> Result<R> {
         let is_stream_reply = reply
             .as_object()
@@ -991,12 +990,7 @@ impl Connection {
             .inner
             .streams
             .take_reader_from(&envelope.stream.id, &sender)?;
-        let bytes = tokio::time::timeout(timeout, reader.read_to_end_capped(limit))
-            .await
-            .map_err(|_| Error::Timeout {
-                member: MemberName::new("StreamReply").expect("literal member name is valid"),
-                timeout_ms: timeout.as_millis() as u64,
-            })??;
+        let bytes = reader.read_to_end_capped(limit).await?;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
@@ -1415,10 +1409,63 @@ mod tests {
     async fn a_streaming_caller_accepts_an_ordinary_legacy_reply() {
         let (client, _service) = pair().await;
         let reply: Vec<String> = client
-            .decode_streaming_reply(serde_json::json!(["legacy"]), None, DEFAULT_TIMEOUT)
+            .decode_streaming_reply(serde_json::json!(["legacy"]), None)
             .await
             .unwrap();
         assert_eq!(reply, vec!["legacy"]);
+    }
+
+    #[tokio::test]
+    async fn a_streamed_reply_can_keep_progressing_past_the_reply_deadline() {
+        let (client, service) = pair().await;
+        let destination = BusName::new("ai.tinyhumans.Test").unwrap();
+        let mut writer = service
+            .open_stream(&destination, StreamDescriptor::with_len(6))
+            .await
+            .unwrap();
+        let stream = writer.stream_ref();
+        let send = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            writer.write(b"\"slow\"").await.unwrap();
+            writer.finish().await.unwrap();
+        });
+        let reply = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.decode_streaming_reply::<String>(
+                serde_json::json!({ "$tinybus_stream_reply": stream }),
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        send.await.unwrap();
+        assert_eq!(reply, "slow");
+    }
+
+    #[tokio::test]
+    async fn a_streamed_reply_that_stops_making_progress_times_out() {
+        let (client, service) = pair().await;
+        client.set_stream_limits(StreamLimits {
+            idle_timeout: Duration::from_millis(20),
+            ..StreamLimits::default()
+        });
+        let destination = BusName::new("ai.tinyhumans.Test").unwrap();
+        let writer = service
+            .open_stream(&destination, StreamDescriptor::with_len(6))
+            .await
+            .unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.decode_streaming_reply::<String>(
+                serde_json::json!({ "$tinybus_stream_reply": writer.stream_ref() }),
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(error.to_string().contains("went idle"), "{error}");
     }
 
     #[tokio::test]

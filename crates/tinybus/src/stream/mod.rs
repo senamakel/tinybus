@@ -94,9 +94,8 @@ pub struct StreamLimits {
     /// How many chunks may sit between the wire and the reader. This is the
     /// flow-control window: the sender is never more than this far ahead.
     pub window_chunks: usize,
-    /// How long a stream may see no writes before it is reaped. Bounds what an
-    /// abandoned stream — a sender that exited mid-transfer, or one stalled
-    /// against a reader that never reads — can hold open.
+    /// How long a stream may see no progress before it is reaped or a waiting
+    /// reader fails. Bounds what an abandoned stream can hold open.
     pub idle_timeout: Duration,
 }
 
@@ -574,6 +573,7 @@ impl StreamRegistry {
             declared_len: stream.declared_len,
             outcome: stream.outcome.clone(),
             chunks,
+            idle_timeout: self.limits().idle_timeout,
         })
     }
 }
@@ -739,6 +739,7 @@ impl Drop for StreamWriter {
 /// is merely too big for a frame, not too big for memory.
 pub struct StreamReader {
     chunks: mpsc::Receiver<Vec<u8>>,
+    idle_timeout: Duration,
     /// Only the verdict is shared with the receiving connection — deliberately
     /// not the whole stream record, whose drop is what closes this channel.
     outcome: Arc<std::sync::Mutex<Option<Outcome>>>,
@@ -769,11 +770,16 @@ impl StreamReader {
 
     /// The next chunk, or `None` at a clean end of stream.
     ///
-    /// Returns an error if the sender aborted, went idle, or closed the stream
-    /// short of the length it declared — a truncated payload must never be
-    /// mistaken for a complete one.
+    /// Returns an error if the sender aborted, went idle for this reader's
+    /// deadline, or closed the stream short of the length it declared — a
+    /// truncated payload must never be mistaken for a complete one.
     pub async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>> {
-        if let Some(chunk) = self.chunks.recv().await {
+        let chunk = tokio::time::timeout(self.idle_timeout, self.chunks.recv())
+            .await
+            .map_err(|_| Error::StreamAborted {
+                reason: "the stream went idle while being read".to_string(),
+            })?;
+        if let Some(chunk) = chunk {
             return Ok(Some(chunk));
         }
         match self.outcome.lock().expect("stream outcome lock").clone() {
