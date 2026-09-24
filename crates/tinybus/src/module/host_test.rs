@@ -12,6 +12,9 @@ static LAZY_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FAILED_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FAKE_MODULE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static REINIT_CONFIG: OnceLock<StdMutex<Vec<u8>>> = OnceLock::new();
+static BLOCKING_REINIT_RECEIVER: OnceLock<StdMutex<Option<std::sync::mpsc::Receiver<()>>>> =
+    OnceLock::new();
+static BLOCKING_REINIT_STARTED: AtomicBool = AtomicBool::new(false);
 
 struct FakeModule {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
@@ -51,6 +54,23 @@ unsafe extern "C" fn fake_reinitialize(
         .get_or_init(|| StdMutex::new(Vec::new()))
         .lock()
         .expect("reinit config lock") = bytes;
+    TB_OK
+}
+
+unsafe extern "C" fn blocking_reinitialize(
+    _: *mut std::ffi::c_void,
+    _: *const u8,
+    _: usize,
+) -> i32 {
+    BLOCKING_REINIT_STARTED.store(true, Ordering::Release);
+    if let Some(receiver) = BLOCKING_REINIT_RECEIVER
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("blocking reinitialize receiver lock")
+        .take()
+    {
+        let _ = receiver.recv();
+    }
     TB_OK
 }
 
@@ -106,10 +126,21 @@ unsafe extern "C" fn lazy_echo_init(
             module_ctx: module.cast(),
             deliver: fake_deliver,
             shutdown: fake_shutdown,
-            reinitialize: fake_reinitialize,
+            reinitialize: Some(fake_reinitialize),
         };
     }
     TB_OK
+}
+
+unsafe extern "C" fn blocking_reinitialize_init(
+    host: *const crate::module::abi::TbHostVtable,
+    out: *mut TbModuleVtable,
+) -> i32 {
+    let code = unsafe { lazy_echo_init(host, out) };
+    if code == TB_OK {
+        unsafe { (*out).reinitialize = Some(blocking_reinitialize) };
+    }
+    code
 }
 
 unsafe extern "C" fn failing_init(
@@ -234,6 +265,177 @@ async fn a_ready_module_accepts_replacement_configuration_without_reloading() {
         serde_json::from_slice::<serde_json::Value>(&captured).unwrap(),
         serde_json::json!({ "token": "replacement" })
     );
+}
+
+#[tokio::test]
+async fn cancelling_reinitialization_releases_the_host_lifecycle_reservation() {
+    let _test_guard = FAKE_MODULE_TEST_LOCK.lock().await;
+    let host = ModuleHost::new(Broker::new());
+    let (release, receiver) = std::sync::mpsc::sync_channel(1);
+    *BLOCKING_REINIT_RECEIVER
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("blocking reinitialize receiver lock") = Some(receiver);
+    BLOCKING_REINIT_STARTED.store(false, Ordering::Release);
+    unsafe {
+        host.attach_raw(
+            "clock.so",
+            TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest(),
+            blocking_reinitialize_init,
+        )
+    }
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while host.list()[0].state != ModuleState::Ready {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let inner = host.inner.clone();
+    let reinitializing = tokio::spawn(async move {
+        inner
+            .reinitialize("clock", serde_json::json!({ "token": "first" }))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !BLOCKING_REINIT_STARTED.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    reinitializing.abort();
+    assert!(reinitializing.await.unwrap_err().is_cancelled());
+
+    release.send(()).unwrap();
+    let info = tokio::time::timeout(
+        Duration::from_secs(1),
+        host.reinitialize("clock", serde_json::json!({ "token": "second" })),
+    )
+    .await
+    .expect("the cancelled operation releases the host reservation")
+    .unwrap();
+    assert_eq!(info.state, ModuleState::Ready);
+}
+
+#[tokio::test]
+async fn shutdown_does_not_report_a_module_stopped_while_reinitialization_is_running() {
+    let _test_guard = FAKE_MODULE_TEST_LOCK.lock().await;
+    let host = ModuleHost::new(Broker::new());
+    let (release, receiver) = std::sync::mpsc::sync_channel(1);
+    *BLOCKING_REINIT_RECEIVER
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("blocking reinitialize receiver lock") = Some(receiver);
+    BLOCKING_REINIT_STARTED.store(false, Ordering::Release);
+    unsafe {
+        host.attach_raw(
+            "clock.so",
+            TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest(),
+            blocking_reinitialize_init,
+        )
+    }
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while host.list()[0].state != ModuleState::Ready {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let inner = host.inner.clone();
+    let reinitializing = tokio::spawn(async move {
+        inner
+            .reinitialize("clock", serde_json::json!({ "token": "first" }))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !BLOCKING_REINIT_STARTED.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    host.shutdown(Duration::from_millis(10)).await;
+    assert_eq!(host.list()[0].state, ModuleState::Ready);
+    release.send(()).unwrap();
+    reinitializing.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn cancelling_a_waiting_stop_clears_its_pending_transition() {
+    let _test_guard = FAKE_MODULE_TEST_LOCK.lock().await;
+    let host = ModuleHost::new(Broker::new());
+    let (release, receiver) = std::sync::mpsc::sync_channel(1);
+    *BLOCKING_REINIT_RECEIVER
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("blocking reinitialize receiver lock") = Some(receiver);
+    BLOCKING_REINIT_STARTED.store(false, Ordering::Release);
+    unsafe {
+        host.attach_raw(
+            "clock.so",
+            TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest(),
+            blocking_reinitialize_init,
+        )
+    }
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while host.list()[0].state != ModuleState::Ready {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let inner = host.inner.clone();
+    let reinitializing = tokio::spawn(async move {
+        inner
+            .reinitialize("clock", serde_json::json!({ "token": "first" }))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !BLOCKING_REINIT_STARTED.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    reinitializing.abort();
+    assert!(reinitializing.await.unwrap_err().is_cancelled());
+
+    let inner = host.inner.clone();
+    let stopping = tokio::spawn(async move { inner.stop("clock", Duration::from_secs(1)).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let stop_is_pending = {
+                let loaded = host.inner.loaded.lock().expect("module list lock");
+                loaded[0].lifecycle_busy && loaded[0].transition_from.is_some()
+            };
+            if stop_is_pending {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    stopping.abort();
+    assert!(stopping.await.unwrap_err().is_cancelled());
+    let loaded = host.inner.loaded.lock().expect("module list lock");
+    assert!(!loaded[0].lifecycle_busy);
+    assert!(loaded[0].transition_from.is_none());
+    drop(loaded);
+
+    release.send(()).unwrap();
 }
 
 #[tokio::test]

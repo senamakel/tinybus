@@ -18,6 +18,9 @@ support. The host initializes the output vtable's leading `size` field with its
 allocation capacity before calling init. A newer module reads only that frozen
 field first and writes no more than the advertised capacity, so the additive
 tail is safe in both compatibility directions.
+The SDK bounds reinitialization setup to four seconds and returns `TB_TIMEOUT`
+after cancelling the setup future. The host serializes this callback with
+shutdown and retains the lifecycle lock even if its own outer deadline expires.
 The final host callback, `ready`, marks completion of asynchronous setup. This
 keeps a lazy module's reserved name routable during initialization without
 announcing ownership before its objects are serving.

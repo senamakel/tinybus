@@ -160,7 +160,7 @@ pub struct TbModuleVtable {
     pub shutdown: unsafe extern "C" fn(*mut c_void, u64) -> i32,
     /// Apply replacement JSON configuration without replacing the runtime.
     /// Hosts must check `size` before reading this additive tail field.
-    pub reinitialize: TbModuleReinitialize,
+    pub reinitialize: Option<TbModuleReinitialize>,
 }
 
 /// Size of the original ABI-v1 module vtable, before reinitialization was
@@ -175,7 +175,7 @@ impl Default for TbModuleVtable {
             module_ctx: std::ptr::null_mut(),
             deliver: invalid_deliver,
             shutdown: invalid_shutdown,
-            reinitialize: invalid_reinitialize,
+            reinitialize: None,
         }
     }
 }
@@ -185,10 +185,6 @@ unsafe extern "C" fn invalid_deliver(_: *mut c_void, _: *const u8, _: usize) -> 
 }
 
 unsafe extern "C" fn invalid_shutdown(_: *mut c_void, _: u64) -> i32 {
-    TB_CLOSED
-}
-
-unsafe extern "C" fn invalid_reinitialize(_: *mut c_void, _: *const u8, _: usize) -> i32 {
     TB_CLOSED
 }
 

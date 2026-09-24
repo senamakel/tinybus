@@ -14,7 +14,7 @@ use crate::message::codec::MAX_FRAME_LEN;
 use crate::message::{Message, MessageKind};
 use crate::module::abi::{
     TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
-    TbHostVtable, TbModuleVtable,
+    TB_TIMEOUT, TbHostVtable, TbModuleVtable,
 };
 use crate::ports::Transport;
 
@@ -51,6 +51,11 @@ pub(crate) struct ModuleTransport {
     init_result: OnceCell<std::result::Result<(), String>>,
     pending: Mutex<VecDeque<Message>>,
     drain_started: AtomicBool,
+    // Reconfiguration and shutdown both call into opaque module code. The
+    // owned guard moves into the blocking task, so a host-side timeout cannot
+    // let a second lifecycle callback overlap the still-running first one.
+    lifecycle: Arc<Mutex<()>>,
+    stop_task_spawned: Arc<AtomicBool>,
 }
 
 // `module_ctx` is opaque and all access to it goes through callbacks whose ABI
@@ -74,8 +79,12 @@ unsafe impl Send for DeferredInitializer {}
 unsafe impl Send for SendModuleVtable {}
 
 impl SendModuleVtable {
-    unsafe fn reinitialize(&self, bytes: &[u8]) -> i32 {
-        unsafe { (self.0.reinitialize)(self.0.module_ctx, bytes.as_ptr(), bytes.len()) }
+    unsafe fn reinitialize(
+        &self,
+        callback: crate::module::abi::TbModuleReinitialize,
+        bytes: &[u8],
+    ) -> i32 {
+        unsafe { callback(self.0.module_ctx, bytes.as_ptr(), bytes.len()) }
     }
 }
 
@@ -110,6 +119,8 @@ impl ModuleTransport {
             init_result: OnceCell::new(),
             pending: Mutex::new(VecDeque::new()),
             drain_started: AtomicBool::new(false),
+            lifecycle: Arc::new(Mutex::new(())),
+            stop_task_spawned: Arc::new(AtomicBool::new(false)),
         });
         let config = context.config.lock().expect("module config lock");
         let config_slice = crate::module::abi::TbSlice {
@@ -132,7 +143,10 @@ impl ModuleTransport {
     }
 
     pub(crate) fn initialize(&self, module: TbModuleVtable) -> Result<()> {
-        if module.size < TB_MODULE_VTABLE_BASE_SIZE || module.module_ctx.is_null() {
+        if module.size < TB_MODULE_VTABLE_BASE_SIZE
+            || module.module_ctx.is_null()
+            || (module.size >= size_of::<TbModuleVtable>() as u32 && module.reinitialize.is_none())
+        {
             return Err(Error::transport("module returned an incomplete vtable"));
         }
         *self.module.lock().expect("module vtable lock") = Some(module);
@@ -233,7 +247,16 @@ impl ModuleTransport {
         config.shrink_to_fit();
     }
 
-    pub(crate) async fn reinitialize(&self, config: serde_json::Value) -> Result<()> {
+    pub(crate) async fn reinitialize(self: &Arc<Self>, config: serde_json::Value) -> Result<()> {
+        let started = std::time::Instant::now();
+        let lifecycle =
+            tokio::time::timeout(MODULE_INIT_DEADLINE, self.lifecycle.clone().lock_owned())
+                .await
+                .map_err(|_| Error::Timeout {
+                    member: crate::MemberName::new("ReinitializeModule")
+                        .expect("static member name is valid"),
+                    timeout_ms: MODULE_INIT_DEADLINE.as_millis() as u64,
+                })?;
         let module = self
             .module
             .lock()
@@ -242,15 +265,20 @@ impl ModuleTransport {
         if module.size < size_of::<TbModuleVtable>() as u32 {
             return Err(Error::failed("module does not support reinitialization"));
         }
+        let callback = module
+            .reinitialize
+            .ok_or_else(|| Error::failed("module does not support reinitialization"))?;
         let module = SendModuleVtable(module);
         let bytes = crate::Secret::new(
             serde_json::to_vec(&config)
                 .map_err(|_| Error::failed("module configuration is invalid"))?,
         );
-        let task = tokio::task::spawn_blocking(move || unsafe {
-            module.reinitialize(bytes.expose_secret())
+        let remaining = MODULE_INIT_DEADLINE.saturating_sub(started.elapsed());
+        let task = tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            unsafe { module.reinitialize(callback, bytes.expose_secret()) }
         });
-        let code = tokio::time::timeout(MODULE_INIT_DEADLINE, task)
+        let code = tokio::time::timeout(remaining, task)
             .await
             .map_err(|_| Error::Timeout {
                 member: crate::MemberName::new("ReinitializeModule")
@@ -263,6 +291,11 @@ impl ModuleTransport {
             TB_BAD_ARGUMENT => Err(Error::failed("module configuration is invalid")),
             TB_CLOSED => Err(Error::failed("module reinitialization failed")),
             TB_PANICKED => Err(Error::failed("module reinitialization panicked")),
+            TB_TIMEOUT => Err(Error::Timeout {
+                member: crate::MemberName::new("ReinitializeModule")
+                    .expect("static member name is valid"),
+                timeout_ms: MODULE_INIT_DEADLINE.as_millis() as u64,
+            }),
             _ => Err(Error::failed("module reinitialization failed")),
         }
     }
@@ -438,6 +471,51 @@ impl ModuleTransport {
             .take();
         code
     }
+
+    pub(crate) fn stop_task_spawned(&self) -> bool {
+        self.stop_task_spawned.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn stop(
+        self: Arc<Self>,
+        deadline: Duration,
+    ) -> std::result::Result<i32, StopError> {
+        self.stop_task_spawned.store(false, Ordering::Release);
+        let started = std::time::Instant::now();
+        let lifecycle = tokio::time::timeout(deadline, self.lifecycle.clone().lock_owned())
+            .await
+            .map_err(|_| {
+                StopError::NotStarted(Error::failed(
+                    "module lifecycle operation exceeded its deadline",
+                ))
+            })?;
+        let remaining = deadline.saturating_sub(started.elapsed());
+        self.stop_task_spawned.store(true, Ordering::Release);
+        let task = tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            self.stop_sync(remaining)
+        });
+        tokio::time::timeout(remaining, task)
+            .await
+            .map_err(|_| {
+                StopError::Started(Error::failed("module shutdown exceeded its deadline"))
+            })?
+            .map_err(|_| StopError::Started(Error::failed("module shutdown task was cancelled")))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum StopError {
+    NotStarted(Error),
+    Started(Error),
+}
+
+impl From<StopError> for Error {
+    fn from(error: StopError) -> Self {
+        match error {
+            StopError::NotStarted(error) | StopError::Started(error) => error,
+        }
+    }
 }
 
 #[async_trait]
@@ -513,9 +591,7 @@ impl Transport for ModuleTransport {
         // on a blocking thread so a wedged shutdown cannot stall the broker
         // task that is closing this transport.
         let transport = self.self_ref.upgrade().ok_or(Error::ConnectionClosed)?;
-        tokio::task::spawn_blocking(move || transport.stop_sync(Duration::from_secs(5)))
-            .await
-            .map_err(|_| Error::transport("module shutdown task was cancelled"))?;
+        transport.stop(Duration::from_secs(5)).await?;
         Ok(())
     }
 
@@ -608,7 +684,12 @@ mod tests {
     static DELIVERY_CODE: AtomicI32 = AtomicI32::new(TB_OK);
     static DELIVERIES: AtomicUsize = AtomicUsize::new(0);
     static SHUTDOWN_CODE: AtomicI32 = AtomicI32::new(TB_OK);
+    static SHUTDOWN_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static SHUTDOWN_BLOCKED: AtomicBool = AtomicBool::new(false);
+    static SHUTDOWN_ENTERED: AtomicBool = AtomicBool::new(false);
     static REINITIALIZE_CODE: AtomicI32 = AtomicI32::new(TB_OK);
+    static REINITIALIZE_BLOCKED: AtomicBool = AtomicBool::new(false);
+    static REINITIALIZE_ENTERED: AtomicBool = AtomicBool::new(false);
     static VTABLE_TEST_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
         std::sync::OnceLock::new();
 
@@ -618,10 +699,19 @@ mod tests {
     }
 
     unsafe extern "C" fn shutdown(_: *mut c_void, _: u64) -> i32 {
+        SHUTDOWN_CALLS.fetch_add(1, Ordering::AcqRel);
+        SHUTDOWN_ENTERED.store(true, Ordering::Release);
+        while SHUTDOWN_BLOCKED.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
         SHUTDOWN_CODE.load(Ordering::Acquire)
     }
 
     unsafe extern "C" fn reinitialize(_: *mut c_void, _: *const u8, _: usize) -> i32 {
+        REINITIALIZE_ENTERED.store(true, Ordering::Release);
+        while REINITIALIZE_BLOCKED.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
         REINITIALIZE_CODE.load(Ordering::Acquire)
     }
 
@@ -633,7 +723,7 @@ mod tests {
                 module_ctx: std::ptr::dangling_mut(),
                 deliver,
                 shutdown,
-                reinitialize,
+                reinitialize: Some(reinitialize),
             };
         }
         TB_OK
@@ -705,7 +795,7 @@ mod tests {
             module_ctx: std::ptr::dangling_mut(),
             deliver,
             shutdown,
-            reinitialize,
+            reinitialize: Some(reinitialize),
             ..TbModuleVtable::default()
         };
         older.size = TB_MODULE_VTABLE_BASE_SIZE;
@@ -716,10 +806,28 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("does not support"));
         assert!(!error.to_string().contains("never printed"));
+
+        let (missing_callback, _) =
+            ModuleTransport::new("missing-callback".to_string(), Vec::new());
+        assert!(
+            missing_callback
+                .initialize(TbModuleVtable {
+                    module_ctx: std::ptr::dangling_mut(),
+                    deliver,
+                    shutdown,
+                    reinitialize: None,
+                    ..TbModuleVtable::default()
+                })
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn reinitialization_maps_callback_failures_without_exposing_configuration() {
+        let _lock = VTABLE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         let (uninitialized, _) = ModuleTransport::new("missing".to_string(), Vec::new());
         assert!(
             uninitialized
@@ -753,6 +861,83 @@ mod tests {
             .reinitialize(serde_json::json!({ "replacement": true }))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_running_reinitialization_excludes_another_reinitialization_and_shutdown() {
+        let _lock = VTABLE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        REINITIALIZE_CODE.store(TB_OK, Ordering::Release);
+        REINITIALIZE_BLOCKED.store(true, Ordering::Release);
+        REINITIALIZE_ENTERED.store(false, Ordering::Release);
+        SHUTDOWN_CALLS.store(0, Ordering::Release);
+        let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+        let mut module = TbModuleVtable::default();
+        unsafe { initialize_ok(std::ptr::null(), &mut module) };
+        transport.initialize(module).unwrap();
+
+        let first_transport = transport.clone();
+        let first = tokio::spawn(async move {
+            first_transport
+                .reinitialize(serde_json::json!({ "generation": 1 }))
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !REINITIALIZE_ENTERED.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                transport.reinitialize(serde_json::json!({ "generation": 2 })),
+            )
+            .await
+            .is_err()
+        );
+        assert!(matches!(
+            transport.clone().stop(Duration::from_millis(20)).await,
+            Err(StopError::NotStarted(_))
+        ));
+        assert_eq!(SHUTDOWN_CALLS.load(Ordering::Acquire), 0);
+
+        REINITIALIZE_BLOCKED.store(false, Ordering::Release);
+        first.await.unwrap().unwrap();
+        assert_eq!(
+            transport
+                .clone()
+                .stop(Duration::from_secs(1))
+                .await
+                .unwrap(),
+            TB_OK
+        );
+        assert_eq!(SHUTDOWN_CALLS.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_task_timeout_is_distinguished_from_a_lifecycle_lock_timeout() {
+        let _lock = VTABLE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        SHUTDOWN_BLOCKED.store(true, Ordering::Release);
+        SHUTDOWN_ENTERED.store(false, Ordering::Release);
+        let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+        let mut module = TbModuleVtable::default();
+        unsafe { initialize_ok(std::ptr::null(), &mut module) };
+        transport.initialize(module).unwrap();
+
+        assert!(matches!(
+            transport.clone().stop(Duration::from_millis(20)).await,
+            Err(StopError::Started(_))
+        ));
+        assert!(SHUTDOWN_ENTERED.load(Ordering::Acquire));
+        SHUTDOWN_BLOCKED.store(false, Ordering::Release);
     }
 
     #[tokio::test]
@@ -866,5 +1051,15 @@ mod tests {
             unsafe { (host.send)(host.host_ctx, outgoing.as_ptr(), outgoing.len()) },
             TB_CLOSED
         );
+    }
+
+    #[test]
+    fn stop_errors_keep_the_underlying_safe_error_for_both_lifecycle_phases() {
+        for error in [
+            StopError::NotStarted(Error::failed("before spawn")),
+            StopError::Started(Error::failed("after spawn")),
+        ] {
+            assert!(matches!(Error::from(error), Error::MethodFailed { .. }));
+        }
     }
 }

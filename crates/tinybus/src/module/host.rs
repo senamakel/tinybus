@@ -16,7 +16,7 @@ use crate::module::abi::{TB_OK, TbAbiDescriptor, TbModuleInit, TbModuleVtable, f
 use crate::module::github::CachedRelease;
 use crate::module::loader::{self, LoadedArtifact};
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
-use crate::module::transport::ModuleTransport;
+use crate::module::transport::{ModuleTransport, StopError};
 use crate::name::{BusName, ObjectPath};
 use crate::ports::Transport;
 use crate::version::Version;
@@ -94,6 +94,7 @@ struct LoadedModule {
     unique_name: BusName,
     transition_from: Option<ModuleState>,
     descriptor_info: Option<DescriptorInfo>,
+    lifecycle_busy: bool,
 }
 
 enum PendingModule {
@@ -202,6 +203,61 @@ struct ModuleHostInner {
     warned: AtomicBool,
 }
 
+/// Clears a module's host-side lifecycle reservation when its operation ends.
+///
+/// The reservation is separate from the transport's mutex: the latter keeps
+/// opaque callbacks from overlapping, while this guard ensures cancellation of
+/// a public host future cannot leave the module permanently unavailable.
+struct LifecycleBusyGuard<'a> {
+    host: &'a ModuleHostInner,
+    name: String,
+    stop_transport: Option<Arc<ModuleTransport>>,
+}
+
+impl<'a> LifecycleBusyGuard<'a> {
+    fn for_reinitialize(host: &'a ModuleHostInner, name: &str) -> Self {
+        Self {
+            host,
+            name: name.to_string(),
+            stop_transport: None,
+        }
+    }
+
+    fn for_stop(host: &'a ModuleHostInner, name: &str, transport: Arc<ModuleTransport>) -> Self {
+        Self {
+            host,
+            name: name.to_string(),
+            stop_transport: Some(transport),
+        }
+    }
+}
+
+impl Drop for LifecycleBusyGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(module) = self
+            .host
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter_mut()
+            .find(|module| module.info.name == self.name)
+        {
+            module.lifecycle_busy = false;
+            // A stop cancelled before it acquires the transport lifecycle
+            // mutex has no task left to consume this transition. Clear it
+            // so a later fault is not mistaken for that abandoned stop. Once
+            // a task exists, its eventual peer detach owns the transition.
+            if self
+                .stop_transport
+                .as_ref()
+                .is_some_and(|transport| !transport.stop_task_spawned())
+            {
+                module.transition_from = None;
+            }
+        }
+    }
+}
+
 /// The broker's private control hook. Kept behind a weak pointer so an unused
 /// broker does not keep a module host alive.
 #[async_trait::async_trait]
@@ -220,6 +276,8 @@ pub(crate) trait ModuleControl: Send + Sync {
         config: serde_json::Value,
     ) -> Result<(ModuleInfo, Option<ModuleTransition>)>;
     async fn stop(&self, name: &str, deadline: Duration) -> Result<ModuleInfo>;
+    async fn stop_after_lifecycle(&self, name: &str, deadline: Duration) -> Result<ModuleInfo>;
+    async fn stop_inner(&self, name: &str, deadline: Duration) -> Result<ModuleInfo>;
     async fn reinitialize(&self, name: &str, config: serde_json::Value) -> Result<ModuleInfo>;
     fn enable(&self, name: &str, enabled: bool) -> Result<(ModuleInfo, Option<ModuleTransition>)>;
     fn rescan(
@@ -716,26 +774,19 @@ impl ModuleHost {
 
     /// Stop every module within the supplied deadline per module.
     pub async fn shutdown(&self, deadline: Duration) {
-        let transports = self
+        let names = self
             .inner
             .loaded
             .lock()
             .expect("module list lock")
             .iter()
-            .map(|module| module.transport.clone())
+            .map(|module| module.info.name.clone())
             .collect::<Vec<_>>();
-        for transport in transports {
-            let _ = tokio::task::spawn_blocking(move || transport.stop_sync(deadline)).await;
-        }
-        for module in self
-            .inner
-            .loaded
-            .lock()
-            .expect("module list lock")
-            .iter_mut()
-        {
-            module.transition_from = Some(module.snapshot().state);
-            module.info.state = ModuleState::Stopped;
+        for name in names {
+            // A failed stop leaves the module's observed state intact. The
+            // callback may still own its bus name, so claiming it stopped
+            // would make the host's lifecycle report lie to its caller.
+            let _ = self.inner.stop_after_lifecycle(&name, deadline).await;
         }
     }
 
@@ -994,6 +1045,7 @@ impl ModuleHost {
                 unique_name: unique,
                 transition_from: None,
                 descriptor_info,
+                lifecycle_busy: false,
             });
         Ok(admitted)
     }
@@ -1188,6 +1240,34 @@ impl ModuleControl for ModuleHostInner {
     }
 
     async fn stop(&self, name: &str, deadline: Duration) -> Result<ModuleInfo> {
+        self.stop_inner(name, deadline).await
+    }
+
+    async fn stop_after_lifecycle(&self, name: &str, deadline: Duration) -> Result<ModuleInfo> {
+        let started = std::time::Instant::now();
+        tokio::time::timeout(deadline, async {
+            loop {
+                let busy = self
+                    .loaded
+                    .lock()
+                    .expect("module list lock")
+                    .iter()
+                    .find(|module| module.info.name == name)
+                    .ok_or_else(|| Error::failed("module is not loaded"))?
+                    .lifecycle_busy;
+                if !busy {
+                    return Ok::<(), Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| Error::failed("module lifecycle operation exceeded its deadline"))??;
+        self.stop_inner(name, deadline.saturating_sub(started.elapsed()))
+            .await
+    }
+
+    async fn stop_inner(&self, name: &str, deadline: Duration) -> Result<ModuleInfo> {
         let transport = {
             let mut loaded = self.loaded.lock().expect("module list lock");
             let module = loaded
@@ -1195,6 +1275,11 @@ impl ModuleControl for ModuleHostInner {
                 .find(|module| module.info.name == name)
                 .ok_or_else(|| Error::failed("module is not loaded"))?;
             let old = module.snapshot().state;
+            if module.lifecycle_busy {
+                return Err(Error::failed(
+                    "module lifecycle operation is already running",
+                ));
+            }
             if matches!(
                 &old,
                 ModuleState::Stopped | ModuleState::Faulted { .. } | ModuleState::Failed { .. }
@@ -1208,28 +1293,41 @@ impl ModuleControl for ModuleHostInner {
                 });
             }
             module.transition_from = Some(old);
+            module.lifecycle_busy = true;
             module.transport.clone()
         };
-        tokio::task::spawn_blocking(move || transport.stop_sync(deadline))
-            .await
-            .map_err(|_| Error::failed("module stop task was cancelled"))?;
+        let _lifecycle_busy = LifecycleBusyGuard::for_stop(self, name, transport.clone());
+        let stopped = transport.stop(deadline).await;
         let mut loaded = self.loaded.lock().expect("module list lock");
         let module = loaded
             .iter_mut()
             .find(|module| module.info.name == name)
             .ok_or_else(|| Error::failed("module is not loaded"))?;
+        match stopped {
+            Ok(_) => {}
+            Err(StopError::NotStarted(error)) => {
+                module.transition_from = None;
+                return Err(error);
+            }
+            Err(StopError::Started(error)) => return Err(error),
+        }
         module.info.state = ModuleState::Stopped;
         Ok(module.info.clone())
     }
 
     async fn reinitialize(&self, name: &str, config: serde_json::Value) -> Result<ModuleInfo> {
         let transport = {
-            let loaded = self.loaded.lock().expect("module list lock");
+            let mut loaded = self.loaded.lock().expect("module list lock");
             let module = loaded
-                .iter()
+                .iter_mut()
                 .find(|module| module.info.name == name)
                 .ok_or_else(|| Error::failed("module is not loaded"))?;
             let state = module.snapshot().state;
+            if module.lifecycle_busy {
+                return Err(Error::failed(
+                    "module lifecycle operation is already running",
+                ));
+            }
             if !matches!(state, ModuleState::Ready | ModuleState::Serving) {
                 return Err(Error::ModuleUnavailable {
                     module: module.info.name.clone(),
@@ -1237,16 +1335,18 @@ impl ModuleControl for ModuleHostInner {
                     detail: "module must be ready before reinitialization".to_string(),
                 });
             }
+            module.lifecycle_busy = true;
             module.transport.clone()
         };
-        transport.reinitialize(config).await?;
-        self.loaded
-            .lock()
-            .expect("module list lock")
-            .iter()
+        let _lifecycle_busy = LifecycleBusyGuard::for_reinitialize(self, name);
+        let reinitialized = transport.reinitialize(config).await;
+        let mut loaded = self.loaded.lock().expect("module list lock");
+        let module = loaded
+            .iter_mut()
             .find(|module| module.info.name == name)
-            .map(LoadedModule::snapshot)
-            .ok_or_else(|| Error::failed("module is not loaded"))
+            .ok_or_else(|| Error::failed("module is not loaded"))?;
+        reinitialized?;
+        Ok(module.snapshot())
     }
 
     fn enable(&self, name: &str, enabled: bool) -> Result<(ModuleInfo, Option<ModuleTransition>)> {
