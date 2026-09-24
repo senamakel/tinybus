@@ -608,6 +608,7 @@ mod tests {
     static DELIVERY_CODE: AtomicI32 = AtomicI32::new(TB_OK);
     static DELIVERIES: AtomicUsize = AtomicUsize::new(0);
     static SHUTDOWN_CODE: AtomicI32 = AtomicI32::new(TB_OK);
+    static REINITIALIZE_CODE: AtomicI32 = AtomicI32::new(TB_OK);
     static VTABLE_TEST_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
         std::sync::OnceLock::new();
 
@@ -621,7 +622,7 @@ mod tests {
     }
 
     unsafe extern "C" fn reinitialize(_: *mut c_void, _: *const u8, _: usize) -> i32 {
-        TB_OK
+        REINITIALIZE_CODE.load(Ordering::Acquire)
     }
 
     unsafe extern "C" fn initialize_ok(_: *const TbHostVtable, out: *mut TbModuleVtable) -> i32 {
@@ -715,6 +716,43 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("does not support"));
         assert!(!error.to_string().contains("never printed"));
+    }
+
+    #[tokio::test]
+    async fn reinitialization_maps_callback_failures_without_exposing_configuration() {
+        let (uninitialized, _) = ModuleTransport::new("missing".to_string(), Vec::new());
+        assert!(
+            uninitialized
+                .reinitialize(serde_json::json!({}))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("not initialized")
+        );
+
+        let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+        let mut module = TbModuleVtable::default();
+        unsafe { initialize_ok(std::ptr::null(), &mut module) };
+        transport.initialize(module).unwrap();
+        for (code, expected) in [
+            (TB_BAD_ARGUMENT, "configuration is invalid"),
+            (TB_CLOSED, "reinitialization failed"),
+            (TB_PANICKED, "reinitialization panicked"),
+            (77, "reinitialization failed"),
+        ] {
+            REINITIALIZE_CODE.store(code, Ordering::Release);
+            let error = transport
+                .reinitialize(serde_json::json!({ "secret": "never printed" }))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(!error.to_string().contains("never printed"));
+        }
+        REINITIALIZE_CODE.store(TB_OK, Ordering::Release);
+        transport
+            .reinitialize(serde_json::json!({ "replacement": true }))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
