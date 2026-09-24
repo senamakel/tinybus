@@ -86,6 +86,9 @@ same typed setup function again. Setup should validate before mutating shared
 state: a returned error keeps the runtime alive, but cannot roll back changes
 the module already made. Modules built before the optional ABI callback was
 added continue to load and report that reinitialization is unsupported.
+Reinitialization has a mandatory four-second module-side deadline and is
+serialized with both other reinitializations and shutdown. A host timeout never
+permits a later lifecycle callback to overlap code that is still returning.
 
 When present, `modules.toml` is authoritative for its directory. Keys are
 artifact file names (or stems) and values are lowercase SHA-256 hashes. An

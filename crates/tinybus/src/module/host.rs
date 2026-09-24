@@ -94,6 +94,7 @@ struct LoadedModule {
     unique_name: BusName,
     transition_from: Option<ModuleState>,
     descriptor_info: Option<DescriptorInfo>,
+    lifecycle_busy: bool,
 }
 
 enum PendingModule {
@@ -725,7 +726,7 @@ impl ModuleHost {
             .map(|module| module.transport.clone())
             .collect::<Vec<_>>();
         for transport in transports {
-            let _ = tokio::task::spawn_blocking(move || transport.stop_sync(deadline)).await;
+            let _ = transport.stop(deadline).await;
         }
         for module in self
             .inner
@@ -994,6 +995,7 @@ impl ModuleHost {
                 unique_name: unique,
                 transition_from: None,
                 descriptor_info,
+                lifecycle_busy: false,
             });
         Ok(admitted)
     }
@@ -1195,6 +1197,11 @@ impl ModuleControl for ModuleHostInner {
                 .find(|module| module.info.name == name)
                 .ok_or_else(|| Error::failed("module is not loaded"))?;
             let old = module.snapshot().state;
+            if module.lifecycle_busy {
+                return Err(Error::failed(
+                    "module lifecycle operation is already running",
+                ));
+            }
             if matches!(
                 &old,
                 ModuleState::Stopped | ModuleState::Faulted { .. } | ModuleState::Failed { .. }
@@ -1208,28 +1215,37 @@ impl ModuleControl for ModuleHostInner {
                 });
             }
             module.transition_from = Some(old);
+            module.lifecycle_busy = true;
             module.transport.clone()
         };
-        tokio::task::spawn_blocking(move || transport.stop_sync(deadline))
-            .await
-            .map_err(|_| Error::failed("module stop task was cancelled"))?;
+        let stopped = transport.stop(deadline).await;
         let mut loaded = self.loaded.lock().expect("module list lock");
         let module = loaded
             .iter_mut()
             .find(|module| module.info.name == name)
             .ok_or_else(|| Error::failed("module is not loaded"))?;
+        module.lifecycle_busy = false;
+        if stopped.is_err() {
+            module.transition_from = None;
+        }
+        stopped?;
         module.info.state = ModuleState::Stopped;
         Ok(module.info.clone())
     }
 
     async fn reinitialize(&self, name: &str, config: serde_json::Value) -> Result<ModuleInfo> {
         let transport = {
-            let loaded = self.loaded.lock().expect("module list lock");
+            let mut loaded = self.loaded.lock().expect("module list lock");
             let module = loaded
-                .iter()
+                .iter_mut()
                 .find(|module| module.info.name == name)
                 .ok_or_else(|| Error::failed("module is not loaded"))?;
             let state = module.snapshot().state;
+            if module.lifecycle_busy {
+                return Err(Error::failed(
+                    "module lifecycle operation is already running",
+                ));
+            }
             if !matches!(state, ModuleState::Ready | ModuleState::Serving) {
                 return Err(Error::ModuleUnavailable {
                     module: module.info.name.clone(),
@@ -1237,16 +1253,18 @@ impl ModuleControl for ModuleHostInner {
                     detail: "module must be ready before reinitialization".to_string(),
                 });
             }
+            module.lifecycle_busy = true;
             module.transport.clone()
         };
-        transport.reinitialize(config).await?;
-        self.loaded
-            .lock()
-            .expect("module list lock")
-            .iter()
+        let reinitialized = transport.reinitialize(config).await;
+        let mut loaded = self.loaded.lock().expect("module list lock");
+        let module = loaded
+            .iter_mut()
             .find(|module| module.info.name == name)
-            .map(LoadedModule::snapshot)
-            .ok_or_else(|| Error::failed("module is not loaded"))
+            .ok_or_else(|| Error::failed("module is not loaded"))?;
+        module.lifecycle_busy = false;
+        reinitialized?;
+        Ok(module.snapshot())
     }
 
     fn enable(&self, name: &str, enabled: bool) -> Result<(ModuleInfo, Option<ModuleTransition>)> {

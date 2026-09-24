@@ -16,12 +16,16 @@ use tinybus::message::Message;
 use tinybus::message::codec::MAX_FRAME_LEN;
 use tinybus::module::abi::{
     TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
-    TbHostVtable, TbModuleVtable, TbModuleVtableV1Prefix,
+    TB_TIMEOUT, TbHostVtable, TbModuleVtable, TbModuleVtableV1Prefix,
 };
 use tinybus::{Connection, Error, Result, Transport};
 use tokio::sync::{Mutex, mpsc};
 
 const MODULE_QUEUE_CAPACITY: usize = 256;
+#[cfg(not(test))]
+const MODULE_REINITIALIZE_DEADLINE: Duration = Duration::from_secs(4);
+#[cfg(test)]
+const MODULE_REINITIALIZE_DEADLINE: Duration = Duration::from_millis(100);
 const MODULE_PANIC_ERROR: &str = "ai.tinyhumans.tinybus.Error.ModulePanicked";
 static MANIFEST_BYTES: OnceLock<Vec<u8>> = OnceLock::new();
 
@@ -361,7 +365,7 @@ unsafe fn write_module_vtable(
                 module_ctx: state,
                 deliver,
                 shutdown,
-                reinitialize,
+                reinitialize: Some(reinitialize),
             });
         }
     } else {
@@ -497,10 +501,10 @@ where
                             message: format!("a module method panicked at {location}"),
                         }
                     }));
-                    *task_connection_slot.lock().expect("module connection lock") =
-                        Some(connection.clone());
                     match setup(connection.clone()).await {
                         Ok(()) => {
+                            *task_connection_slot.lock().expect("module connection lock") =
+                                Some(connection.clone());
                             host.ready();
                             // Keep the connection (and therefore the served
                             // object tree and transport) alive until shutdown
@@ -538,9 +542,67 @@ where
     }
 }
 
-/// Initialize a module whose setup function accepts typed JSON configuration.
+unsafe fn parse_config<C: serde::de::DeserializeOwned>(
+    host: *const TbHostVtable,
+) -> std::result::Result<C, i32> {
+    if host.is_null() {
+        return Err(TB_BAD_ARGUMENT);
+    }
+    if unsafe { host.cast::<u32>().read() } < size_of::<TbHostVtable>() as u32 {
+        return Err(TB_BAD_ARGUMENT);
+    }
+    let host_ref = unsafe { &*host };
+    if host_ref.config.len > 1024 * 1024
+        || (host_ref.config.ptr.is_null() && host_ref.config.len != 0)
+    {
+        return Err(TB_BAD_ARGUMENT);
+    }
+    let bytes = if host_ref.config.len == 0 {
+        b"{}".as_slice()
+    } else {
+        unsafe { std::slice::from_raw_parts(host_ref.config.ptr, host_ref.config.len) }
+    };
+    serde_json::from_slice::<C>(bytes).map_err(|_| TB_BAD_ARGUMENT)
+}
+
+/// Initialize a configured module without enabling live reconfiguration.
+///
+/// This retains the original `FnOnce` contract for direct SDK callers. The
+/// export macro uses [`start_reconfigurable_module`] because a named setup
+/// function can safely be called again.
 #[doc(hidden)]
 pub unsafe fn start_module_with_config<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: FnOnce(Connection, C) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let parsed = catch_unwind(AssertUnwindSafe(|| unsafe { parse_config::<C>(host) }));
+    let config = match parsed {
+        Ok(Ok(config)) => config,
+        Ok(Err(code)) => return code,
+        Err(_) => return TB_PANICKED,
+    };
+    unsafe {
+        start_module(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            move |connection| setup(connection, config),
+        )
+    }
+}
+
+/// Initialize a configured module whose setup function may be called again.
+#[doc(hidden)]
+pub unsafe fn start_reconfigurable_module<C, F, Fut>(
     host: *const TbHostVtable,
     out: *mut TbModuleVtable,
     worker_threads: usize,
@@ -552,26 +614,7 @@ where
     F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
-    let parsed = catch_unwind(AssertUnwindSafe(|| {
-        if host.is_null() {
-            return Err(TB_BAD_ARGUMENT);
-        }
-        if unsafe { host.cast::<u32>().read() } < size_of::<TbHostVtable>() as u32 {
-            return Err(TB_BAD_ARGUMENT);
-        }
-        let host_ref = unsafe { &*host };
-        if host_ref.config.len > 1024 * 1024
-            || (host_ref.config.ptr.is_null() && host_ref.config.len != 0)
-        {
-            return Err(TB_BAD_ARGUMENT);
-        }
-        let bytes = if host_ref.config.len == 0 {
-            b"{}".as_slice()
-        } else {
-            unsafe { std::slice::from_raw_parts(host_ref.config.ptr, host_ref.config.len) }
-        };
-        serde_json::from_slice::<C>(bytes).map_err(|_| TB_BAD_ARGUMENT)
-    }));
+    let parsed = catch_unwind(AssertUnwindSafe(|| unsafe { parse_config::<C>(host) }));
     let config = match parsed {
         Ok(Ok(config)) => config,
         Ok(Err(code)) => return code,
@@ -601,9 +644,12 @@ where
             else {
                 return TB_CLOSED;
             };
-            match handle.block_on(setup(connection, config)) {
-                Ok(()) => TB_OK,
-                Err(_) => TB_CLOSED,
+            match handle.block_on(async {
+                tokio::time::timeout(MODULE_REINITIALIZE_DEADLINE, setup(connection, config)).await
+            }) {
+                Ok(Ok(())) => TB_OK,
+                Ok(Err(_)) => TB_CLOSED,
+                Err(_) => TB_TIMEOUT,
             }
         })
     });
@@ -685,7 +731,7 @@ macro_rules! module_export {
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
             unsafe {
-                $crate::start_module_with_config::<$config, _, _>(
+                $crate::start_reconfigurable_module::<$config, _, _>(
                     host,
                     out,
                     $threads,
@@ -1099,10 +1145,26 @@ mod tests {
             },
             TB_BAD_ARGUMENT
         );
+        let (_tx, only_once) = std::sync::mpsc::channel::<()>();
+        assert_eq!(
+            unsafe {
+                start_module_with_config::<serde_json::Value, _, _>(
+                    std::ptr::null(),
+                    &mut out,
+                    1,
+                    true,
+                    move |_, _| async move {
+                        drop(only_once);
+                        Ok(())
+                    },
+                )
+            },
+            TB_BAD_ARGUMENT
+        );
     }
 
     #[test]
-    fn configured_startup_builds_a_runtime_announces_ready_and_shuts_down() {
+    fn configured_reinitializations_are_serialized_bounded_and_keep_the_runtime_alive() {
         let _host_state = blocking_host_state_guard();
         HOST_READY.store(false, Ordering::Release);
         HOST_SEND_CODE.store(TB_OK, Ordering::Release);
@@ -1115,16 +1177,32 @@ mod tests {
         host.send = capture_host_send;
         let mut out = TbModuleVtable::default();
         let observed = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
         let setup_observed = observed.clone();
+        let setup_active = active.clone();
+        let setup_max_active = max_active.clone();
         let code = unsafe {
-            start_module_with_config::<serde_json::Value, _, _>(
+            start_reconfigurable_module::<serde_json::Value, _, _>(
                 &host,
                 &mut out,
                 1,
                 true,
                 move |_, parsed| {
                     let observed = setup_observed.clone();
+                    let active = setup_active.clone();
+                    let max_active = setup_max_active.clone();
                     async move {
+                        if parsed["hang"].as_bool() == Some(true) {
+                            std::future::pending::<()>().await;
+                        }
+                        let waits = parsed["wait"].as_bool() == Some(true);
+                        if waits {
+                            let now = active.fetch_add(1, Ordering::AcqRel) + 1;
+                            max_active.fetch_max(now, Ordering::AcqRel);
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            active.fetch_sub(1, Ordering::AcqRel);
+                        }
                         observed.store(
                             parsed["answer"].as_u64().unwrap() as usize,
                             Ordering::Release,
@@ -1154,14 +1232,32 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(observed.load(Ordering::Acquire), 42);
+        let callback = out.reinitialize.expect("configured module supports reinit");
         let replacement = br#"{"answer":7}"#;
-        assert_eq!(
-            unsafe { (out.reinitialize)(out.module_ctx, replacement.as_ptr(), replacement.len()) },
-            TB_OK
-        );
+        let replacement_code =
+            unsafe { callback(out.module_ctx, replacement.as_ptr(), replacement.len()) };
+        assert_eq!(replacement_code, TB_OK);
         assert_eq!(observed.load(Ordering::Acquire), 7);
+        let context = out.module_ctx as usize;
+        let first = std::thread::spawn(move || {
+            let config = br#"{"answer":8,"wait":true}"#;
+            unsafe { callback(context as *mut c_void, config.as_ptr(), config.len()) }
+        });
+        let context = out.module_ctx as usize;
+        let second = std::thread::spawn(move || {
+            let config = br#"{"answer":9,"wait":true}"#;
+            unsafe { callback(context as *mut c_void, config.as_ptr(), config.len()) }
+        });
+        let first_code = first.join().unwrap();
+        let second_code = second.join().unwrap();
+        assert_eq!(first_code, TB_OK);
+        assert_eq!(second_code, TB_OK);
+        assert_eq!(max_active.load(Ordering::Acquire), 1);
+        let hanging = br#"{"answer":10,"hang":true}"#;
+        let hanging_code = unsafe { callback(out.module_ctx, hanging.as_ptr(), hanging.len()) };
+        assert_eq!(hanging_code, TB_TIMEOUT);
         assert_eq!(
-            unsafe { (out.reinitialize)(out.module_ctx, b"bad".as_ptr(), 3) },
+            unsafe { callback(out.module_ctx, b"bad".as_ptr(), 3) },
             TB_BAD_ARGUMENT
         );
         assert_eq!(

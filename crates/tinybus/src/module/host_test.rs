@@ -106,7 +106,7 @@ unsafe extern "C" fn lazy_echo_init(
             module_ctx: module.cast(),
             deliver: fake_deliver,
             shutdown: fake_shutdown,
-            reinitialize: fake_reinitialize,
+            reinitialize: Some(fake_reinitialize),
         };
     }
     TB_OK
