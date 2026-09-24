@@ -129,6 +129,28 @@ impl Proxy {
         Ok(serde_json::from_value(reply)?)
     }
 
+    /// Call a broker module-control method with a body redacted from every
+    /// observation surface.
+    ///
+    /// The broker accepts this marker only for module load and
+    /// reinitialization. It is distinct from [`Proxy::call_confidential`],
+    /// whose destination must be an already attested module.
+    pub async fn call_sensitive<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R> {
+        let message = crate::message::Message::sensitive_control_call(
+            self.destination.clone(),
+            self.path.clone(),
+            self.interface.clone(),
+            MemberName::new(member)?,
+            crate::connection::to_body(&args)?,
+        );
+        let reply = self.connection.call_raw(message, self.timeout).await?;
+        Ok(serde_json::from_value(reply)?)
+    }
+
     /// What the broker has verified about this proxy's destination, if
     /// anything.
     ///

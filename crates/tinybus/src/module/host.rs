@@ -220,6 +220,7 @@ pub(crate) trait ModuleControl: Send + Sync {
         config: serde_json::Value,
     ) -> Result<(ModuleInfo, Option<ModuleTransition>)>;
     async fn stop(&self, name: &str, deadline: Duration) -> Result<ModuleInfo>;
+    async fn reinitialize(&self, name: &str, config: serde_json::Value) -> Result<ModuleInfo>;
     fn enable(&self, name: &str, enabled: bool) -> Result<(ModuleInfo, Option<ModuleTransition>)>;
     fn rescan(
         self: Arc<Self>,
@@ -272,6 +273,20 @@ impl ModuleHost {
     pub fn with_config(self, module: impl Into<String>, config: serde_json::Value) -> Self {
         self.set_config(module, config);
         self
+    }
+
+    /// Apply replacement configuration to a running module.
+    ///
+    /// Reinitialization reuses the admitted module and its existing bus
+    /// connection. The module remains available while its setup function
+    /// applies the new values; a rejected configuration leaves the runtime
+    /// running with whatever state its setup function had already committed.
+    pub async fn reinitialize(
+        &self,
+        name: impl AsRef<str>,
+        config: serde_json::Value,
+    ) -> Result<ModuleInfo> {
+        self.inner.reinitialize(name.as_ref(), config).await
     }
 
     /// Snapshot all admitted modules.
@@ -1205,6 +1220,33 @@ impl ModuleControl for ModuleHostInner {
             .ok_or_else(|| Error::failed("module is not loaded"))?;
         module.info.state = ModuleState::Stopped;
         Ok(module.info.clone())
+    }
+
+    async fn reinitialize(&self, name: &str, config: serde_json::Value) -> Result<ModuleInfo> {
+        let transport = {
+            let loaded = self.loaded.lock().expect("module list lock");
+            let module = loaded
+                .iter()
+                .find(|module| module.info.name == name)
+                .ok_or_else(|| Error::failed("module is not loaded"))?;
+            let state = module.snapshot().state;
+            if !matches!(state, ModuleState::Ready | ModuleState::Serving) {
+                return Err(Error::ModuleUnavailable {
+                    module: module.info.name.clone(),
+                    state: state_name(&state).to_string(),
+                    detail: "module must be ready before reinitialization".to_string(),
+                });
+            }
+            module.transport.clone()
+        };
+        transport.reinitialize(config).await?;
+        self.loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .find(|module| module.info.name == name)
+            .map(LoadedModule::snapshot)
+            .ok_or_else(|| Error::failed("module is not loaded"))
     }
 
     fn enable(&self, name: &str, enabled: bool) -> Result<(ModuleInfo, Option<ModuleTransition>)> {

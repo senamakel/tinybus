@@ -5,11 +5,13 @@ use crate::Connection;
 use crate::module::abi::TbAbiDescriptor;
 use crate::transport::memory::MemoryBus;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex as StdMutex, OnceLock};
 
 static INIT_RAN: AtomicBool = AtomicBool::new(false);
 static LAZY_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FAILED_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FAKE_MODULE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static REINIT_CONFIG: OnceLock<StdMutex<Vec<u8>>> = OnceLock::new();
 
 struct FakeModule {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
@@ -29,6 +31,26 @@ unsafe extern "C" fn fake_deliver(ctx: *mut std::ffi::c_void, ptr: *const u8, le
 }
 
 unsafe extern "C" fn fake_shutdown(_: *mut std::ffi::c_void, _: u64) -> i32 {
+    TB_OK
+}
+
+unsafe extern "C" fn fake_reinitialize(
+    _: *mut std::ffi::c_void,
+    ptr: *const u8,
+    len: usize,
+) -> i32 {
+    if ptr.is_null() && len != 0 {
+        return crate::module::abi::TB_BAD_ARGUMENT;
+    }
+    let bytes = if len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+    };
+    *REINIT_CONFIG
+        .get_or_init(|| StdMutex::new(Vec::new()))
+        .lock()
+        .expect("reinit config lock") = bytes;
     TB_OK
 }
 
@@ -84,6 +106,7 @@ unsafe extern "C" fn lazy_echo_init(
             module_ctx: module.cast(),
             deliver: fake_deliver,
             shutdown: fake_shutdown,
+            reinitialize: fake_reinitialize,
         };
     }
     TB_OK
@@ -178,6 +201,39 @@ async fn a_lazy_module_initializes_on_the_first_call_and_two_racing_callers_init
     assert_eq!(LAZY_INIT_COUNT.load(Ordering::Acquire), 1);
     assert_eq!(host.list()[0].state, ModuleState::Ready);
     broker_task.abort();
+}
+
+#[tokio::test]
+async fn a_ready_module_accepts_replacement_configuration_without_reloading() {
+    let _test_guard = FAKE_MODULE_TEST_LOCK.lock().await;
+    let host = ModuleHost::new(Broker::new());
+    unsafe {
+        host.attach_raw(
+            "clock.so",
+            TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest(),
+            lazy_echo_init,
+        )
+    }
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while host.list()[0].state != ModuleState::Ready {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let info = host
+        .reinitialize("clock", serde_json::json!({ "token": "replacement" }))
+        .await
+        .unwrap();
+    assert_eq!(info.state, ModuleState::Ready);
+    let captured = REINIT_CONFIG.get().unwrap().lock().unwrap().clone();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&captured).unwrap(),
+        serde_json::json!({ "token": "replacement" })
+    );
 }
 
 #[tokio::test]
@@ -1125,10 +1181,19 @@ async fn a_real_cdylib_loads_and_serves_a_call() {
     assert!(panic_text.contains("ModulePanicked"), "{panic_text}");
     assert!(panic_text.contains("module_clock.rs"), "{panic_text}");
     assert!(!panic_text.contains("secret-token"), "{panic_text}");
-    let name_change = tokio::time::timeout(Duration::from_secs(2), name_changes.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let name_change = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let message = name_changes.recv().await.unwrap();
+            if message.body.get(0).and_then(serde_json::Value::as_str)
+                == Some("ai.tinyhumans.openhuman.Clock")
+                && message.body.get(2).is_some_and(serde_json::Value::is_null)
+            {
+                break message;
+            }
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(name_change.body[0], "ai.tinyhumans.openhuman.Clock");
     assert!(name_change.body[2].is_null());
 

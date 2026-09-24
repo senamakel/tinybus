@@ -93,6 +93,11 @@ pub struct Header {
     /// without checking `GetAttestation` first. See [`crate::attest`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub confidential: bool,
+    /// Host-control payload that must be redacted from observation surfaces.
+    /// Unlike `confidential`, this does not claim an attested remote recipient;
+    /// it is accepted only for the broker's module configuration methods.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sensitive: bool,
 }
 
 /// A framed message: header plus a JSON body.
@@ -135,6 +140,7 @@ impl Message {
                 member: Some(member),
                 error_name: None,
                 confidential: false,
+                sensitive: false,
             },
             body,
         }
@@ -161,6 +167,19 @@ impl Message {
         message
     }
 
+    /// Build a private host-control call for module configuration.
+    pub(crate) fn sensitive_control_call(
+        destination: BusName,
+        path: ObjectPath,
+        interface: InterfaceName,
+        member: MemberName,
+        body: Value,
+    ) -> Self {
+        let mut message = Self::method_call(destination, path, interface, member, body);
+        message.header.sensitive = true;
+        message
+    }
+
     /// Build the successful reply to `call`.
     pub fn method_return(call: &Header, body: Value) -> Self {
         Self {
@@ -182,6 +201,7 @@ impl Message {
                 // key derivation returns a key — and a reply that quietly lost
                 // the flag would be the leak the call avoided, one hop later.
                 confidential: call.confidential,
+                sensitive: false,
             },
             body,
         }
@@ -208,6 +228,7 @@ impl Message {
                 // confidential would make it undeliverable exactly when the
                 // recipient failed attestation, swallowing the diagnosis.
                 confidential: false,
+                sensitive: false,
             },
             body: Value::String(error.wire_message()),
         }
@@ -235,6 +256,7 @@ impl Message {
                 // Structurally impossible to set: a signal is a broadcast, and
                 // `validate` refuses the combination on ingress.
                 confidential: false,
+                sensitive: false,
             },
             body,
         }
@@ -279,16 +301,14 @@ impl Message {
         // one recipient to attest and fan-out is the only thing it could mean.
         // Refusing it here means no later stage has to ask whether a broadcast
         // might be a secret.
-        if self.header.confidential {
+        if self.header.confidential || self.header.sensitive {
             if self.header.kind == MessageKind::Signal {
                 return Err(Error::protocol(
-                    "a signal cannot be confidential: it is a broadcast",
+                    "a signal cannot carry a private body: it is a broadcast",
                 ));
             }
             if self.header.destination.is_none() {
-                return Err(Error::protocol(
-                    "a confidential message needs a destination",
-                ));
+                return Err(Error::protocol("a private message needs a destination"));
             }
         }
         match self.header.kind {
@@ -450,9 +470,10 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_message_does_not_pay_for_the_confidential_flag() {
+    fn an_ordinary_message_does_not_pay_for_private_flags() {
         let json = serde_json::to_string(&call()).unwrap();
         assert!(!json.contains("confidential"), "{json}");
+        assert!(!json.contains("sensitive"), "{json}");
     }
 
     #[test]
@@ -470,6 +491,7 @@ mod tests {
         });
         let header: Header = serde_json::from_value(old).unwrap();
         assert!(!header.confidential);
+        assert!(!header.sensitive);
     }
 
     #[test]

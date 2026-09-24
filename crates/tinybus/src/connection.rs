@@ -345,7 +345,7 @@ impl Connection {
         config: serde_json::Value,
     ) -> Result<crate::module::ModuleInfo> {
         let value = self
-            .call_bus(
+            .call_bus_sensitive(
                 "LoadModule",
                 serde_json::json!([path.as_ref().to_string_lossy(), config]),
             )
@@ -363,7 +363,7 @@ impl Connection {
         config: serde_json::Value,
     ) -> Result<crate::module::ModuleInfo> {
         let value = self
-            .call_bus(
+            .call_bus_sensitive(
                 "LoadGithubModule",
                 serde_json::json!([
                     release_url.as_ref(),
@@ -371,6 +371,25 @@ impl Connection {
                     sha256.as_ref(),
                     config
                 ]),
+            )
+            .await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    /// Apply replacement JSON configuration to a running module.
+    ///
+    /// Configuration is always carried as a sensitive control call and is
+    /// never eligible for signal fan-out or monitor output.
+    #[cfg(feature = "modules")]
+    pub async fn reinitialize_module(
+        &self,
+        name: impl AsRef<str>,
+        config: serde_json::Value,
+    ) -> Result<crate::module::ModuleInfo> {
+        let value = self
+            .call_bus_sensitive(
+                "ReinitializeModule",
+                serde_json::json!([name.as_ref(), config]),
             )
             .await?;
         Ok(serde_json::from_value(value)?)
@@ -575,11 +594,13 @@ impl Connection {
         // — and the broker cannot catch that for us, because seeing the handle
         // would mean reading a confidential body. Checked only when the flag is
         // set, so ordinary traffic pays nothing.
-        if message.header.confidential && crate::stream::body_contains_stream_ref(&message.body) {
+        if (message.header.confidential || message.header.sensitive)
+            && crate::stream::body_contains_stream_ref(&message.body)
+        {
             return Err(Error::protocol(
-                "a confidential call cannot carry a stream handle: the stream's bytes \
+                "a private call cannot carry a stream handle: the stream's bytes \
                  travel as separate unattested writes, so the payload would not be \
-                 confidential even though the handle was",
+                 private even though the handle was",
             ));
         }
         let member = message.member_or_unknown();
@@ -862,6 +883,18 @@ impl Connection {
     /// Call a method on the broker's own interface.
     async fn call_bus(&self, member: &str, args: Value) -> Result<Value> {
         let message = Message::method_call(
+            BusName::new(crate::BUS_NAME)?,
+            ObjectPath::new(crate::BUS_PATH)?,
+            InterfaceName::new(crate::BUS_INTERFACE)?,
+            MemberName::new(member)?,
+            args,
+        );
+        self.call_raw(message, DEFAULT_TIMEOUT).await
+    }
+
+    #[cfg(feature = "modules")]
+    async fn call_bus_sensitive(&self, member: &str, args: Value) -> Result<Value> {
+        let message = Message::sensitive_control_call(
             BusName::new(crate::BUS_NAME)?,
             ObjectPath::new(crate::BUS_PATH)?,
             InterfaceName::new(crate::BUS_INTERFACE)?,
@@ -1328,6 +1361,12 @@ mod tests {
         assert!(
             connection
                 .load_module("/definitely/not/a/module", serde_json::json!({}))
+                .await
+                .is_err()
+        );
+        assert!(
+            connection
+                .reinitialize_module("missing", serde_json::json!({ "secret": "redacted" }))
                 .await
                 .is_err()
         );
