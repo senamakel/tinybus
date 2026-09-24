@@ -203,6 +203,40 @@ struct ModuleHostInner {
     warned: AtomicBool,
 }
 
+/// Clears a module's host-side lifecycle reservation when its operation ends.
+///
+/// The reservation is separate from the transport's mutex: the latter keeps
+/// opaque callbacks from overlapping, while this guard ensures cancellation of
+/// a public host future cannot leave the module permanently unavailable.
+struct LifecycleBusyGuard<'a> {
+    host: &'a ModuleHostInner,
+    name: String,
+}
+
+impl<'a> LifecycleBusyGuard<'a> {
+    fn new(host: &'a ModuleHostInner, name: &str) -> Self {
+        Self {
+            host,
+            name: name.to_string(),
+        }
+    }
+}
+
+impl Drop for LifecycleBusyGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(module) = self
+            .host
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter_mut()
+            .find(|module| module.info.name == self.name)
+        {
+            module.lifecycle_busy = false;
+        }
+    }
+}
+
 /// The broker's private control hook. Kept behind a weak pointer so an unused
 /// broker does not keep a module host alive.
 #[async_trait::async_trait]
@@ -717,26 +751,19 @@ impl ModuleHost {
 
     /// Stop every module within the supplied deadline per module.
     pub async fn shutdown(&self, deadline: Duration) {
-        let transports = self
+        let names = self
             .inner
             .loaded
             .lock()
             .expect("module list lock")
             .iter()
-            .map(|module| module.transport.clone())
+            .map(|module| module.info.name.clone())
             .collect::<Vec<_>>();
-        for transport in transports {
-            let _ = transport.stop(deadline).await;
-        }
-        for module in self
-            .inner
-            .loaded
-            .lock()
-            .expect("module list lock")
-            .iter_mut()
-        {
-            module.transition_from = Some(module.snapshot().state);
-            module.info.state = ModuleState::Stopped;
+        for name in names {
+            // A failed stop leaves the module's observed state intact. The
+            // callback may still own its bus name, so claiming it stopped
+            // would make the host's lifecycle report lie to its caller.
+            let _ = self.inner.stop(&name, deadline).await;
         }
     }
 
@@ -1218,13 +1245,13 @@ impl ModuleControl for ModuleHostInner {
             module.lifecycle_busy = true;
             module.transport.clone()
         };
+        let _lifecycle_busy = LifecycleBusyGuard::new(self, name);
         let stopped = transport.stop(deadline).await;
         let mut loaded = self.loaded.lock().expect("module list lock");
         let module = loaded
             .iter_mut()
             .find(|module| module.info.name == name)
             .ok_or_else(|| Error::failed("module is not loaded"))?;
-        module.lifecycle_busy = false;
         if stopped.is_err() {
             module.transition_from = None;
         }
@@ -1256,13 +1283,13 @@ impl ModuleControl for ModuleHostInner {
             module.lifecycle_busy = true;
             module.transport.clone()
         };
+        let _lifecycle_busy = LifecycleBusyGuard::new(self, name);
         let reinitialized = transport.reinitialize(config).await;
         let mut loaded = self.loaded.lock().expect("module list lock");
         let module = loaded
             .iter_mut()
             .find(|module| module.info.name == name)
             .ok_or_else(|| Error::failed("module is not loaded"))?;
-        module.lifecycle_busy = false;
         reinitialized?;
         Ok(module.snapshot())
     }
