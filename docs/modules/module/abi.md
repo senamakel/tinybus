@@ -14,7 +14,10 @@ returns; modules must not retain the borrowed pointer.
 The module vtable's optional tail callback accepts replacement configuration.
 The host bounds the call, zeroizes its serialized buffer afterward, and treats
 older vtables that end before the callback as modules without reinitialization
-support.
+support. The host initializes the output vtable's leading `size` field with its
+allocation capacity before calling init. A newer module reads only that frozen
+field first and writes no more than the advertised capacity, so the additive
+tail is safe in both compatibility directions.
 The final host callback, `ready`, marks completion of asynchronous setup. This
 keeps a lazy module's reserved name routable during initialization without
 announcing ownership before its objects are serving.

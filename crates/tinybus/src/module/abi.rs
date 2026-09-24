@@ -129,8 +129,26 @@ pub struct TbHostVtable {
 /// Calls from a host into one initialized module.
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct TbModuleVtableV1Prefix {
+    /// Bytes available in the host-provided output allocation.
+    pub size: u32,
+    /// Reserved and zero in v1.
+    pub _reserved: u32,
+    /// Opaque module context, never dereferenced by the host.
+    pub module_ctx: *mut c_void,
+    /// Deliver one complete JSON message frame without blocking.
+    pub deliver: unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32,
+    /// Stop module tasks, bounded by `deadline_ms`.
+    pub shutdown: unsafe extern "C" fn(*mut c_void, u64) -> i32,
+}
+
+/// Calls from a host into one initialized module.
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct TbModuleVtable {
-    /// Size of this vtable, allowing additive growth.
+    /// Bytes available in the host-provided output allocation on entry; size
+    /// written by the module on success. This handshake permits additive tail
+    /// fields without overrunning an older host's allocation.
     pub size: u32,
     /// Reserved and zero in v1.
     pub _reserved: u32,
@@ -147,8 +165,7 @@ pub struct TbModuleVtable {
 
 /// Size of the original ABI-v1 module vtable, before reinitialization was
 /// added as an optional tail callback.
-pub const TB_MODULE_VTABLE_BASE_SIZE: u32 =
-    std::mem::offset_of!(TbModuleVtable, reinitialize) as u32;
+pub const TB_MODULE_VTABLE_BASE_SIZE: u32 = size_of::<TbModuleVtableV1Prefix>() as u32;
 
 impl Default for TbModuleVtable {
     fn default() -> Self {
@@ -245,6 +262,10 @@ mod tests {
     #[test]
     fn an_uninitialized_module_vtable_refuses_calls() {
         let vtable = TbModuleVtable::default();
+        assert_eq!(
+            TB_MODULE_VTABLE_BASE_SIZE as usize,
+            std::mem::offset_of!(TbModuleVtable, reinitialize)
+        );
         assert_eq!(vtable.size as usize, size_of::<TbModuleVtable>());
         assert_eq!(
             unsafe { (vtable.deliver)(vtable.module_ctx, std::ptr::null(), 0) },

@@ -16,7 +16,7 @@ use tinybus::message::Message;
 use tinybus::message::codec::MAX_FRAME_LEN;
 use tinybus::module::abi::{
     TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
-    TbHostVtable, TbModuleVtable,
+    TbHostVtable, TbModuleVtable, TbModuleVtableV1Prefix,
 };
 use tinybus::{Connection, Error, Result, Transport};
 use tokio::sync::{Mutex, mpsc};
@@ -343,6 +343,41 @@ unsafe extern "C" fn reinitialize(ctx: *mut c_void, ptr: *const u8, len: usize) 
     }
 }
 
+unsafe fn write_module_vtable(
+    out: *mut TbModuleVtable,
+    out_capacity: u32,
+    state: *mut c_void,
+    supports_reinitialize: bool,
+) {
+    if out_capacity >= size_of::<TbModuleVtable>() as u32 {
+        unsafe {
+            out.write(TbModuleVtable {
+                size: if supports_reinitialize {
+                    size_of::<TbModuleVtable>() as u32
+                } else {
+                    TB_MODULE_VTABLE_BASE_SIZE
+                },
+                _reserved: 0,
+                module_ctx: state,
+                deliver,
+                shutdown,
+                reinitialize,
+            });
+        }
+    } else {
+        unsafe {
+            out.cast::<TbModuleVtableV1Prefix>()
+                .write(TbModuleVtableV1Prefix {
+                    size: TB_MODULE_VTABLE_BASE_SIZE,
+                    _reserved: 0,
+                    module_ctx: state,
+                    deliver,
+                    shutdown,
+                });
+        }
+    }
+}
+
 /// Initialize the module runtime and start its async setup function.
 ///
 /// This is public only for [`module_export!`] expansions. Module authors call
@@ -376,6 +411,13 @@ where
 {
     match catch_unwind(AssertUnwindSafe(|| {
         if host.is_null() || out.is_null() || worker_threads == 0 {
+            return TB_BAD_ARGUMENT;
+        }
+        // `out.size` is input as well as output: an older ABI-v1 host owns a
+        // shorter allocation. Read only the frozen first field until its
+        // capacity is known, then write no further than that boundary.
+        let out_capacity = unsafe { out.cast::<u32>().read() };
+        if out_capacity < TB_MODULE_VTABLE_BASE_SIZE {
             return TB_BAD_ARGUMENT;
         }
         // `size` is the frozen prefix field; do not copy the full vtable until
@@ -480,11 +522,7 @@ where
 
         let reinitializer =
             reinitialize_factory.map(|factory| factory(runtime.handle().clone(), connection_slot));
-        let vtable_size = if reinitializer.is_some() {
-            size_of::<TbModuleVtable>() as u32
-        } else {
-            TB_MODULE_VTABLE_BASE_SIZE
-        };
+        let supports_reinitialize = reinitializer.is_some();
 
         let state = Box::new(RuntimeState {
             inbound: StdMutex::new(Some(inbound_tx)),
@@ -492,16 +530,7 @@ where
             reinitialize: reinitializer,
         });
         let state = Box::into_raw(state).cast::<c_void>();
-        unsafe {
-            out.write(TbModuleVtable {
-                size: vtable_size,
-                _reserved: 0,
-                module_ctx: state,
-                deliver,
-                shutdown,
-                reinitialize,
-            });
-        }
+        unsafe { write_module_vtable(out, out_capacity, state, supports_reinitialize) };
         TB_OK
     })) {
         Ok(code) => code,
@@ -834,6 +863,38 @@ mod tests {
             )
         };
         assert_eq!(code, TB_BAD_ARGUMENT);
+    }
+
+    #[test]
+    fn a_new_module_never_writes_past_an_older_hosts_vtable_capacity() {
+        #[repr(C)]
+        struct GuardedPrefix {
+            table: TbModuleVtableV1Prefix,
+            guard: u64,
+        }
+
+        let mut output = GuardedPrefix {
+            table: TbModuleVtableV1Prefix {
+                size: TB_MODULE_VTABLE_BASE_SIZE,
+                _reserved: 0,
+                module_ctx: std::ptr::null_mut(),
+                deliver,
+                shutdown,
+            },
+            guard: 0xfeed_face_dead_beef,
+        };
+        let capacity = output.table.size;
+        unsafe {
+            write_module_vtable(
+                std::ptr::from_mut(&mut output.table).cast(),
+                capacity,
+                std::ptr::dangling_mut(),
+                true,
+            );
+        }
+        assert_eq!(output.table.size, TB_MODULE_VTABLE_BASE_SIZE);
+        assert_eq!(output.table.module_ctx, std::ptr::dangling_mut());
+        assert_eq!(output.guard, 0xfeed_face_dead_beef);
     }
 
     fn invalid_manifest_declaration() -> ManifestDeclaration<'static> {
