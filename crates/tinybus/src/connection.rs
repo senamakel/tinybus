@@ -656,7 +656,11 @@ impl Connection {
     /// Send a call and wait for its reply, without typing either end.
     ///
     /// The plumbing under every typed call, and what `tinybus call` uses.
-    pub async fn call_raw(&self, mut message: Message, timeout: Duration) -> Result<Value> {
+    pub async fn call_raw(&self, message: Message, timeout: Duration) -> Result<Value> {
+        Ok(self.call_raw_message(message, timeout).await?.body)
+    }
+
+    async fn call_raw_message(&self, mut message: Message, timeout: Duration) -> Result<Message> {
         let serial = self.inner.serial.fetch_add(1, Ordering::Relaxed);
         message.header.serial = serial;
         message.validate()?;
@@ -693,7 +697,7 @@ impl Connection {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(reply)) => match reply.header.kind {
                 MessageKind::Error => Err(reply.into_error()),
-                _ => Ok(reply.body),
+                _ => Ok(reply),
             },
             // The dispatch loop dropped the sender: the transport is gone.
             Ok(Err(_)) => Err(Error::ConnectionClosed),
@@ -959,13 +963,15 @@ impl Connection {
     ) -> Result<R> {
         let message =
             Message::streaming_call(destination, path, interface, member, to_body(&args)?);
-        let reply = self.call_raw(message, timeout).await?;
-        self.decode_streaming_reply(reply, timeout).await
+        let reply = self.call_raw_message(message, timeout).await?;
+        self.decode_streaming_reply(reply.body, reply.header.sender, timeout)
+            .await
     }
 
     async fn decode_streaming_reply<R: DeserializeOwned>(
         &self,
         reply: Value,
+        sender: Option<BusName>,
         timeout: Duration,
     ) -> Result<R> {
         let is_stream_reply = reply
@@ -981,7 +987,10 @@ impl Connection {
             .stream
             .len
             .ok_or_else(|| Error::protocol("a streamed reply must declare its length"))?;
-        let mut reader = self.accept_stream(&envelope.stream)?;
+        let mut reader = self
+            .inner
+            .streams
+            .take_reader_from(&envelope.stream.id, &sender)?;
         let bytes = tokio::time::timeout(timeout, reader.read_to_end_capped(limit))
             .await
             .map_err(|_| Error::Timeout {
@@ -1406,7 +1415,7 @@ mod tests {
     async fn a_streaming_caller_accepts_an_ordinary_legacy_reply() {
         let (client, _service) = pair().await;
         let reply: Vec<String> = client
-            .decode_streaming_reply(serde_json::json!(["legacy"]), DEFAULT_TIMEOUT)
+            .decode_streaming_reply(serde_json::json!(["legacy"]), None, DEFAULT_TIMEOUT)
             .await
             .unwrap();
         assert_eq!(reply, vec!["legacy"]);
