@@ -16,7 +16,7 @@ use crate::module::abi::{TB_OK, TbAbiDescriptor, TbModuleInit, TbModuleVtable, f
 use crate::module::github::CachedRelease;
 use crate::module::loader::{self, LoadedArtifact};
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
-use crate::module::transport::ModuleTransport;
+use crate::module::transport::{ModuleTransport, StopError};
 use crate::name::{BusName, ObjectPath};
 use crate::ports::Transport;
 use crate::version::Version;
@@ -244,14 +244,13 @@ impl Drop for LifecycleBusyGuard<'_> {
         {
             module.lifecycle_busy = false;
             // A stop cancelled before it acquires the transport lifecycle
-            // mutex has no callback left to consume this transition. Clear it
+            // mutex has no task left to consume this transition. Clear it
             // so a later fault is not mistaken for that abandoned stop. Once
-            // the callback is running, its eventual peer detach owns the
-            // transition and reports the completed stop accurately.
+            // a task exists, its eventual peer detach owns the transition.
             if self
                 .stop_transport
                 .as_ref()
-                .is_some_and(|transport| !transport.stop_callback_running())
+                .is_some_and(|transport| !transport.stop_task_spawned())
             {
                 module.transition_from = None;
             }
@@ -277,6 +276,8 @@ pub(crate) trait ModuleControl: Send + Sync {
         config: serde_json::Value,
     ) -> Result<(ModuleInfo, Option<ModuleTransition>)>;
     async fn stop(&self, name: &str, deadline: Duration) -> Result<ModuleInfo>;
+    async fn stop_after_lifecycle(&self, name: &str, deadline: Duration) -> Result<ModuleInfo>;
+    async fn stop_inner(&self, name: &str, deadline: Duration) -> Result<ModuleInfo>;
     async fn reinitialize(&self, name: &str, config: serde_json::Value) -> Result<ModuleInfo>;
     fn enable(&self, name: &str, enabled: bool) -> Result<(ModuleInfo, Option<ModuleTransition>)>;
     fn rescan(
@@ -785,7 +786,7 @@ impl ModuleHost {
             // A failed stop leaves the module's observed state intact. The
             // callback may still own its bus name, so claiming it stopped
             // would make the host's lifecycle report lie to its caller.
-            let _ = self.inner.stop(&name, deadline).await;
+            let _ = self.inner.stop_after_lifecycle(&name, deadline).await;
         }
     }
 
@@ -1239,6 +1240,34 @@ impl ModuleControl for ModuleHostInner {
     }
 
     async fn stop(&self, name: &str, deadline: Duration) -> Result<ModuleInfo> {
+        self.stop_inner(name, deadline).await
+    }
+
+    async fn stop_after_lifecycle(&self, name: &str, deadline: Duration) -> Result<ModuleInfo> {
+        let started = std::time::Instant::now();
+        tokio::time::timeout(deadline, async {
+            loop {
+                let busy = self
+                    .loaded
+                    .lock()
+                    .expect("module list lock")
+                    .iter()
+                    .find(|module| module.info.name == name)
+                    .ok_or_else(|| Error::failed("module is not loaded"))?
+                    .lifecycle_busy;
+                if !busy {
+                    return Ok::<(), Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| Error::failed("module lifecycle operation exceeded its deadline"))??;
+        self.stop_inner(name, deadline.saturating_sub(started.elapsed()))
+            .await
+    }
+
+    async fn stop_inner(&self, name: &str, deadline: Duration) -> Result<ModuleInfo> {
         let transport = {
             let mut loaded = self.loaded.lock().expect("module list lock");
             let module = loaded
@@ -1274,10 +1303,14 @@ impl ModuleControl for ModuleHostInner {
             .iter_mut()
             .find(|module| module.info.name == name)
             .ok_or_else(|| Error::failed("module is not loaded"))?;
-        if stopped.is_err() {
-            module.transition_from = None;
+        match stopped {
+            Ok(_) => {}
+            Err(StopError::NotStarted(error)) => {
+                module.transition_from = None;
+                return Err(error);
+            }
+            Err(StopError::Started(error)) => return Err(error),
         }
-        stopped?;
         module.info.state = ModuleState::Stopped;
         Ok(module.info.clone())
     }

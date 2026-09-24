@@ -55,7 +55,7 @@ pub(crate) struct ModuleTransport {
     // owned guard moves into the blocking task, so a host-side timeout cannot
     // let a second lifecycle callback overlap the still-running first one.
     lifecycle: Arc<Mutex<()>>,
-    stop_callback_running: Arc<AtomicBool>,
+    stop_task_spawned: Arc<AtomicBool>,
 }
 
 // `module_ctx` is opaque and all access to it goes through callbacks whose ABI
@@ -120,7 +120,7 @@ impl ModuleTransport {
             pending: Mutex::new(VecDeque::new()),
             drain_started: AtomicBool::new(false),
             lifecycle: Arc::new(Mutex::new(())),
-            stop_callback_running: Arc::new(AtomicBool::new(false)),
+            stop_task_spawned: Arc::new(AtomicBool::new(false)),
         });
         let config = context.config.lock().expect("module config lock");
         let config_slice = crate::module::abi::TbSlice {
@@ -472,35 +472,49 @@ impl ModuleTransport {
         code
     }
 
-    pub(crate) fn stop_callback_running(&self) -> bool {
-        self.stop_callback_running.load(Ordering::Acquire)
+    pub(crate) fn stop_task_spawned(&self) -> bool {
+        self.stop_task_spawned.load(Ordering::Acquire)
     }
 
-    pub(crate) async fn stop(self: Arc<Self>, deadline: Duration) -> Result<i32> {
+    pub(crate) async fn stop(
+        self: Arc<Self>,
+        deadline: Duration,
+    ) -> std::result::Result<i32, StopError> {
+        self.stop_task_spawned.store(false, Ordering::Release);
         let started = std::time::Instant::now();
         let lifecycle = tokio::time::timeout(deadline, self.lifecycle.clone().lock_owned())
             .await
-            .map_err(|_| Error::failed("module lifecycle operation exceeded its deadline"))?;
+            .map_err(|_| {
+                StopError::NotStarted(Error::failed(
+                    "module lifecycle operation exceeded its deadline",
+                ))
+            })?;
         let remaining = deadline.saturating_sub(started.elapsed());
-        let callback_running = self.stop_callback_running.clone();
+        self.stop_task_spawned.store(true, Ordering::Release);
         let task = tokio::task::spawn_blocking(move || {
-            callback_running.store(true, Ordering::Release);
-            let _callback = ResetStopCallbackFlag(callback_running);
             let _lifecycle = lifecycle;
             self.stop_sync(remaining)
         });
         tokio::time::timeout(remaining, task)
             .await
-            .map_err(|_| Error::failed("module shutdown exceeded its deadline"))?
-            .map_err(|_| Error::failed("module shutdown task was cancelled"))
+            .map_err(|_| {
+                StopError::Started(Error::failed("module shutdown exceeded its deadline"))
+            })?
+            .map_err(|_| StopError::Started(Error::failed("module shutdown task was cancelled")))
     }
 }
 
-struct ResetStopCallbackFlag(Arc<AtomicBool>);
+#[derive(Debug)]
+pub(crate) enum StopError {
+    NotStarted(Error),
+    Started(Error),
+}
 
-impl Drop for ResetStopCallbackFlag {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+impl From<StopError> for Error {
+    fn from(error: StopError) -> Self {
+        match error {
+            StopError::NotStarted(error) | StopError::Started(error) => error,
+        }
     }
 }
 
