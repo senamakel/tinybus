@@ -69,9 +69,7 @@ unsafe extern "C" fn blocking_reinitialize(
         .expect("blocking reinitialize receiver lock")
         .take()
     {
-        receiver
-            .recv()
-            .expect("test releases blocking reinitialize");
+        let _ = receiver.recv();
     }
     TB_OK
 }
@@ -368,6 +366,76 @@ async fn shutdown_does_not_report_a_module_stopped_while_reinitialization_is_run
     assert_eq!(host.list()[0].state, ModuleState::Ready);
     release.send(()).unwrap();
     reinitializing.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn cancelling_a_waiting_stop_clears_its_pending_transition() {
+    let _test_guard = FAKE_MODULE_TEST_LOCK.lock().await;
+    let host = ModuleHost::new(Broker::new());
+    let (release, receiver) = std::sync::mpsc::sync_channel(1);
+    *BLOCKING_REINIT_RECEIVER
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("blocking reinitialize receiver lock") = Some(receiver);
+    BLOCKING_REINIT_STARTED.store(false, Ordering::Release);
+    unsafe {
+        host.attach_raw(
+            "clock.so",
+            TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest(),
+            blocking_reinitialize_init,
+        )
+    }
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while host.list()[0].state != ModuleState::Ready {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let inner = host.inner.clone();
+    let reinitializing = tokio::spawn(async move {
+        inner
+            .reinitialize("clock", serde_json::json!({ "token": "first" }))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !BLOCKING_REINIT_STARTED.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    reinitializing.abort();
+    assert!(reinitializing.await.unwrap_err().is_cancelled());
+
+    let inner = host.inner.clone();
+    let stopping = tokio::spawn(async move { inner.stop("clock", Duration::from_secs(1)).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let stop_is_pending = {
+                let loaded = host.inner.loaded.lock().expect("module list lock");
+                loaded[0].lifecycle_busy && loaded[0].transition_from.is_some()
+            };
+            if stop_is_pending {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    stopping.abort();
+    assert!(stopping.await.unwrap_err().is_cancelled());
+    let loaded = host.inner.loaded.lock().expect("module list lock");
+    assert!(!loaded[0].lifecycle_busy);
+    assert!(loaded[0].transition_from.is_none());
+    drop(loaded);
+
+    release.send(()).unwrap();
 }
 
 #[tokio::test]

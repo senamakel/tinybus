@@ -211,13 +211,23 @@ struct ModuleHostInner {
 struct LifecycleBusyGuard<'a> {
     host: &'a ModuleHostInner,
     name: String,
+    stop_transport: Option<Arc<ModuleTransport>>,
 }
 
 impl<'a> LifecycleBusyGuard<'a> {
-    fn new(host: &'a ModuleHostInner, name: &str) -> Self {
+    fn for_reinitialize(host: &'a ModuleHostInner, name: &str) -> Self {
         Self {
             host,
             name: name.to_string(),
+            stop_transport: None,
+        }
+    }
+
+    fn for_stop(host: &'a ModuleHostInner, name: &str, transport: Arc<ModuleTransport>) -> Self {
+        Self {
+            host,
+            name: name.to_string(),
+            stop_transport: Some(transport),
         }
     }
 }
@@ -233,6 +243,18 @@ impl Drop for LifecycleBusyGuard<'_> {
             .find(|module| module.info.name == self.name)
         {
             module.lifecycle_busy = false;
+            // A stop cancelled before it acquires the transport lifecycle
+            // mutex has no callback left to consume this transition. Clear it
+            // so a later fault is not mistaken for that abandoned stop. Once
+            // the callback is running, its eventual peer detach owns the
+            // transition and reports the completed stop accurately.
+            if self
+                .stop_transport
+                .as_ref()
+                .is_some_and(|transport| !transport.stop_callback_running())
+            {
+                module.transition_from = None;
+            }
         }
     }
 }
@@ -1245,7 +1267,7 @@ impl ModuleControl for ModuleHostInner {
             module.lifecycle_busy = true;
             module.transport.clone()
         };
-        let _lifecycle_busy = LifecycleBusyGuard::new(self, name);
+        let _lifecycle_busy = LifecycleBusyGuard::for_stop(self, name, transport.clone());
         let stopped = transport.stop(deadline).await;
         let mut loaded = self.loaded.lock().expect("module list lock");
         let module = loaded
@@ -1283,7 +1305,7 @@ impl ModuleControl for ModuleHostInner {
             module.lifecycle_busy = true;
             module.transport.clone()
         };
-        let _lifecycle_busy = LifecycleBusyGuard::new(self, name);
+        let _lifecycle_busy = LifecycleBusyGuard::for_reinitialize(self, name);
         let reinitialized = transport.reinitialize(config).await;
         let mut loaded = self.loaded.lock().expect("module list lock");
         let module = loaded
