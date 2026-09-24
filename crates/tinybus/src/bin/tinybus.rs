@@ -124,9 +124,9 @@ enum ModulesCommand {
     Load {
         /// Path to the `.so`, `.dylib`, or `.dll`.
         path: PathBuf,
-        /// JSON object passed to the module's setup function.
-        #[arg(long, default_value = "{}")]
-        config: String,
+        /// JSON file passed privately to setup; use `-` to read stdin.
+        #[arg(long)]
+        config_file: Option<PathBuf>,
     },
     /// Download, verify, extract, and load a GitHub release module.
     LoadGithub {
@@ -136,9 +136,17 @@ enum ModulesCommand {
         asset: String,
         /// Expected SHA-256 for the release archive.
         sha256: String,
-        /// JSON object passed to the module's setup function.
-        #[arg(long, default_value = "{}")]
-        config: String,
+        /// JSON file passed privately to setup; use `-` to read stdin.
+        #[arg(long)]
+        config_file: Option<PathBuf>,
+    },
+    /// Apply replacement configuration to a running module.
+    Reinitialize {
+        /// Stable module name.
+        name: String,
+        /// JSON file passed privately to setup; use `-` to read stdin.
+        #[arg(long)]
+        config_file: Option<PathBuf>,
     },
     /// Generate a checksum.toml for release assets.
     Checksum {
@@ -374,10 +382,10 @@ async fn run_modules(address: &Path, timeout: Duration, command: ModulesCommand)
             println!("{}", serde_json::to_string_pretty(&modules)?);
             Ok(())
         }
-        ModulesCommand::Load { path, config } => {
-            let config: serde_json::Value = serde_json::from_str(&config)?;
+        ModulesCommand::Load { path, config_file } => {
+            let config = read_private_config(config_file.as_deref())?;
             let module: serde_json::Value = bus
-                .call("LoadModule", (path.to_string_lossy().to_string(), config))
+                .call_sensitive("LoadModule", (path.to_string_lossy().to_string(), config))
                 .await?;
             println!("{}", serde_json::to_string_pretty(&module)?);
             Ok(())
@@ -386,11 +394,19 @@ async fn run_modules(address: &Path, timeout: Duration, command: ModulesCommand)
             release_url,
             asset,
             sha256,
-            config,
+            config_file,
         } => {
-            let config: serde_json::Value = serde_json::from_str(&config)?;
+            let config = read_private_config(config_file.as_deref())?;
             let module: serde_json::Value = bus
-                .call("LoadGithubModule", (release_url, asset, sha256, config))
+                .call_sensitive("LoadGithubModule", (release_url, asset, sha256, config))
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&module)?);
+            Ok(())
+        }
+        ModulesCommand::Reinitialize { name, config_file } => {
+            let config = read_private_config(config_file.as_deref())?;
+            let module: serde_json::Value = bus
+                .call_sensitive("ReinitializeModule", (name, config))
                 .await?;
             println!("{}", serde_json::to_string_pretty(&module)?);
             Ok(())
@@ -438,6 +454,22 @@ async fn run_modules(address: &Path, timeout: Duration, command: ModulesCommand)
             Ok(())
         }
     }
+}
+
+fn read_private_config(path: Option<&Path>) -> Result<serde_json::Value> {
+    use std::io::Read as _;
+
+    let Some(path) = path else {
+        return Ok(serde_json::json!({}));
+    };
+    let mut bytes = Vec::new();
+    if path == Path::new("-") {
+        std::io::stdin().read_to_end(&mut bytes)?;
+    } else {
+        std::fs::File::open(path)?.read_to_end(&mut bytes)?;
+    }
+    let bytes = tinybus::Secret::new(bytes);
+    Ok(serde_json::from_slice(bytes.expose_secret())?)
 }
 
 fn write_checksum_manifest(paths: &[PathBuf], output: Option<&Path>) -> Result<()> {
@@ -509,10 +541,10 @@ fn render(message: &tinybus::Message) -> String {
         .unwrap_or_default();
     let member = h.member.as_ref().map(|m| m.to_string()).unwrap_or_default();
     // The monitor is a terminal, a scrollback buffer and often a pasted bug
-    // report. A confidential body must not reach any of them, and the routing
-    // rules mean one should never arrive here in the first place — so this is
-    // the second lock on a door that is already shut.
-    let body = if h.confidential {
+    // report. A private body must not reach any of them, and the routing rules
+    // mean one should never arrive here in the first place — so this is the
+    // second lock on a door that is already shut.
+    let body = if h.confidential || h.sensitive {
         "<confidential>".to_string()
     } else {
         message.body.to_string()
@@ -625,6 +657,21 @@ mod tests {
             Cli::try_parse_from(["tinybus", "monitor"]).unwrap().command,
             Command::Monitor { .. }
         ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "tinybus",
+                "modules",
+                "reinitialize",
+                "clock",
+                "--config-file",
+                "-"
+            ])
+            .unwrap()
+            .command,
+            Command::Modules {
+                command: ModulesCommand::Reinitialize { .. }
+            }
+        ));
     }
 
     #[test]
@@ -719,13 +766,17 @@ mod tests {
             },
             ModulesCommand::Load {
                 path: PathBuf::from("/not/a/module"),
-                config: "{}".into(),
+                config_file: None,
             },
             ModulesCommand::LoadGithub {
                 release_url: "https://example.com/not-github".into(),
                 asset: "module.tar.gz".into(),
                 sha256: "0".repeat(64),
-                config: "{}".into(),
+                config_file: None,
+            },
+            ModulesCommand::Reinitialize {
+                name: "missing".into(),
+                config_file: None,
             },
             ModulesCommand::Stop {
                 name: "missing".into(),
@@ -838,19 +889,45 @@ mod tests {
     #[ignore = "requires TINYBUS_TEST_MODULE to point at the built cdylib"]
     async fn module_cli_controls_a_real_dynamic_module_lifecycle() {
         let path = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
-        let (_dir, address, _host) = broker_with_module_host().await;
+        let (dir, address, _host) = broker_with_module_host().await;
         let timeout = Duration::from_secs(2);
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, r#"{"prefix":"cli:"}"#).unwrap();
 
         run_modules(
             &address,
             timeout,
             ModulesCommand::Load {
                 path,
-                config: r#"{"prefix":"cli:"}"#.into(),
+                config_file: Some(config),
             },
         )
         .await
         .unwrap();
+        let client = connect(&address).await.unwrap();
+        let clock = client
+            .proxy(
+                "ai.tinyhumans.openhuman.Clock",
+                "/ai/tinyhumans/openhuman/Clock",
+                "ai.tinyhumans.openhuman.Clock",
+            )
+            .unwrap();
+        let before: String = clock.call("Now", ()).await.unwrap();
+        assert!(before.starts_with("cli:"));
+        let replacement = dir.path().join("replacement.json");
+        std::fs::write(&replacement, r#"{"prefix":"reinit:"}"#).unwrap();
+        run_modules(
+            &address,
+            timeout,
+            ModulesCommand::Reinitialize {
+                name: "tinybus".into(),
+                config_file: Some(replacement),
+            },
+        )
+        .await
+        .unwrap();
+        let after: String = clock.call("Now", ()).await.unwrap();
+        assert!(after.starts_with("reinit:"));
         run_modules(
             &address,
             timeout,

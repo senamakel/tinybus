@@ -27,6 +27,9 @@ pub const TB_BAD_ARGUMENT: i32 = -5;
 /// Revision-one module initialization entrypoint.
 pub type TbModuleInit = unsafe extern "C" fn(*const TbHostVtable, *mut TbModuleVtable) -> i32;
 
+/// Reconfigure one initialized module from a borrowed JSON document.
+pub type TbModuleReinitialize = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
+
 /// A borrowed byte slice returned across the ABI.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -137,7 +140,15 @@ pub struct TbModuleVtable {
     pub deliver: unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32,
     /// Stop module tasks, bounded by `deadline_ms`.
     pub shutdown: unsafe extern "C" fn(*mut c_void, u64) -> i32,
+    /// Apply replacement JSON configuration without replacing the runtime.
+    /// Hosts must check `size` before reading this additive tail field.
+    pub reinitialize: TbModuleReinitialize,
 }
+
+/// Size of the original ABI-v1 module vtable, before reinitialization was
+/// added as an optional tail callback.
+pub const TB_MODULE_VTABLE_BASE_SIZE: u32 =
+    std::mem::offset_of!(TbModuleVtable, reinitialize) as u32;
 
 impl Default for TbModuleVtable {
     fn default() -> Self {
@@ -147,6 +158,7 @@ impl Default for TbModuleVtable {
             module_ctx: std::ptr::null_mut(),
             deliver: invalid_deliver,
             shutdown: invalid_shutdown,
+            reinitialize: invalid_reinitialize,
         }
     }
 }
@@ -156,6 +168,10 @@ unsafe extern "C" fn invalid_deliver(_: *mut c_void, _: *const u8, _: usize) -> 
 }
 
 unsafe extern "C" fn invalid_shutdown(_: *mut c_void, _: u64) -> i32 {
+    TB_CLOSED
+}
+
+unsafe extern "C" fn invalid_reinitialize(_: *mut c_void, _: *const u8, _: usize) -> i32 {
     TB_CLOSED
 }
 

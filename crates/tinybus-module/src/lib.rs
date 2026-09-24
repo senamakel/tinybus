@@ -8,14 +8,15 @@ use std::ffi::c_void;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tinybus::message::Message;
 use tinybus::message::codec::MAX_FRAME_LEN;
 use tinybus::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_OK, TB_PANICKED, TbHostVtable, TbModuleVtable,
+    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
+    TbHostVtable, TbModuleVtable,
 };
 use tinybus::{Connection, Error, Result, Transport};
 use tokio::sync::{Mutex, mpsc};
@@ -276,7 +277,13 @@ impl Transport for ModuleTransport {
 struct RuntimeState {
     inbound: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
     runtime: StdMutex<Option<tokio::runtime::Runtime>>,
+    reinitialize: Option<Reinitialize>,
 }
+
+type Reinitialize = Box<dyn Fn(*const u8, usize) -> i32 + Send + Sync>;
+type ReinitializeFactory = Box<
+    dyn FnOnce(tokio::runtime::Handle, Arc<StdMutex<Option<Connection>>>) -> Reinitialize + Send,
+>;
 
 unsafe extern "C" fn deliver(ctx: *mut c_void, ptr: *const u8, len: usize) -> i32 {
     match catch_unwind(AssertUnwindSafe(|| {
@@ -320,6 +327,22 @@ unsafe extern "C" fn shutdown(ctx: *mut c_void, deadline_ms: u64) -> i32 {
     }
 }
 
+unsafe extern "C" fn reinitialize(ctx: *mut c_void, ptr: *const u8, len: usize) -> i32 {
+    match catch_unwind(AssertUnwindSafe(|| {
+        if ctx.is_null() || len > 1024 * 1024 || (ptr.is_null() && len != 0) {
+            return TB_BAD_ARGUMENT;
+        }
+        let state = unsafe { &*(ctx.cast::<RuntimeState>()) };
+        let Some(reinitialize) = &state.reinitialize else {
+            return TB_CLOSED;
+        };
+        reinitialize(ptr, len)
+    })) {
+        Ok(code) => code,
+        Err(_) => TB_PANICKED,
+    }
+}
+
 /// Initialize the module runtime and start its async setup function.
 ///
 /// This is public only for [`module_export!`] expansions. Module authors call
@@ -331,6 +354,21 @@ pub unsafe fn start_module<F, Fut>(
     worker_threads: usize,
     detach_on_panic: bool,
     setup: F,
+) -> i32
+where
+    F: FnOnce(Connection) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    unsafe { start_module_runtime(host, out, worker_threads, detach_on_panic, setup, None) }
+}
+
+unsafe fn start_module_runtime<F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+    reinitialize_factory: Option<ReinitializeFactory>,
 ) -> i32
 where
     F: FnOnce(Connection) -> Fut + Send + 'static,
@@ -400,6 +438,8 @@ where
             inbound: Mutex::new(inbound_rx),
             detach_on_panic,
         });
+        let connection_slot = Arc::new(StdMutex::new(None));
+        let task_connection_slot = connection_slot.clone();
 
         runtime.spawn(async move {
             let outcome = match Connection::connect(transport).await {
@@ -415,6 +455,8 @@ where
                             message: format!("a module method panicked at {location}"),
                         }
                     }));
+                    *task_connection_slot.lock().expect("module connection lock") =
+                        Some(connection.clone());
                     match setup(connection.clone()).await {
                         Ok(()) => {
                             host.ready();
@@ -436,18 +478,28 @@ where
             }
         });
 
+        let reinitializer =
+            reinitialize_factory.map(|factory| factory(runtime.handle().clone(), connection_slot));
+        let vtable_size = if reinitializer.is_some() {
+            size_of::<TbModuleVtable>() as u32
+        } else {
+            TB_MODULE_VTABLE_BASE_SIZE
+        };
+
         let state = Box::new(RuntimeState {
             inbound: StdMutex::new(Some(inbound_tx)),
             runtime: StdMutex::new(Some(runtime)),
+            reinitialize: reinitializer,
         });
         let state = Box::into_raw(state).cast::<c_void>();
         unsafe {
             out.write(TbModuleVtable {
-                size: size_of::<TbModuleVtable>() as u32,
+                size: vtable_size,
                 _reserved: 0,
                 module_ctx: state,
                 deliver,
                 shutdown,
+                reinitialize,
             });
         }
         TB_OK
@@ -468,7 +520,7 @@ pub unsafe fn start_module_with_config<C, F, Fut>(
 ) -> i32
 where
     C: serde::de::DeserializeOwned + Send + 'static,
-    F: FnOnce(Connection, C) -> Fut + Send + 'static,
+    F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
     let parsed = catch_unwind(AssertUnwindSafe(|| {
@@ -496,13 +548,44 @@ where
         Ok(Err(code)) => return code,
         Err(_) => return TB_PANICKED,
     };
+    let initial_setup = setup.clone();
+    let reinitialize_factory: ReinitializeFactory = Box::new(move |handle, connection_slot| {
+        let reinitialize_lock = StdMutex::new(());
+        Box::new(move |ptr, len| {
+            // Setup mutates the module's live object tree. Serializing retries
+            // keeps two operators from interleaving partial configurations.
+            let _guard = reinitialize_lock.lock().expect("module reinitialize lock");
+            let bytes = if len == 0 {
+                b"{}".as_slice()
+            } else {
+                // SAFETY: the ABI callback validates this borrowed slice and
+                // keeps it alive for the duration of this call.
+                unsafe { std::slice::from_raw_parts(ptr, len) }
+            };
+            let Ok(config) = serde_json::from_slice::<C>(bytes) else {
+                return TB_BAD_ARGUMENT;
+            };
+            let Some(connection) = connection_slot
+                .lock()
+                .expect("module connection lock")
+                .clone()
+            else {
+                return TB_CLOSED;
+            };
+            match handle.block_on(setup(connection, config)) {
+                Ok(()) => TB_OK,
+                Err(_) => TB_CLOSED,
+            }
+        })
+    });
     unsafe {
-        start_module(
+        start_module_runtime(
             host,
             out,
             worker_threads,
             detach_on_panic,
-            move |connection| setup(connection, config),
+            move |connection| initial_setup(connection, config),
+            Some(reinitialize_factory),
         )
     }
 }
@@ -723,6 +806,7 @@ mod tests {
         let state = RuntimeState {
             inbound: StdMutex::new(Some(sender)),
             runtime: StdMutex::new(None),
+            reinitialize: None,
         };
         let bytes = b"{}";
         let code = unsafe {
@@ -740,6 +824,7 @@ mod tests {
         let state = RuntimeState {
             inbound: StdMutex::new(None),
             runtime: StdMutex::new(None),
+            reinitialize: None,
         };
         let code = unsafe {
             deliver(
@@ -798,6 +883,7 @@ mod tests {
         let state = RuntimeState {
             inbound: StdMutex::new(None),
             runtime: StdMutex::new(None),
+            reinitialize: None,
         };
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let _guard = state.runtime.lock().unwrap();
@@ -820,6 +906,7 @@ mod tests {
         let state = RuntimeState {
             inbound: StdMutex::new(None),
             runtime: StdMutex::new(None),
+            reinitialize: None,
         };
         let bytes = b"{}";
         assert_eq!(
@@ -966,15 +1053,23 @@ mod tests {
         let mut host = host(config);
         host.send = capture_host_send;
         let mut out = TbModuleVtable::default();
+        let observed = Arc::new(AtomicUsize::new(0));
+        let setup_observed = observed.clone();
         let code = unsafe {
             start_module_with_config::<serde_json::Value, _, _>(
                 &host,
                 &mut out,
                 1,
                 true,
-                |_, parsed| async move {
-                    assert_eq!(parsed["answer"], 42);
-                    Ok(())
+                move |_, parsed| {
+                    let observed = setup_observed.clone();
+                    async move {
+                        observed.store(
+                            parsed["answer"].as_u64().unwrap() as usize,
+                            Ordering::Release,
+                        );
+                        Ok(())
+                    }
                 },
             )
         };
@@ -997,6 +1092,17 @@ mod tests {
             );
             std::thread::yield_now();
         }
+        assert_eq!(observed.load(Ordering::Acquire), 42);
+        let replacement = br#"{"answer":7}"#;
+        assert_eq!(
+            unsafe { (out.reinitialize)(out.module_ctx, replacement.as_ptr(), replacement.len()) },
+            TB_OK
+        );
+        assert_eq!(observed.load(Ordering::Acquire), 7);
+        assert_eq!(
+            unsafe { (out.reinitialize)(out.module_ctx, b"bad".as_ptr(), 3) },
+            TB_BAD_ARGUMENT
+        );
         assert_eq!(
             unsafe { (out.deliver)(out.module_ctx, std::ptr::null(), 0) },
             TB_BAD_ARGUMENT

@@ -181,20 +181,30 @@ impl Broker {
                 if destination.as_str() == crate::BUS_NAME {
                     if message.header.confidential && message.header.kind == MessageKind::MethodCall
                     {
-                        // The bus's own service is not a loaded, hash-verified
-                        // module and can never be an attested recipient.
-                        // `handle_bus_call` ends in `bus_method`, which
-                        // deserializes the body — reaching that with a
-                        // confidential payload would both break "the broker
-                        // never parses a body" and risk a `BadArguments` built
-                        // from secret material. Refuse before dispatch, not
-                        // after.
                         return Err(Error::not_attested(
                             destination.clone(),
                             "the bus itself is never an attested recipient",
                         ));
                     }
+                    if message.header.sensitive
+                        && !message.header.member.as_ref().is_some_and(|member| {
+                            matches!(
+                                member.as_str(),
+                                "LoadModule" | "LoadGithubModule" | "ReinitializeModule"
+                            )
+                        })
+                    {
+                        return Err(Error::protocol(
+                            "sensitive control bodies are reserved for module configuration",
+                        ));
+                    }
                     return self.handle_bus_call(from, from_name, message).await;
+                }
+
+                if message.header.sensitive {
+                    return Err(Error::protocol(
+                        "sensitive control calls must address the bus module host",
+                    ));
                 }
 
                 // A confidential *call* may only go to a well-known name the
@@ -397,6 +407,7 @@ impl Broker {
             GetManifest,
             Load,
             LoadGithub,
+            Reinitialize,
             Stop,
             Enable,
             Rescan,
@@ -407,6 +418,7 @@ impl Broker {
             "GetModuleManifest" => ModuleMember::GetManifest,
             "LoadModule" => ModuleMember::Load,
             "LoadGithubModule" => ModuleMember::LoadGithub,
+            "ReinitializeModule" => ModuleMember::Reinitialize,
             "StopModule" => ModuleMember::Stop,
             "EnableModule" => ModuleMember::Enable,
             "RescanModules" => ModuleMember::Rescan,
@@ -428,6 +440,17 @@ impl Broker {
             let result = match parsed {
                 Ok((name, deadline_ms)) => control
                     .stop(&name, Duration::from_millis(deadline_ms))
+                    .await
+                    .and_then(|info| serde_json::to_value(info).map_err(Error::from)),
+                Err(error) => Err(error),
+            };
+            return Some((result, Vec::new()));
+        }
+        if matches!(operation, ModuleMember::Reinitialize) {
+            let parsed = parse_args::<(String, Value)>(member, body);
+            let result = match parsed {
+                Ok((name, config)) => control
+                    .reinitialize(&name, config)
                     .await
                     .and_then(|info| serde_json::to_value(info).map_err(Error::from)),
                 Err(error) => Err(error),
@@ -499,6 +522,9 @@ impl Broker {
                         serde_json::to_value(info)?,
                         module_state_body(transition).into_iter().collect(),
                     ))
+                }
+                ModuleMember::Reinitialize => {
+                    Err(Error::failed("module reinitialize dispatch failed"))
                 }
                 ModuleMember::Stop => Err(Error::failed("module stop dispatch failed")),
                 ModuleMember::Enable => {
@@ -584,6 +610,7 @@ impl Broker {
                 error_name: None,
                 // The bus's own announcements are broadcasts by construction.
                 confidential: false,
+                sensitive: false,
             },
             body,
         };
@@ -1212,6 +1239,22 @@ mod tests {
         assert_eq!(error.wire_name(), Error::NOT_ATTESTED);
         let id: String = bus_proxy.call("GetId", ()).await.unwrap();
         assert!(id.starts_with("tinybus-"), "{id}");
+
+        #[cfg(feature = "modules")]
+        {
+            // Module configuration is deliberately the one confidential
+            // broker-control payload. Reaching the module-host error proves
+            // dispatch accepted it instead of failing the attestation gate.
+            let error = bus_proxy
+                .call_sensitive::<serde_json::Value>(
+                    "ReinitializeModule",
+                    ("missing", serde_json::json!({ "secret": "redacted" })),
+                )
+                .await
+                .unwrap_err();
+            assert_ne!(error.wire_name(), Error::NOT_ATTESTED);
+            assert!(!error.to_string().contains("redacted"));
+        }
     }
 
     #[cfg(feature = "modules")]

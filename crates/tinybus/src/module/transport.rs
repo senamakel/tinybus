@@ -13,7 +13,8 @@ use crate::error::{Error, Result};
 use crate::message::codec::MAX_FRAME_LEN;
 use crate::message::{Message, MessageKind};
 use crate::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_OK, TbHostVtable, TbModuleVtable,
+    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
+    TbHostVtable, TbModuleVtable,
 };
 use crate::ports::Transport;
 
@@ -72,6 +73,12 @@ struct SendModuleVtable(TbModuleVtable);
 unsafe impl Send for DeferredInitializer {}
 unsafe impl Send for SendModuleVtable {}
 
+impl SendModuleVtable {
+    unsafe fn reinitialize(&self, bytes: &[u8]) -> i32 {
+        unsafe { (self.0.reinitialize)(self.0.module_ctx, bytes.as_ptr(), bytes.len()) }
+    }
+}
+
 impl DeferredInitializer {
     fn run(self) -> std::result::Result<SendModuleVtable, String> {
         (self.initialize)(self.host).map(SendModuleVtable)
@@ -125,7 +132,7 @@ impl ModuleTransport {
     }
 
     pub(crate) fn initialize(&self, module: TbModuleVtable) -> Result<()> {
-        if module.size < size_of::<TbModuleVtable>() as u32 || module.module_ctx.is_null() {
+        if module.size < TB_MODULE_VTABLE_BASE_SIZE || module.module_ctx.is_null() {
             return Err(Error::transport("module returned an incomplete vtable"));
         }
         *self.module.lock().expect("module vtable lock") = Some(module);
@@ -224,6 +231,40 @@ impl ModuleTransport {
         config.fill(0);
         config.clear();
         config.shrink_to_fit();
+    }
+
+    pub(crate) async fn reinitialize(&self, config: serde_json::Value) -> Result<()> {
+        let module = self
+            .module
+            .lock()
+            .expect("module vtable lock")
+            .ok_or_else(|| Error::transport("module is not initialized"))?;
+        if module.size < size_of::<TbModuleVtable>() as u32 {
+            return Err(Error::failed("module does not support reinitialization"));
+        }
+        let module = SendModuleVtable(module);
+        let bytes = crate::Secret::new(
+            serde_json::to_vec(&config)
+                .map_err(|_| Error::failed("module configuration is invalid"))?,
+        );
+        let task = tokio::task::spawn_blocking(move || unsafe {
+            module.reinitialize(bytes.expose_secret())
+        });
+        let code = tokio::time::timeout(MODULE_INIT_DEADLINE, task)
+            .await
+            .map_err(|_| Error::Timeout {
+                member: crate::MemberName::new("ReinitializeModule")
+                    .expect("static member name is valid"),
+                timeout_ms: MODULE_INIT_DEADLINE.as_millis() as u64,
+            })?
+            .map_err(|_| Error::transport("module reinitialization task was cancelled"))?;
+        match code {
+            TB_OK => Ok(()),
+            TB_BAD_ARGUMENT => Err(Error::failed("module configuration is invalid")),
+            TB_CLOSED => Err(Error::failed("module reinitialization failed")),
+            TB_PANICKED => Err(Error::failed("module reinitialization panicked")),
+            _ => Err(Error::failed("module reinitialization failed")),
+        }
     }
 
     pub(crate) fn is_faulted(&self) -> bool {
@@ -579,6 +620,10 @@ mod tests {
         SHUTDOWN_CODE.load(Ordering::Acquire)
     }
 
+    unsafe extern "C" fn reinitialize(_: *mut c_void, _: *const u8, _: usize) -> i32 {
+        TB_OK
+    }
+
     unsafe extern "C" fn initialize_ok(_: *const TbHostVtable, out: *mut TbModuleVtable) -> i32 {
         unsafe {
             *out = TbModuleVtable {
@@ -587,6 +632,7 @@ mod tests {
                 module_ctx: std::ptr::dangling_mut(),
                 deliver,
                 shutdown,
+                reinitialize,
             };
         }
         TB_OK
@@ -649,6 +695,26 @@ mod tests {
         let incomplete = TbModuleVtable::default();
         assert!(transport.initialize(incomplete).is_err());
         assert_eq!(transport.shutdown_sync(Duration::ZERO), TB_CLOSED);
+    }
+
+    #[tokio::test]
+    async fn an_older_vtable_loads_but_reports_reinitialization_as_unsupported() {
+        let (transport, _) = ModuleTransport::new("older".to_string(), Vec::new());
+        let mut older = TbModuleVtable {
+            module_ctx: std::ptr::dangling_mut(),
+            deliver,
+            shutdown,
+            reinitialize,
+            ..TbModuleVtable::default()
+        };
+        older.size = TB_MODULE_VTABLE_BASE_SIZE;
+        transport.initialize(older).unwrap();
+        let error = transport
+            .reinitialize(serde_json::json!({ "secret": "never printed" }))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("does not support"));
+        assert!(!error.to_string().contains("never printed"));
     }
 
     #[tokio::test]

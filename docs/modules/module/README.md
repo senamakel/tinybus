@@ -62,15 +62,30 @@ host already has the trusted manifest in memory. Modules without a sidecar keep
 the existing behavior: their library is mapped during discovery, while
 `lazy_init = true` still defers setup.
 
-The host vtable also carries borrowed JSON configuration. The SDK copies and
-deserializes it during initialization; the module never retains a pointer into
-host memory. `module_export!` accepts `config = MyConfig` for an async setup
-function shaped `setup(Connection, MyConfig)`, while the original
-`setup(Connection)` form ignores configuration. Operators can pass the value
-with `tinybus modules load <path> --config '{...}'`.
+The host vtable also carries borrowed JSON configuration. Module load and
+reinitialization control calls are always marked sensitive; callers cannot opt
+out, and monitors never receive their bodies. This host-control marker is
+deliberately distinct from an attested confidential call: the broker and its
+in-process module host must read configuration in order to initialize the
+module. The SDK copies and deserializes the configuration during
+initialization, and the module never retains a pointer into host memory.
+`module_export!` accepts `config = MyConfig` for an async setup function shaped
+`setup(Connection, MyConfig)`, while the original `setup(Connection)` form
+ignores configuration. Operators pass the value from a private file with
+`tinybus modules load <path> --config-file <file>`, or use `--config-file -` to
+avoid putting a secret in argv or on disk.
 For directory discovery, embedding hosts call `ModuleHost::set_config(name,
 value)` (or the builder-form `with_config`) before `load_dir`; the value is
 selected by the admitted manifest name.
+
+Configured modules can apply replacement values without unloading their
+library or dropping their bus connection. Call
+`Connection::reinitialize_module`, `ModuleHost::reinitialize`, or
+`tinybus modules reinitialize <name> --config-file <file>`. The SDK invokes the
+same typed setup function again. Setup should validate before mutating shared
+state: a returned error keeps the runtime alive, but cannot roll back changes
+the module already made. Modules built before the optional ABI callback was
+added continue to load and report that reinitialization is unsupported.
 
 When present, `modules.toml` is authoritative for its directory. Keys are
 artifact file names (or stems) and values are lowercase SHA-256 hashes. An
