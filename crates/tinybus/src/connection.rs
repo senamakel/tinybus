@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::io::{self, Write};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,6 +53,68 @@ use crate::stream::{
 struct StreamReplyEnvelope {
     #[serde(rename = "$tinybus_stream_reply")]
     stream: StreamRef,
+}
+
+const STREAM_REPLY_ENCODE_CHUNK: usize = 16 * 1024;
+
+struct CountingWriter(u64);
+
+impl Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| io::Error::other("streamed reply length overflow"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct StreamReplyEncoder {
+    sender: mpsc::Sender<Vec<u8>>,
+    buffer: Vec<u8>,
+}
+
+impl StreamReplyEncoder {
+    fn new(sender: mpsc::Sender<Vec<u8>>) -> Self {
+        Self {
+            sender,
+            buffer: Vec::with_capacity(STREAM_REPLY_ENCODE_CHUNK),
+        }
+    }
+
+    fn send_buffer(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        let chunk = std::mem::take(&mut self.buffer);
+        self.sender
+            .blocking_send(chunk)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "stream receiver closed"))
+    }
+}
+
+impl Write for StreamReplyEncoder {
+    fn write(&mut self, mut bytes: &[u8]) -> io::Result<usize> {
+        let written = bytes.len();
+        while !bytes.is_empty() {
+            let available = STREAM_REPLY_ENCODE_CHUNK - self.buffer.len();
+            let take = available.min(bytes.len());
+            self.buffer.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            if self.buffer.len() == STREAM_REPLY_ENCODE_CHUNK {
+                self.send_buffer()?;
+            }
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.send_buffer()
+    }
 }
 use crate::version::{Compatibility, PeerManifest, PeerRecord};
 
@@ -1138,7 +1201,10 @@ async fn send_streamed_reply(inner: Arc<Inner>, header: &Header, value: Value) -
         .clone()
         .or_else(|| header.destination.clone())
         .ok_or_else(|| Error::protocol("a streamed reply needs a caller"))?;
-    let bytes = serde_json::to_vec(&value)?;
+    // Count before opening so the wire-level length is exact without retaining
+    // a second result-sized JSON allocation in the service process.
+    let mut counter = CountingWriter(0);
+    serde_json::to_writer(&mut counter, &value)?;
     let connection = Connection {
         inner: inner.clone(),
         // This temporary handle borrows the live service connection. Dropping
@@ -1148,7 +1214,7 @@ async fn send_streamed_reply(inner: Arc<Inner>, header: &Header, value: Value) -
     let mut writer = connection
         .open_stream_with_timeout(
             &destination,
-            StreamDescriptor::with_len(bytes.len() as u64).content_type("application/json"),
+            StreamDescriptor::with_len(counter.0).content_type("application/json"),
             DEFAULT_TIMEOUT,
         )
         .await?;
@@ -1158,10 +1224,21 @@ async fn send_streamed_reply(inner: Arc<Inner>, header: &Header, value: Value) -
     if !send_reply(&inner, Message::method_return(header, envelope)).await {
         return Ok(());
     }
-    if let Err(error) = writer.write(&bytes).await {
-        tracing::debug!(error = %error, "streamed reply failed after its handle was sent");
-        return Ok(());
+    let (sender, mut chunks) = mpsc::channel(1);
+    let encode = tokio::task::spawn_blocking(move || -> io::Result<()> {
+        let mut encoder = StreamReplyEncoder::new(sender);
+        serde_json::to_writer(&mut encoder, &value)?;
+        encoder.flush()
+    });
+    while let Some(chunk) = chunks.recv().await {
+        if let Err(error) = writer.write(&chunk).await {
+            tracing::debug!(error = %error, "streamed reply failed after its handle was sent");
+            return Ok(());
+        }
     }
+    encode
+        .await
+        .map_err(|_| Error::transport("streamed reply encoder panicked"))??;
     if let Err(error) = writer.finish().await {
         tracing::debug!(error = %error, "streamed reply could not close cleanly");
     }
