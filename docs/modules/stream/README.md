@@ -42,6 +42,14 @@ while let Some(chunk) = reader.next_chunk().await? {
 `Connection::read_stream` buffers a whole payload for when it is too big for a
 frame but not too big for memory.
 
+The reverse direction is opt-in with `Connection::call_streaming` or
+`Proxy::call_streaming`. The service runs the ordinary method, serializes its
+successful result as JSON, and streams those bytes back under the caller's
+limits. This removes the one-frame ceiling for variable-size results without
+changing interface method signatures. Older peers may answer ordinarily and
+remain compatible. Confidential calls deliberately have no streamed-reply mode
+because separate stream writes do not inherit confidential attestation.
+
 **Order matters.** Send the call and *then* feed the stream. The receiver's
 window is a few megabytes, so a sender that writes an entire payload before
 making the call stalls against a reader that does not exist yet. This is not a

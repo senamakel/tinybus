@@ -98,6 +98,12 @@ pub struct Header {
     /// it is accepted only for the broker's module configuration methods.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sensitive: bool,
+    /// The caller accepts a successful result through a reply stream.
+    ///
+    /// Optional for wire compatibility: an older peer ignores this field and
+    /// returns an ordinary method result, which the caller still accepts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_reply: bool,
 }
 
 /// A framed message: header plus a JSON body.
@@ -141,6 +147,7 @@ impl Message {
                 error_name: None,
                 confidential: false,
                 sensitive: false,
+                stream_reply: false,
             },
             body,
         }
@@ -180,6 +187,20 @@ impl Message {
         message
     }
 
+    /// Build a method call that asks the service to stream its successful
+    /// serialized result while retaining ordinary-reply compatibility.
+    pub(crate) fn streaming_call(
+        destination: BusName,
+        path: ObjectPath,
+        interface: InterfaceName,
+        member: MemberName,
+        body: Value,
+    ) -> Self {
+        let mut message = Self::method_call(destination, path, interface, member, body);
+        message.header.stream_reply = true;
+        message
+    }
+
     /// Build the successful reply to `call`.
     pub fn method_return(call: &Header, body: Value) -> Self {
         Self {
@@ -202,6 +223,7 @@ impl Message {
                 // the flag would be the leak the call avoided, one hop later.
                 confidential: call.confidential,
                 sensitive: false,
+                stream_reply: false,
             },
             body,
         }
@@ -229,6 +251,7 @@ impl Message {
                 // recipient failed attestation, swallowing the diagnosis.
                 confidential: false,
                 sensitive: false,
+                stream_reply: false,
             },
             body: Value::String(error.wire_message()),
         }
@@ -257,6 +280,7 @@ impl Message {
                 // `validate` refuses the combination on ingress.
                 confidential: false,
                 sensitive: false,
+                stream_reply: false,
             },
             body,
         }
@@ -296,6 +320,11 @@ impl Message {
     /// without re-checking. A call with no destination would otherwise sit in
     /// the router as an unroutable message with a caller blocked on it forever.
     pub fn validate(&self) -> Result<()> {
+        if self.header.stream_reply && self.header.kind != MessageKind::MethodCall {
+            return Err(Error::protocol(
+                "only a method call can request a streamed reply",
+            ));
+        }
         // Checked before the per-kind rules, and checked on ingress rather than
         // at delivery: a confidential signal has no destination, so there is no
         // one recipient to attest and fan-out is the only thing it could mean.
@@ -431,6 +460,27 @@ mod tests {
     }
 
     #[test]
+    fn only_a_method_call_can_request_a_streamed_reply() {
+        let mut signal = Message::signal(
+            ObjectPath::new("/events").unwrap(),
+            InterfaceName::new("ai.tinyhumans.Events").unwrap(),
+            MemberName::new("Published").unwrap(),
+            Value::Null,
+        );
+        signal.header.stream_reply = true;
+        assert!(signal.validate().is_err());
+
+        let call = Message::streaming_call(
+            BusName::new("ai.tinyhumans.Service").unwrap(),
+            ObjectPath::new("/service").unwrap(),
+            InterfaceName::new("ai.tinyhumans.Service").unwrap(),
+            MemberName::new("Export").unwrap(),
+            Value::Null,
+        );
+        call.validate().unwrap();
+    }
+
+    #[test]
     fn a_confidential_message_without_a_destination_is_refused_on_ingress() {
         let mut c = call();
         c.header.confidential = true;
@@ -474,6 +524,7 @@ mod tests {
         let json = serde_json::to_string(&call()).unwrap();
         assert!(!json.contains("confidential"), "{json}");
         assert!(!json.contains("sensitive"), "{json}");
+        assert!(!json.contains("stream_reply"), "{json}");
     }
 
     #[test]
@@ -492,6 +543,7 @@ mod tests {
         let header: Header = serde_json::from_value(old).unwrap();
         assert!(!header.confidential);
         assert!(!header.sensitive);
+        assert!(!header.stream_reply);
     }
 
     #[test]
