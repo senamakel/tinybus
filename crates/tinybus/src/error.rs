@@ -84,6 +84,18 @@ pub enum Error {
         reason: &'static str,
     },
 
+    /// A service member accepts only a confidential call.
+    ///
+    /// The body is deliberately absent: it may contain the secret whose
+    /// unprotected delivery this error refuses.
+    #[error("{interface}.{member} requires a confidential call")]
+    ConfidentialityRequired {
+        /// The interface declaring the protected member.
+        interface: InterfaceName,
+        /// The member that refused ordinary delivery.
+        member: MemberName,
+    },
+
     /// `RequestName` lost: another peer already owns it and did not allow
     /// replacement.
     #[error("`{name}` is already owned by {owner}")]
@@ -275,6 +287,9 @@ impl Error {
     /// call failed", which are different problems with different fixes: one is
     /// an operator's trust store, the other is the service.
     pub const NOT_ATTESTED: &'static str = "ai.tinyhumans.tinybus.Error.NotAttested";
+    /// The dotted error name for a member that requires confidential delivery.
+    pub const CONFIDENTIALITY_REQUIRED: &'static str =
+        "ai.tinyhumans.tinybus.Error.ConfidentialityRequired";
 
     /// Build an [`Error::Protocol`] from anything displayable.
     pub fn protocol(message: impl std::fmt::Display) -> Self {
@@ -382,6 +397,7 @@ impl Error {
             Self::Backpressure => "ai.tinyhumans.tinybus.Error.Backpressure",
             Self::NameHasNoOwner(_) => "ai.tinyhumans.tinybus.Error.NameHasNoOwner",
             Self::NotAttested { .. } => Self::NOT_ATTESTED,
+            Self::ConfidentialityRequired { .. } => Self::CONFIDENTIALITY_REQUIRED,
             Self::NameTaken { .. } => "ai.tinyhumans.tinybus.Error.NameTaken",
             Self::UnknownObject { .. } => "ai.tinyhumans.tinybus.Error.UnknownObject",
             Self::UnknownInterface { .. } => "ai.tinyhumans.tinybus.Error.UnknownInterface",

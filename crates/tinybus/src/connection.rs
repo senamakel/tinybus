@@ -1042,7 +1042,9 @@ async fn dispatch(inner: &Inner, header: &Header, body: Value) -> Result<Value> 
         return Err(Error::protocol("method call is missing an address"));
     };
     let objects = inner.objects.read().await;
-    objects.dispatch(path, interface, member, body).await
+    objects
+        .dispatch_with_confidential(path, interface, member, body, header.confidential)
+        .await
 }
 
 #[cfg(test)]

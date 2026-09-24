@@ -36,6 +36,8 @@
 //!   Interface>`, which would serialise every call to the service.
 //! - **`#[tinybus(skip)]`** leaves a method off the bus entirely — helpers on
 //!   the same `impl` block do not have to move elsewhere to stay private.
+//! - **`#[tinybus(confidential)]`** refuses ordinary delivery before its
+//!   arguments are decoded. Call it with `Proxy::call_confidential`.
 //! - **Arguments are positional.** Parameter names are a detail of the Rust
 //!   signature and renaming one must not break a caller.
 
@@ -68,6 +70,7 @@ fn expand(
     let self_ty = input.self_ty.clone();
 
     let mut members = Vec::new();
+    let mut confidential_members = Vec::new();
     let mut arms = Vec::new();
 
     for item in &input.items {
@@ -103,6 +106,9 @@ fn expand(
         let member = attrs
             .name
             .unwrap_or_else(|| pascal_case(&ident.to_string()));
+        if attrs.confidential {
+            confidential_members.push(member.clone());
+        }
 
         let mut types = Vec::new();
         let mut binds = Vec::new();
@@ -149,6 +155,12 @@ fn expand(
     }
 
     let member_literals = members.iter();
+    let confidential_check = if confidential_members.is_empty() {
+        quote! { false }
+    } else {
+        let literals = confidential_members.iter();
+        quote! { ::std::matches!(__member.as_str(), #(#literals)|*) }
+    };
 
     // `#[tinybus(…)]` on a method is an inert helper this macro consumes.
     // Attribute macros cannot register helper attributes the way derives can,
@@ -173,6 +185,10 @@ fn expand(
                 ::std::vec![
                     #(::tinybus::__private::parse_member(#member_literals)),*
                 ]
+            }
+
+            fn requires_confidential(&self, __member: &::tinybus::name::MemberName) -> bool {
+                #confidential_check
             }
 
             async fn call(
@@ -213,6 +229,7 @@ fn interface_name(args: &Punctuated<Meta, Comma>) -> syn::Result<String> {
 struct MethodAttrs {
     skip: bool,
     name: Option<String>,
+    confidential: bool,
 }
 
 /// Read the `#[tinybus(…)]` helper attributes off one method.
@@ -230,8 +247,13 @@ fn method_attrs(method: &syn::ImplItemFn) -> syn::Result<MethodAttrs> {
                 let value: LitStr = meta.value()?.parse()?;
                 out.name = Some(value.value());
                 Ok(())
+            } else if meta.path.is_ident("confidential") {
+                out.confidential = true;
+                Ok(())
             } else {
-                Err(meta.error("unknown tinybus attribute; expected `skip` or `name = \"…\"`"))
+                Err(meta.error(
+                    "unknown tinybus attribute; expected `skip`, `confidential`, or `name = \"…\"`",
+                ))
             }
         })?;
     }
@@ -349,7 +371,7 @@ mod tests {
         assert!(interface_name(&args("other = \"value\"")).is_err());
 
         let declared = implementation(
-            "impl Example { #[tinybus(skip, name = \"WireName\")] async fn call(&self) -> tinybus::Result<()> { Ok(()) } }",
+            "impl Example { #[tinybus(skip, confidential, name = \"WireName\")] async fn call(&self) -> tinybus::Result<()> { Ok(()) } }",
         );
         let method = match &declared.items[0] {
             ImplItem::Fn(method) => method,
@@ -357,6 +379,7 @@ mod tests {
         };
         let attributes = method_attrs(method).unwrap();
         assert!(attributes.skip);
+        assert!(attributes.confidential);
         assert_eq!(attributes.name.as_deref(), Some("WireName"));
 
         let invalid_declared = implementation(

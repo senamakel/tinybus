@@ -16,7 +16,7 @@ use crate::broker::Broker;
 use crate::connection::Connection;
 use crate::error::{Error, Result};
 use crate::name::{InterfaceName, MemberName, ObjectPath};
-use crate::service::Interface;
+use crate::service::{Interface, ObjectTree};
 use crate::transport::memory::MemoryBus;
 
 const NAME: &str = "ai.tinyhumans.openhuman.Voice";
@@ -54,6 +54,12 @@ impl Voice {
             name: "ai.tinyhumans.openhuman.Voice.Error.NoDevice".into(),
             message: "no capture device".into(),
         })
+    }
+
+    /// A protected member used to exercise generated confidentiality metadata.
+    #[tinybus(confidential)]
+    async fn secret(&self) -> Result<String> {
+        Ok("protected".to_owned())
     }
 
     /// An explicit member name, for matching a contract that already exists.
@@ -194,4 +200,30 @@ fn the_generated_interface_reports_its_name_and_members() {
             "missing {expected} in {members:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn generated_confidential_metadata_is_enforced_by_object_dispatch() {
+    let mut tree = ObjectTree::new();
+    tree.insert(
+        ObjectPath::new(PATH).unwrap(),
+        Arc::new(Voice {
+            calls: AtomicU32::new(0),
+        }),
+    );
+    let path = ObjectPath::new(PATH).unwrap();
+    let interface = InterfaceName::new(NAME).unwrap();
+    let member = MemberName::new("Secret").unwrap();
+
+    let error = tree
+        .dispatch(&path, &interface, &member, serde_json::json!([]))
+        .await
+        .unwrap_err();
+    assert_eq!(error.wire_name(), Error::CONFIDENTIALITY_REQUIRED);
+
+    let value = tree
+        .dispatch_with_confidential(&path, &interface, &member, serde_json::json!([]), true)
+        .await
+        .unwrap();
+    assert_eq!(value, serde_json::json!("protected"));
 }

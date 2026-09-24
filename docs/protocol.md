@@ -107,6 +107,13 @@ There is still no confidential stream; a secret that must be attested has to fit
 in the body of the call itself. What the refusal removes is the silent version
 of that gap, where a caller believed otherwise.
 
+A generated service may additionally mark a method
+`#[tinybus(confidential)]`. Its receiving connection rejects an ordinary call
+before typed argument decoding, so the implementation cannot accidentally use
+a secret delivered without the flag. Senders still use
+`Proxy::call_confidential`; the receiver-side requirement complements rather
+than replaces broker attestation.
+
 ## Names
 
 | Kind | Grammar |
@@ -252,6 +259,7 @@ Bus-generated names:
 | `…Error.UnknownInterface` | the object does not implement that interface |
 | `…Error.UnknownMethod` | the interface has no such member |
 | `…Error.BadArguments` | the body did not match the member's signature |
+| `…Error.ConfidentialityRequired` | the member refuses ordinary delivery |
 | `…Error.Failed` | a method failed with no more specific mapping |
 | `…Error.UnknownStream` | no such stream, or not one this peer opened |
 | `…Error.StreamAborted` | the stream ended before it was complete |
