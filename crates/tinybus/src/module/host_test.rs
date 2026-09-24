@@ -1181,10 +1181,19 @@ async fn a_real_cdylib_loads_and_serves_a_call() {
     assert!(panic_text.contains("ModulePanicked"), "{panic_text}");
     assert!(panic_text.contains("module_clock.rs"), "{panic_text}");
     assert!(!panic_text.contains("secret-token"), "{panic_text}");
-    let name_change = tokio::time::timeout(Duration::from_secs(2), name_changes.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let name_change = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let message = name_changes.recv().await.unwrap();
+            if message.body.get(0).and_then(serde_json::Value::as_str)
+                == Some("ai.tinyhumans.openhuman.Clock")
+                && message.body.get(2).is_some_and(serde_json::Value::is_null)
+            {
+                break message;
+            }
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(name_change.body[0], "ai.tinyhumans.openhuman.Clock");
     assert!(name_change.body[2].is_null());
 
