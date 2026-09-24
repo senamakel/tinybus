@@ -124,6 +124,29 @@ async fn a_published_event_reaches_a_subscriber() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn local_delivery_reaches_the_handler_without_a_per_event_task_hop() {
+    let (_t, bus) = bus().await;
+    let seen = Arc::new(AtomicUsize::new(0));
+    let captured = seen.clone();
+    let _handle = bus.on("test::inline", move |_| {
+        let captured = captured.clone();
+        async move {
+            captured.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+
+    bus.publish(TestEvent::SystemStartup);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while seen.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the subscriber receives the published event");
+    assert_eq!(seen.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn a_domain_filter_excludes_other_domains() {
     let (_t, bus) = bus().await;

@@ -56,6 +56,8 @@ omitted field and a `null` field identically.
 | `member` | member name | `method_call`, `signal` |
 | `error_name` | dotted string | `error` |
 | `confidential` | bool, omitted when false | `method_call`, `method_return` |
+| `sensitive` | bool, omitted when false | private module-control calls |
+| `stream_reply` | bool, omitted when false | `method_call` |
 
 `body` is a positional JSON array for calls and signals, and a single JSON value
 for returns. `error` bodies are a string: the human-readable message, without
@@ -225,6 +227,25 @@ Rules a receiver enforces, and a sender must expect:
 Send the call carrying the handle *before* writing the payload. The window is a
 few megabytes, so a sender that writes everything up front stalls against a
 reader that has not been dispatched yet.
+
+### Streamed replies
+
+A caller may set `stream_reply: true` when its successful result may exceed one
+frame. A supporting service serializes the result as JSON, opens a stream on the
+caller, and returns only this reserved envelope in the ordinary method return:
+
+```json
+{"$tinybus_stream_reply":{"id":"…","content_type":"application/json","len":17000000}}
+```
+
+The caller accepts the stream, drains it under the receiver's normal limits,
+then deserializes the bytes as the method's result type. The service sends the
+handle before filling the stream so the caller can drain the bounded window.
+Errors remain ordinary error replies. An older service ignores the additive
+header field and may return an ordinary successful result, which a streaming
+caller must continue to accept. Confidential calls cannot request streamed
+replies because stream chunks are separate ordinary calls and therefore do not
+inherit the attestation guarantee.
 
 ## Match rules
 

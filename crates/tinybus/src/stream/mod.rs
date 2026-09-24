@@ -525,12 +525,35 @@ impl StreamRegistry {
     /// a sender writing to it is talking to the reader's window rather than to
     /// a table this connection has to keep swept.
     pub(crate) fn take_reader(&self, id: &str) -> Result<StreamReader> {
+        self.take_reader_inner(id, None)
+    }
+
+    /// Take a reader only when it was opened by the peer that supplied its
+    /// handle. This binds reply envelopes to their broker-stamped sender.
+    pub(crate) fn take_reader_from(
+        &self,
+        id: &str,
+        owner: &Option<BusName>,
+    ) -> Result<StreamReader> {
+        self.take_reader_inner(id, Some(owner))
+    }
+
+    fn take_reader_inner(
+        &self,
+        id: &str,
+        expected_owner: Option<&Option<BusName>>,
+    ) -> Result<StreamReader> {
         let stream = {
             let mut streams = self.inbound.lock().expect("stream registry lock");
             let stream = streams
                 .get(id)
                 .cloned()
                 .ok_or_else(|| Error::UnknownStream { id: id.to_string() })?;
+            if expected_owner.is_some_and(|owner| &stream.owner != owner) {
+                return Err(Error::protocol(
+                    "a streamed reply handle belongs to another peer",
+                ));
+            }
             // A sealed stream has nothing left to route to it; a live one still
             // needs its entry so `Write` can find it.
             if stream.writer().is_none() {

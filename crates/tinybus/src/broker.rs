@@ -611,6 +611,7 @@ impl Broker {
                 // The bus's own announcements are broadcasts by construction.
                 confidential: false,
                 sensitive: false,
+                stream_reply: false,
             },
             body,
         };

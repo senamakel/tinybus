@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::io::{self, Write};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +47,75 @@ use crate::stream::{
     STREAM_INTERFACE, STREAM_PATH, StreamDescriptor, StreamLimits, StreamReader, StreamRef,
     StreamRegistry, StreamWriter,
 };
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StreamReplyEnvelope {
+    #[serde(rename = "$tinybus_stream_reply")]
+    stream: StreamRef,
+}
+
+const STREAM_REPLY_ENCODE_CHUNK: usize = 16 * 1024;
+
+struct CountingWriter(u64);
+
+impl Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| io::Error::other("streamed reply length overflow"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct StreamReplyEncoder {
+    sender: mpsc::Sender<Vec<u8>>,
+    buffer: Vec<u8>,
+}
+
+impl StreamReplyEncoder {
+    fn new(sender: mpsc::Sender<Vec<u8>>) -> Self {
+        Self {
+            sender,
+            buffer: Vec::with_capacity(STREAM_REPLY_ENCODE_CHUNK),
+        }
+    }
+
+    fn send_buffer(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        let chunk = std::mem::take(&mut self.buffer);
+        self.sender
+            .blocking_send(chunk)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "stream receiver closed"))
+    }
+}
+
+impl Write for StreamReplyEncoder {
+    fn write(&mut self, mut bytes: &[u8]) -> io::Result<usize> {
+        let written = bytes.len();
+        while !bytes.is_empty() {
+            let available = STREAM_REPLY_ENCODE_CHUNK - self.buffer.len();
+            let take = available.min(bytes.len());
+            self.buffer.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            if self.buffer.len() == STREAM_REPLY_ENCODE_CHUNK {
+                self.send_buffer()?;
+            }
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.send_buffer()
+    }
+}
 use crate::version::{Compatibility, PeerManifest, PeerRecord};
 
 /// How long a call waits before giving up.
@@ -100,11 +170,13 @@ struct Inner {
 /// hangup: a service that exited would keep its well-known name until the
 /// process died. `NameOwnerChanged` firing promptly is the whole reason the
 /// kernel can react to an integration dying instead of timing out on it.
-struct CloseOnDrop(Arc<Inner>);
+struct CloseOnDrop(Option<Arc<Inner>>);
 
 impl Drop for CloseOnDrop {
     fn drop(&mut self) {
-        let inner = self.0.clone();
+        let Some(inner) = self.0.clone() else {
+            return;
+        };
         // Spawned, because `close` is async and `Drop` is not. If there is no
         // runtime left to spawn on the process is going away anyway, which
         // closes the transport by closing its file descriptors.
@@ -186,7 +258,7 @@ impl Connection {
         tokio::spawn(writer_loop(inner.transport.clone(), outbound));
         tokio::spawn(dispatch_loop(inner.clone()));
         Self {
-            _close: Arc::new(CloseOnDrop(inner.clone())),
+            _close: Arc::new(CloseOnDrop(Some(inner.clone()))),
             inner,
         }
     }
@@ -584,10 +656,19 @@ impl Connection {
     /// Send a call and wait for its reply, without typing either end.
     ///
     /// The plumbing under every typed call, and what `tinybus call` uses.
-    pub async fn call_raw(&self, mut message: Message, timeout: Duration) -> Result<Value> {
+    pub async fn call_raw(&self, message: Message, timeout: Duration) -> Result<Value> {
+        Ok(self.call_raw_message(message, timeout).await?.body)
+    }
+
+    async fn call_raw_message(&self, mut message: Message, timeout: Duration) -> Result<Message> {
         let serial = self.inner.serial.fetch_add(1, Ordering::Relaxed);
         message.header.serial = serial;
         message.validate()?;
+        if message.header.confidential && message.header.stream_reply {
+            return Err(Error::protocol(
+                "a confidential call cannot request a streamed reply",
+            ));
+        }
         // Refused here, in the sender's own process, rather than at the broker.
         // A stream's bytes travel as their own unflagged `Write` calls, so a
         // handle in a confidential body protects the handle and not the payload
@@ -616,7 +697,7 @@ impl Connection {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(reply)) => match reply.header.kind {
                 MessageKind::Error => Err(reply.into_error()),
-                _ => Ok(reply.body),
+                _ => Ok(reply),
             },
             // The dispatch loop dropped the sender: the transport is gone.
             Ok(Err(_)) => Err(Error::ConnectionClosed),
@@ -843,6 +924,82 @@ impl Connection {
         Ok(serde_json::from_value(reply)?)
     }
 
+    /// Call a method and receive its successful serialized result through the
+    /// bounded stream transport.
+    ///
+    /// An older peer that ignores the additive request flag may return an
+    /// ordinary result; that remains accepted for rolling upgrades. Errors are
+    /// always ordinary replies because they never contain the rejected value.
+    pub async fn call_streaming<R: DeserializeOwned>(
+        &self,
+        destination: BusName,
+        path: ObjectPath,
+        interface: InterfaceName,
+        member: MemberName,
+        args: impl Serialize,
+    ) -> Result<R> {
+        self.call_streaming_with_timeout(
+            destination,
+            path,
+            interface,
+            member,
+            args,
+            DEFAULT_TIMEOUT,
+        )
+        .await
+    }
+
+    /// [`Connection::call_streaming`] with an explicit deadline for receiving
+    /// the reply handle. The stream itself retains its bounded per-chunk and
+    /// idle deadlines.
+    pub async fn call_streaming_with_timeout<R: DeserializeOwned>(
+        &self,
+        destination: BusName,
+        path: ObjectPath,
+        interface: InterfaceName,
+        member: MemberName,
+        args: impl Serialize,
+        timeout: Duration,
+    ) -> Result<R> {
+        let message =
+            Message::streaming_call(destination, path, interface, member, to_body(&args)?);
+        let reply = self.call_raw_message(message, timeout).await?;
+        self.decode_streaming_reply(reply.body, reply.header.sender, timeout)
+            .await
+    }
+
+    async fn decode_streaming_reply<R: DeserializeOwned>(
+        &self,
+        reply: Value,
+        sender: Option<BusName>,
+        timeout: Duration,
+    ) -> Result<R> {
+        let is_stream_reply = reply
+            .as_object()
+            .is_some_and(|object| object.contains_key("$tinybus_stream_reply"));
+        let Ok(envelope) = serde_json::from_value::<StreamReplyEnvelope>(reply.clone()) else {
+            if is_stream_reply {
+                return Ok(serde_json::from_value(reply)?);
+            }
+            return Ok(serde_json::from_value(reply)?);
+        };
+        let limit = envelope
+            .stream
+            .len
+            .ok_or_else(|| Error::protocol("a streamed reply must declare its length"))?;
+        let mut reader = self
+            .inner
+            .streams
+            .take_reader_from(&envelope.stream.id, &sender)?;
+        let bytes = tokio::time::timeout(timeout, reader.read_to_end_capped(limit))
+            .await
+            .map_err(|_| Error::Timeout {
+                member: MemberName::new("StreamReply").expect("literal member name is valid"),
+                timeout_ms: timeout.as_millis() as u64,
+            })??;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
     /// Take the reader for a stream a peer opened on this connection.
     ///
     /// Once only: a stream has one consumer, because two consumers would each
@@ -1015,7 +1172,11 @@ async fn handle_call(inner: Arc<Inner>, message: Message) {
         .read()
         .expect("panic handler lock")
         .clone();
-    let result = if let Some(panic_handler) = panic_handler {
+    let result = if header.stream_reply && header.confidential {
+        Err(Error::protocol(
+            "a confidential call cannot request a streamed reply",
+        ))
+    } else if let Some(panic_handler) = panic_handler {
         match CatchUnwind::new(dispatch(&inner, &header, message.body)).await {
             Ok(result) => result,
             Err(()) => Err(panic_handler()),
@@ -1024,14 +1185,82 @@ async fn handle_call(inner: Arc<Inner>, message: Message) {
         dispatch(&inner, &header, message.body).await
     };
 
-    let mut reply = match result {
+    let result = match result {
+        Ok(value) if header.stream_reply => {
+            if let Err(error) = send_streamed_reply(inner.clone(), &header, value).await {
+                let _ = send_reply(&inner, Message::error_reply(&header, &error)).await;
+            }
+            return;
+        }
+        result => result,
+    };
+
+    let reply = match result {
         Ok(value) => Message::method_return(&header, value),
         Err(e) => Message::error_reply(&header, &e),
     };
+    let _ = send_reply(&inner, reply).await;
+}
+
+async fn send_streamed_reply(inner: Arc<Inner>, header: &Header, value: Value) -> Result<()> {
+    // Direct transports do not have a broker to stamp `sender`; they route all
+    // frames to their sole peer, so the request destination is sufficient.
+    let destination = header
+        .sender
+        .clone()
+        .or_else(|| header.destination.clone())
+        .ok_or_else(|| Error::protocol("a streamed reply needs a caller"))?;
+    // Count before opening so the wire-level length is exact without retaining
+    // a second result-sized JSON allocation in the service process.
+    let mut counter = CountingWriter(0);
+    serde_json::to_writer(&mut counter, &value)?;
+    let connection = Connection {
+        inner: inner.clone(),
+        // This temporary handle borrows the live service connection. Dropping
+        // it after the reply stream finishes must not close that connection.
+        _close: Arc::new(CloseOnDrop(None)),
+    };
+    let mut writer = connection
+        .open_stream_with_timeout(
+            &destination,
+            StreamDescriptor::with_len(counter.0).content_type("application/json"),
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+    let envelope = serde_json::to_value(StreamReplyEnvelope {
+        stream: writer.stream_ref(),
+    })?;
+    if !send_reply(&inner, Message::method_return(header, envelope)).await {
+        return Ok(());
+    }
+    let (sender, mut chunks) = mpsc::channel(1);
+    let encode = tokio::task::spawn_blocking(move || -> io::Result<()> {
+        let mut encoder = StreamReplyEncoder::new(sender);
+        serde_json::to_writer(&mut encoder, &value)?;
+        encoder.flush()
+    });
+    while let Some(chunk) = chunks.recv().await {
+        if let Err(error) = writer.write(&chunk).await {
+            tracing::debug!(error = %error, "streamed reply failed after its handle was sent");
+            return Ok(());
+        }
+    }
+    encode
+        .await
+        .map_err(|_| Error::transport("streamed reply encoder panicked"))??;
+    if let Err(error) = writer.finish().await {
+        tracing::debug!(error = %error, "streamed reply could not close cleanly");
+    }
+    Ok(())
+}
+
+async fn send_reply(inner: &Inner, mut reply: Message) -> bool {
     reply.header.serial = inner.serial.fetch_add(1, Ordering::Relaxed);
     if let Err(e) = inner.outbox.send(reply).await {
         tracing::debug!(error = %e, "could not reply; the caller will time out");
+        return false;
     }
+    true
 }
 
 struct CatchUnwind<F> {
@@ -1102,6 +1331,7 @@ mod tests {
                 MemberName::new("Boom").unwrap(),
                 MemberName::new("Panic").unwrap(),
                 MemberName::new("Hang").unwrap(),
+                MemberName::new("Large").unwrap(),
             ]
         }
 
@@ -1114,6 +1344,9 @@ mod tests {
                     tokio::time::sleep(Duration::from_secs(3600)).await;
                     Ok(Value::Null)
                 }
+                "Large" => Ok(Value::String(
+                    "x".repeat(crate::message::codec::MAX_FRAME_LEN + 1),
+                )),
                 other => Err(Error::failed(format!("unreachable: {other}"))),
             }
         }
@@ -1143,6 +1376,20 @@ mod tests {
         (client, service)
     }
 
+    async fn brokered_pair() -> (Connection, Connection) {
+        let transport = MemoryBus::new();
+        Broker::new().spawn(transport.clone());
+        let service = Connection::connect(transport.connect().await.unwrap())
+            .await
+            .unwrap();
+        service.request_name("ai.tinyhumans.Test").await.unwrap();
+        service.serve_at(path(), Echo).await.unwrap();
+        let client = Connection::connect(transport.connect().await.unwrap())
+            .await
+            .unwrap();
+        (client, service)
+    }
+
     #[tokio::test]
     async fn a_call_reaches_the_service_and_the_reply_comes_back() {
         let (client, _service) = pair().await;
@@ -1151,6 +1398,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reply, serde_json::json!(["hi"]));
+    }
+
+    #[tokio::test]
+    async fn a_reply_larger_than_one_frame_arrives_through_a_bounded_stream() {
+        let (client, _service) = brokered_pair().await;
+        let proxy = client
+            .proxy("ai.tinyhumans.Test", path().as_str(), "ai.tinyhumans.Test")
+            .unwrap();
+        let reply: String = proxy.call_streaming("Large", ()).await.unwrap();
+        assert_eq!(reply.len(), crate::message::codec::MAX_FRAME_LEN + 1);
+        assert!(reply.bytes().all(|byte| byte == b'x'));
+    }
+
+    #[tokio::test]
+    async fn a_streaming_caller_accepts_an_ordinary_legacy_reply() {
+        let (client, _service) = pair().await;
+        let reply: Vec<String> = client
+            .decode_streaming_reply(serde_json::json!(["legacy"]), None, DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+        assert_eq!(reply, vec!["legacy"]);
+    }
+
+    #[tokio::test]
+    async fn a_streaming_call_keeps_errors_as_ordinary_replies() {
+        let (client, _service) = brokered_pair().await;
+        let proxy = client
+            .proxy("ai.tinyhumans.Test", path().as_str(), "ai.tinyhumans.Test")
+            .unwrap();
+        let error = proxy.call_streaming::<Value>("Boom", ()).await.unwrap_err();
+        assert_eq!(error.wire_name(), Error::FAILED);
+    }
+
+    #[tokio::test]
+    async fn a_confidential_call_refuses_streamed_reply_semantics_before_send() {
+        let (client, _service) = pair().await;
+        let mut message = Message::streaming_call(
+            BusName::new("ai.tinyhumans.Test").unwrap(),
+            path(),
+            InterfaceName::new("ai.tinyhumans.Test").unwrap(),
+            MemberName::new("Echo").unwrap(),
+            serde_json::json!(["secret"]),
+        );
+        message.header.confidential = true;
+        let error = client.call_raw(message, DEFAULT_TIMEOUT).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot request a streamed reply")
+        );
     }
 
     #[tokio::test]

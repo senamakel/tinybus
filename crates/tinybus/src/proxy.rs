@@ -103,6 +103,28 @@ impl Proxy {
             .await
     }
 
+    /// Call `member` and receive a potentially bulk result through a bounded
+    /// reply stream.
+    ///
+    /// Ordinary replies from older peers remain compatible. Use this for
+    /// variable-size results whose encoded JSON may exceed one frame.
+    pub async fn call_streaming<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R> {
+        self.connection
+            .call_streaming_with_timeout(
+                self.destination.clone(),
+                self.path.clone(),
+                self.interface.clone(),
+                MemberName::new(member)?,
+                args,
+                self.timeout,
+            )
+            .await
+    }
+
     /// Call `member` with a body the bus must not show to anyone else.
     ///
     /// The call fails with [`crate::Error::NotAttested`] unless the broker has

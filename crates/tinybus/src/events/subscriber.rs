@@ -13,6 +13,7 @@
 //!   logs and continues rather than terminating for good.
 
 use std::sync::Arc;
+use std::task::Poll;
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
@@ -167,25 +168,20 @@ pub(crate) fn spawn<E: Event>(
                 continue;
             }
 
-            // A panicking handler must not take this loop with it: losing the
-            // loop silently unsubscribes the handler, so it stops reacting and
-            // nothing says so.
-            //
-            // The isolation is a spawned task rather than `catch_unwind`,
-            // because tokio already turns a panicking task into an `Err` on its
-            // `JoinHandle` — and doing it this way costs no dependency, in a
-            // crate whose entire purpose is dependency reduction. The event is
-            // cloned into the task, which is why [`Event`] requires `Clone`.
-            let dispatch = {
-                let handler = handler.clone();
-                let event = event.clone();
-                tokio::spawn(async move { handler.handle(&event).await })
+            // Catch each poll inline. This preserves panic isolation without a
+            // task allocation and scheduling hop per event; `poll_fn` keeps the
+            // future pinned, while `catch_unwind` covers panics from any poll.
+            let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handler.handle(&event)
+            })) {
+                Ok(future) => catch_handler_panic(future).await,
+                Err(payload) => Err(payload),
             };
-            if let Err(join) = dispatch.await {
+            if outcome.is_err() {
                 tracing::error!(
                     handler = task_name,
                     domain = event.domain(),
-                    panicked = join.is_panic(),
+                    panicked = true,
                     "[tinybus] handler failed, continuing"
                 );
             }
@@ -193,6 +189,20 @@ pub(crate) fn spawn<E: Event>(
     });
 
     SubscriptionHandle::new(name, task)
+}
+
+async fn catch_handler_panic<F: std::future::Future>(future: F) -> std::thread::Result<F::Output> {
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|context| {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            future.as_mut().poll(context)
+        })) {
+            Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
+            Ok(Poll::Pending) => Poll::Pending,
+            Err(payload) => Poll::Ready(Err(payload)),
+        }
+    })
+    .await
 }
 
 #[cfg(test)]
