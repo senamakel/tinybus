@@ -685,6 +685,8 @@ mod tests {
     static DELIVERIES: AtomicUsize = AtomicUsize::new(0);
     static SHUTDOWN_CODE: AtomicI32 = AtomicI32::new(TB_OK);
     static SHUTDOWN_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static SHUTDOWN_BLOCKED: AtomicBool = AtomicBool::new(false);
+    static SHUTDOWN_ENTERED: AtomicBool = AtomicBool::new(false);
     static REINITIALIZE_CODE: AtomicI32 = AtomicI32::new(TB_OK);
     static REINITIALIZE_BLOCKED: AtomicBool = AtomicBool::new(false);
     static REINITIALIZE_ENTERED: AtomicBool = AtomicBool::new(false);
@@ -698,6 +700,10 @@ mod tests {
 
     unsafe extern "C" fn shutdown(_: *mut c_void, _: u64) -> i32 {
         SHUTDOWN_CALLS.fetch_add(1, Ordering::AcqRel);
+        SHUTDOWN_ENTERED.store(true, Ordering::Release);
+        while SHUTDOWN_BLOCKED.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
         SHUTDOWN_CODE.load(Ordering::Acquire)
     }
 
@@ -894,14 +900,10 @@ mod tests {
             .await
             .is_err()
         );
-        assert!(
-            tokio::time::timeout(
-                Duration::from_millis(20),
-                transport.clone().stop(Duration::from_secs(1)),
-            )
-            .await
-            .is_err()
-        );
+        assert!(matches!(
+            transport.clone().stop(Duration::from_millis(20)).await,
+            Err(StopError::NotStarted(_))
+        ));
         assert_eq!(SHUTDOWN_CALLS.load(Ordering::Acquire), 0);
 
         REINITIALIZE_BLOCKED.store(false, Ordering::Release);
@@ -915,6 +917,27 @@ mod tests {
             TB_OK
         );
         assert_eq!(SHUTDOWN_CALLS.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_task_timeout_is_distinguished_from_a_lifecycle_lock_timeout() {
+        let _lock = VTABLE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        SHUTDOWN_BLOCKED.store(true, Ordering::Release);
+        SHUTDOWN_ENTERED.store(false, Ordering::Release);
+        let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+        let mut module = TbModuleVtable::default();
+        unsafe { initialize_ok(std::ptr::null(), &mut module) };
+        transport.initialize(module).unwrap();
+
+        assert!(matches!(
+            transport.clone().stop(Duration::from_millis(20)).await,
+            Err(StopError::Started(_))
+        ));
+        assert!(SHUTDOWN_ENTERED.load(Ordering::Acquire));
+        SHUTDOWN_BLOCKED.store(false, Ordering::Release);
     }
 
     #[tokio::test]
