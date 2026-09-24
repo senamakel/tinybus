@@ -897,11 +897,21 @@ impl Connection {
         let message =
             Message::streaming_call(destination, path, interface, member, to_body(&args)?);
         let reply = self.call_raw(message, timeout).await?;
-        self.decode_streaming_reply(reply).await
+        self.decode_streaming_reply(reply, timeout).await
     }
 
-    async fn decode_streaming_reply<R: DeserializeOwned>(&self, reply: Value) -> Result<R> {
+    async fn decode_streaming_reply<R: DeserializeOwned>(
+        &self,
+        reply: Value,
+        timeout: Duration,
+    ) -> Result<R> {
+        let is_stream_reply = reply
+            .as_object()
+            .is_some_and(|object| object.contains_key("$tinybus_stream_reply"));
         let Ok(envelope) = serde_json::from_value::<StreamReplyEnvelope>(reply.clone()) else {
+            if is_stream_reply {
+                return Ok(serde_json::from_value(reply)?);
+            }
             return Ok(serde_json::from_value(reply)?);
         };
         let limit = envelope
@@ -909,7 +919,12 @@ impl Connection {
             .len
             .ok_or_else(|| Error::protocol("a streamed reply must declare its length"))?;
         let mut reader = self.accept_stream(&envelope.stream)?;
-        let bytes = reader.read_to_end_capped(limit).await?;
+        let bytes = tokio::time::timeout(timeout, reader.read_to_end_capped(limit))
+            .await
+            .map_err(|_| Error::Timeout {
+                member: MemberName::new("StreamReply").expect("literal member name is valid"),
+                timeout_ms: timeout.as_millis() as u64,
+            })??;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
@@ -1116,9 +1131,12 @@ async fn handle_call(inner: Arc<Inner>, message: Message) {
 }
 
 async fn send_streamed_reply(inner: Arc<Inner>, header: &Header, value: Value) -> Result<()> {
+    // Direct transports do not have a broker to stamp `sender`; they route all
+    // frames to their sole peer, so the request destination is sufficient.
     let destination = header
         .sender
         .clone()
+        .or_else(|| header.destination.clone())
         .ok_or_else(|| Error::protocol("a streamed reply needs a caller"))?;
     let bytes = serde_json::to_vec(&value)?;
     let connection = Connection {
@@ -1311,7 +1329,7 @@ mod tests {
     async fn a_streaming_caller_accepts_an_ordinary_legacy_reply() {
         let (client, _service) = pair().await;
         let reply: Vec<String> = client
-            .decode_streaming_reply(serde_json::json!(["legacy"]))
+            .decode_streaming_reply(serde_json::json!(["legacy"]), DEFAULT_TIMEOUT)
             .await
             .unwrap();
         assert_eq!(reply, vec!["legacy"]);

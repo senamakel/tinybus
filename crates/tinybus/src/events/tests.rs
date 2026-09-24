@@ -137,7 +137,13 @@ async fn local_delivery_reaches_the_handler_without_a_per_event_task_hop() {
     });
 
     bus.publish(TestEvent::SystemStartup);
-    tokio::task::yield_now().await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while seen.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the subscriber receives the published event");
     assert_eq!(seen.load(Ordering::SeqCst), 1);
 }
 

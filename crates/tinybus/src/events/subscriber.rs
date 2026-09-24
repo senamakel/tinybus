@@ -171,7 +171,13 @@ pub(crate) fn spawn<E: Event>(
             // Catch each poll inline. This preserves panic isolation without a
             // task allocation and scheduling hop per event; `poll_fn` keeps the
             // future pinned, while `catch_unwind` covers panics from any poll.
-            if catch_handler_panic(handler.handle(&event)).await.is_err() {
+            let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handler.handle(&event)
+            })) {
+                Ok(future) => catch_handler_panic(future).await,
+                Err(payload) => Err(payload),
+            };
+            if outcome.is_err() {
                 tracing::error!(
                     handler = task_name,
                     domain = event.domain(),
@@ -186,7 +192,7 @@ pub(crate) fn spawn<E: Event>(
 }
 
 async fn catch_handler_panic<F: std::future::Future>(future: F) -> std::thread::Result<F::Output> {
-    let mut future = Box::pin(future);
+    let mut future = std::pin::pin!(future);
     std::future::poll_fn(|context| {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             future.as_mut().poll(context)
