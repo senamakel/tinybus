@@ -1029,4 +1029,14 @@ mod tests {
             TB_CLOSED
         );
     }
+
+    #[test]
+    fn stop_errors_keep_the_underlying_safe_error_for_both_lifecycle_phases() {
+        for error in [
+            StopError::NotStarted(Error::failed("before spawn")),
+            StopError::Started(Error::failed("after spawn")),
+        ] {
+            assert!(matches!(Error::from(error), Error::MethodFailed { .. }));
+        }
+    }
 }
