@@ -32,14 +32,20 @@ pub use host::{ModuleHost, ModuleInfo, ModuleState};
 /// descriptor still pass the ordinary TinyBus admission checks.
 #[cfg(feature = "modules")]
 pub struct LinkedModule {
+    /// Descriptor compiled with the linked module.
     pub descriptor: abi::TbAbiDescriptor,
+    /// Manifest exported by the linked module.
     pub manifest: manifest::ModuleManifest,
+    /// Process-lifetime initialization entry point.
     pub init: abi::TbModuleInit,
 }
 
 #[cfg(feature = "modules")]
 impl LinkedModule {
     /// Read the manifest exported by statically linked module code.
+    ///
+    /// # Errors
+    /// Returns an error for an incompatible descriptor or malformed manifest.
     ///
     /// # Safety
     /// The exported function must return readable bytes for the duration of
@@ -49,6 +55,7 @@ impl LinkedModule {
         manifest: unsafe extern "C" fn() -> abi::TbSlice,
         init: abi::TbModuleInit,
     ) -> crate::Result<Self> {
+        loader::gate_descriptor(std::path::Path::new("linked"), descriptor, false)?;
         let slice = unsafe { manifest() };
         if slice.ptr.is_null() || slice.len > 1024 * 1024 {
             return Err(crate::Error::failed(

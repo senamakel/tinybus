@@ -138,6 +138,22 @@ fn invalid_linked_manifest_never_exposes_partial_bytes() {
     assert!(BYTES.get().is_none());
 }
 
+#[test]
+fn linked_helper_refuses_an_invalid_descriptor() {
+    let mut descriptor = first::TINYBUS_MODULE_ABI_V1;
+    descriptor.magic = 0;
+    let error = unsafe {
+        tinybus::module::LinkedModule::from_exports(
+            &descriptor,
+            first::tinybus_module_manifest_v1,
+            first::tinybus_module_init_v1,
+        )
+    }
+    .err()
+    .expect("invalid descriptor must be rejected");
+    assert!(error.to_string().contains("ABI magic does not match"));
+}
+
 #[tokio::test]
 async fn linked_entries_attach_to_one_broker() {
     fn manifest(slice: tinybus::module::abi::TbSlice) -> tinybus::module::manifest::ModuleManifest {

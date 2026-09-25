@@ -228,6 +228,38 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
     broker_task.abort();
 }
 
+#[test]
+fn linked_module_with_an_unmet_required_interface_is_refused_before_init() {
+    let host = ModuleHost::new(Broker::new());
+    let mut module_manifest = manifest();
+    module_manifest
+        .requires
+        .push(crate::module::manifest::Dependency {
+            interface: crate::version::InterfaceVersion::consumed(
+                "ai.tinyhumans.module.Missing".parse().unwrap(),
+                Version::new(1, 0, 0),
+            ),
+            optional: false,
+            reason: String::new(),
+        });
+    let error = host
+        .attach_linked_with_config(
+            LinkedModule {
+                descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
+                manifest: module_manifest,
+                init: init_that_must_not_run,
+            },
+            serde_json::json!({}),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("required interface has no provider")
+    );
+    assert!(host.list().is_empty());
+}
+
 #[tokio::test]
 async fn a_lazy_module_initializes_on_the_first_call_and_two_racing_callers_initialize_it_once() {
     let _test_guard = FAKE_MODULE_TEST_LOCK.lock().await;

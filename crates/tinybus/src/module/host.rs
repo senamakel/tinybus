@@ -508,17 +508,21 @@ impl ModuleHost {
         module: LinkedModule,
         config: serde_json::Value,
     ) -> Result<ModuleInfo> {
-        static EXECUTABLE_DIGEST: OnceLock<Option<String>> = OnceLock::new();
-        let digest = EXECUTABLE_DIGEST
-            .get_or_init(|| {
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|path| crate::module::sha256_file(path).ok())
-            })
-            .clone()
-            .ok_or_else(|| Error::failed("linked module host executable cannot be hashed"))?;
+        static EXECUTABLE_DIGEST: OnceLock<String> = OnceLock::new();
+        let digest = match EXECUTABLE_DIGEST.get() {
+            Some(digest) => digest.clone(),
+            None => {
+                let executable = std::env::current_exe()
+                    .map_err(|_| Error::failed("linked module host executable is unavailable"))?;
+                let digest = crate::module::sha256_file(executable)
+                    .map_err(|_| Error::failed("linked module host executable cannot be hashed"))?;
+                let _ = EXECUTABLE_DIGEST.set(digest.clone());
+                digest
+            }
+        };
         let name = sanitize_untrusted(&module.manifest.module.name);
         let path = PathBuf::from(format!("linked-{name}"));
+        self.ensure_dependencies(&module.manifest, &path)?;
         self.activate(
             &path,
             LoadedArtifact {
