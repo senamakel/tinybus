@@ -1934,6 +1934,7 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
     const OWNER_SECURITY_INFORMATION: u32 = 0x1;
     const DACL_SECURITY_INFORMATION: u32 = 0x4;
     const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    const WIN_CREATOR_OWNER_SID: u32 = 3;
     const WIN_LOCAL_SYSTEM_SID: u32 = 22;
     const WIN_BUILTIN_ADMINISTRATORS_SID: u32 = 26;
     const WRITE_MASK: u32 =
@@ -1977,6 +1978,8 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
         let mut admin_len = size_of_val(&admin_sid) as u32;
         let mut system_sid = [0u32; 17];
         let mut system_len = size_of_val(&system_sid) as u32;
+        let mut creator_owner_sid = [0u32; 17];
+        let mut creator_owner_len = size_of_val(&creator_owner_sid) as u32;
         if unsafe {
             CreateWellKnownSid(
                 WIN_BUILTIN_ADMINISTRATORS_SID,
@@ -1991,6 +1994,14 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
                     std::ptr::null(),
                     system_sid.as_mut_ptr().cast(),
                     &mut system_len,
+                )
+            } == 0
+            || unsafe {
+                CreateWellKnownSid(
+                    WIN_CREATOR_OWNER_SID,
+                    std::ptr::null(),
+                    creator_owner_sid.as_mut_ptr().cast(),
+                    &mut creator_owner_len,
                 )
             } == 0
         {
@@ -2011,7 +2022,11 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
             let sid = unsafe { std::ptr::addr_of!((*ace).sid_start) }.cast();
             let trusted = unsafe { EqualSid(sid, owner) } != 0
                 || unsafe { EqualSid(sid, admin_sid.as_ptr().cast()) } != 0
-                || unsafe { EqualSid(sid, system_sid.as_ptr().cast()) } != 0;
+                || unsafe { EqualSid(sid, system_sid.as_ptr().cast()) } != 0
+                // CREATOR OWNER is an inheritable placeholder for the owner
+                // of each child, not a grant to a different account. Windows
+                // user cache directories commonly inherit this ACE.
+                || unsafe { EqualSid(sid, creator_owner_sid.as_ptr().cast()) } != 0;
             if !trusted {
                 return true;
             }

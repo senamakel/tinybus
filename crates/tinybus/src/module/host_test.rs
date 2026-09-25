@@ -1136,6 +1136,36 @@ fn a_world_writable_module_directory_is_refused_before_any_dlopen() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn a_creator_owner_cache_directory_is_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new("icacls")
+        .arg(directory.path())
+        .args(["/grant", "*S-1-3-0:(OI)(CI)(IO)(F)"])
+        .output()
+        .expect("icacls is installed on Windows");
+    assert!(output.status.success(), "icacls failed: {output:?}");
+    assert_eq!(
+        windows_directory_grants_untrusted_write(directory.path()).unwrap(),
+        false,
+        "CREATOR OWNER does not grant another account write access"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_directory_writable_by_everyone_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new("icacls")
+        .arg(directory.path())
+        .args(["/grant", "*S-1-1-0:(F)"])
+        .output()
+        .expect("icacls is installed on Windows");
+    assert!(output.status.success(), "icacls failed: {output:?}");
+    assert!(windows_directory_grants_untrusted_write(directory.path()).unwrap());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_sticky_world_writable_module_directory_is_accepted() {
