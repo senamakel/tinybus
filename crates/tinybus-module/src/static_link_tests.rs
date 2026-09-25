@@ -34,6 +34,27 @@ mod second {
     }
 }
 
+mod configured {
+    #[derive(serde::Deserialize)]
+    struct Config {}
+
+    async fn setup(_: tinybus::Connection, _: Config) -> tinybus::Result<()> {
+        Ok(())
+    }
+
+    crate::module_export_static! {
+        setup = setup,
+        config = Config,
+        worker_threads = 1,
+        provides = ["ai.tinyhumans.tinybus.StaticConfigured"],
+        methods = ["Configured"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = true,
+    }
+}
+
 #[test]
 fn linked_modules_retain_distinct_manifests() {
     fn manifest(slice: tinybus::module::abi::TbSlice) -> tinybus::module::manifest::ModuleManifest {
@@ -43,6 +64,7 @@ fn linked_modules_retain_distinct_manifests() {
 
     let first_manifest = manifest(first::tinybus_module_manifest_v1());
     let second_manifest = manifest(second::tinybus_module_manifest_v1());
+    let configured_manifest = manifest(configured::tinybus_module_manifest_v1());
     assert_eq!(
         first_manifest.bus_name.as_str(),
         "ai.tinyhumans.tinybus.StaticFirst"
@@ -51,10 +73,16 @@ fn linked_modules_retain_distinct_manifests() {
         second_manifest.bus_name.as_str(),
         "ai.tinyhumans.tinybus.StaticSecond"
     );
+    assert_eq!(
+        configured_manifest.bus_name.as_str(),
+        "ai.tinyhumans.tinybus.StaticConfigured"
+    );
     let _entries = (
         &first::TINYBUS_MODULE_ABI_V1,
         first::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
         &second::TINYBUS_MODULE_ABI_V1,
         second::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
+        &configured::TINYBUS_MODULE_ABI_V1,
+        configured::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
     );
 }
