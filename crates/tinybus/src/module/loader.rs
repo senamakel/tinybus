@@ -209,7 +209,7 @@ mod platform {
     }
 
     const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
-    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
     pub(super) type Handle = *mut c_void;
 
     pub(super) fn open(path: &Path) -> Result<Handle> {
@@ -220,10 +220,11 @@ mod platform {
             LoadLibraryExW(
                 wide.as_ptr(),
                 std::ptr::null_mut(),
-                // Keep adjacent dependencies first, then allow the application,
-                // registered user directories, and System32. The load-dir flag
-                // alone excludes System32, where system and VC runtime DLLs live.
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+                // Search only beside the admitted module and in System32. The
+                // load-dir flag alone excludes System32, where OS and installed
+                // VC runtime DLLs live; default directories would also search
+                // application-controlled paths for unverified dependencies.
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
             )
         };
         if handle.is_null() {
