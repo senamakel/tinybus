@@ -1745,6 +1745,13 @@ fn check_file(path: &Path) -> Result<()> {
         ));
     }
     #[cfg(windows)]
+    if windows_path_grants_untrusted_write(path)? {
+        return Err(Error::module_refused(
+            path,
+            "artifact is writable by another user",
+        ));
+    }
+    #[cfg(windows)]
     let file = std::fs::File::open(path)
         .map_err(|_| Error::module_refused(path, "artifact is unreadable"))?;
     check_allowlist(path, file)
@@ -1869,7 +1876,7 @@ fn check_directory(path: &Path) -> Result<()> {
             "module search path is not a directory",
         ));
     }
-    if windows_directory_grants_untrusted_write(path)? {
+    if windows_path_grants_untrusted_write(path)? {
         return Err(Error::module_refused(
             path,
             "module directory is writable by another user",
@@ -1879,7 +1886,7 @@ fn check_directory(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
+fn windows_path_grants_untrusted_write(path: &Path) -> Result<bool> {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
 
@@ -2052,6 +2059,15 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
         if user_sid.is_null() {
             return true;
         }
+        // An owner can rewrite the DACL even without an explicit write ACE.
+        // Module files may inherit CREATOR OWNER from their parent, so their
+        // actual owner must be trusted before that placeholder can be accepted.
+        let trusted_owner = unsafe { EqualSid(owner, user_sid) } != 0
+            || unsafe { EqualSid(owner, admin_sid.as_ptr().cast()) } != 0
+            || unsafe { EqualSid(owner, system_sid.as_ptr().cast()) } != 0;
+        if !trusted_owner {
+            return true;
+        }
         let ace_count = unsafe { (*dacl).ace_count };
         for index in 0..u32::from(ace_count) {
             let mut ace = std::ptr::null_mut();
@@ -2065,15 +2081,12 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
                 continue;
             }
             let sid = unsafe { std::ptr::addr_of!((*ace).sid_start) }.cast();
-            let trusted = unsafe { EqualSid(sid, owner) } != 0
-                // A directory's owner may be Administrators even when this
-                // process has its own explicit full-control ACE.
-                || unsafe { EqualSid(sid, user_sid) } != 0
+            let trusted = unsafe { EqualSid(sid, user_sid) } != 0
                 || unsafe { EqualSid(sid, admin_sid.as_ptr().cast()) } != 0
                 || unsafe { EqualSid(sid, system_sid.as_ptr().cast()) } != 0
                 // CREATOR OWNER is an inheritable placeholder for the owner
-                // of each child, not a grant to a different account. Windows
-                // user cache directories commonly inherit this ACE.
+                // of each child. Check each module file's actual owner and
+                // ACL too, before accepting this ACE on its parent directory.
                 || unsafe { EqualSid(sid, creator_owner_sid.as_ptr().cast()) } != 0;
             if !trusted {
                 return true;

@@ -1151,7 +1151,7 @@ fn a_creator_owner_cache_directory_is_accepted() {
         .output()
         .unwrap();
     assert!(
-        !windows_directory_grants_untrusted_write(directory.path()).unwrap(),
+        !windows_path_grants_untrusted_write(directory.path()).unwrap(),
         "CREATOR OWNER does not grant another account write access; ACL: {}",
         String::from_utf8_lossy(&acl.stdout)
     );
@@ -1167,7 +1167,34 @@ fn a_directory_writable_by_everyone_is_refused() {
         .output()
         .expect("icacls is installed on Windows");
     assert!(output.status.success(), "icacls failed: {output:?}");
-    assert!(windows_directory_grants_untrusted_write(directory.path()).unwrap());
+    assert!(windows_path_grants_untrusted_write(directory.path()).unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_cache_directory_writable_by_the_current_user_is_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    assert!(!windows_path_grants_untrusted_write(directory.path()).unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_module_file_writable_by_everyone_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("module.dll");
+    std::fs::write(&path, b"not a module").unwrap();
+    let output = std::process::Command::new("icacls")
+        .arg(&path)
+        .args(["/grant", "*S-1-1-0:(F)"])
+        .output()
+        .expect("icacls is installed on Windows");
+    assert!(output.status.success(), "icacls failed: {output:?}");
+    assert!(
+        check_file(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("artifact is writable by another user")
+    );
 }
 
 #[cfg(unix)]
