@@ -945,6 +945,21 @@ macro_rules! module_export_static {
     };
 }
 
+/// Select the dynamic or linked export from one declaration.
+///
+/// The consuming crate declares a `static-link` feature. Its default build
+/// retains the C exports, while the linked build uses Rust-addressable entry
+/// points and the linked runtime mode.
+#[macro_export]
+macro_rules! module_export_optional_static {
+    ($($declaration:tt)*) => {
+        #[cfg(not(feature = "static-link"))]
+        $crate::module_export! { $($declaration)* }
+        #[cfg(feature = "static-link")]
+        $crate::module_export_static! { $($declaration)* }
+    };
+}
+
 #[cfg(test)]
 mod tests {
 

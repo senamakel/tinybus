@@ -55,6 +55,23 @@ mod configured {
     }
 }
 
+mod optional {
+    async fn setup(_: tinybus::Connection) -> tinybus::Result<()> {
+        Ok(())
+    }
+
+    crate::module_export_optional_static! {
+        setup = setup,
+        worker_threads = 1,
+        provides = ["ai.tinyhumans.tinybus.OptionalStatic"],
+        methods = [],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
 #[test]
 fn linked_modules_retain_distinct_manifests() {
     fn manifest(slice: tinybus::module::abi::TbSlice) -> tinybus::module::manifest::ModuleManifest {
@@ -90,6 +107,12 @@ fn linked_modules_retain_distinct_manifests() {
         second::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
         &configured::TINYBUS_MODULE_ABI_V1,
         configured::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
+    );
+    assert!(!optional::tinybus_module_manifest_v1().ptr.is_null());
+    #[cfg(feature = "static-link")]
+    assert_eq!(
+        optional::linked_module().unwrap().manifest.module.name,
+        "tinybus-module"
     );
 }
 
