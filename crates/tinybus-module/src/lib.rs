@@ -46,7 +46,16 @@ pub struct ManifestDeclaration<'a> {
 /// Build and retain the exported manifest bytes for the process lifetime.
 #[doc(hidden)]
 pub fn manifest_slice(declaration: ManifestDeclaration<'_>) -> tinybus::module::abi::TbSlice {
-    catch_unwind(AssertUnwindSafe(|| build_manifest_slice(declaration))).unwrap_or(
+    manifest_slice_in(&MANIFEST_BYTES, declaration)
+}
+
+/// Retain a manifest in the caller's slot, allowing multiple linked modules.
+#[doc(hidden)]
+pub fn manifest_slice_in(
+    slot: &'static OnceLock<Vec<u8>>,
+    declaration: ManifestDeclaration<'_>,
+) -> tinybus::module::abi::TbSlice {
+    catch_unwind(AssertUnwindSafe(|| build_manifest_slice(slot, declaration))).unwrap_or(
         tinybus::module::abi::TbSlice {
             ptr: std::ptr::null(),
             len: 0,
@@ -54,13 +63,16 @@ pub fn manifest_slice(declaration: ManifestDeclaration<'_>) -> tinybus::module::
     )
 }
 
-fn build_manifest_slice(declaration: ManifestDeclaration<'_>) -> tinybus::module::abi::TbSlice {
+fn build_manifest_slice(
+    slot: &'static OnceLock<Vec<u8>>,
+    declaration: ManifestDeclaration<'_>,
+) -> tinybus::module::abi::TbSlice {
     use tinybus::module::manifest::{
         Dependency, MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy, ProvidedInterface,
     };
     use tinybus::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
-    let bytes = MANIFEST_BYTES.get_or_init(|| {
+    let bytes = slot.get_or_init(|| {
         let package_version =
             Version::parse(declaration.version).expect("package version is semver");
         let provided = |(index, interface): (usize, &&str)| ProvidedInterface {
@@ -681,16 +693,21 @@ macro_rules! module_export {
         optional = [$($optional:literal),* $(,)?],
         lazy = $lazy:expr $(,)?
     ) => {
-        #[unsafe(no_mangle)]
+        // Static hosts link several module crates into one executable. Their
+        // Rust paths remain unique, but the shared C export name would collide
+        // at link time. Standalone cdylibs keep the stable symbol for dlopen.
+        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
         pub static TINYBUS_MODULE_ABI_V1: ::tinybus::module::abi::TbAbiDescriptor =
             ::tinybus::module::abi::TbAbiDescriptor::current(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             );
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
         pub extern "C" fn tinybus_module_manifest_v1() -> ::tinybus::module::abi::TbSlice {
-            $crate::manifest_slice($crate::ManifestDeclaration {
+            static MANIFEST_BYTES: ::std::sync::OnceLock<::std::vec::Vec<u8>> =
+                ::std::sync::OnceLock::new();
+            $crate::manifest_slice_in(&MANIFEST_BYTES, $crate::ManifestDeclaration {
                 name: env!("CARGO_PKG_NAME"),
                 version: env!("CARGO_PKG_VERSION"),
                 provides: &[$($provides),*],
@@ -725,7 +742,7 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
@@ -774,7 +791,7 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
@@ -1360,3 +1377,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "static-link"))]
+#[path = "static_link_tests.rs"]
+mod static_link_tests;
