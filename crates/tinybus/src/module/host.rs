@@ -1903,6 +1903,11 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
         mask: u32,
         sid_start: u32,
     }
+    #[repr(C)]
+    struct SidAndAttributes {
+        sid: *mut c_void,
+        attributes: u32,
+    }
 
     #[link(name = "advapi32")]
     unsafe extern "system" {
@@ -1924,18 +1929,31 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
             sid: *mut c_void,
             size: *mut u32,
         ) -> i32;
+        fn OpenProcessToken(process: *mut c_void, access: u32, token: *mut *mut c_void) -> i32;
+        fn GetTokenInformation(
+            token: *mut c_void,
+            class: u32,
+            information: *mut c_void,
+            length: u32,
+            returned_length: *mut u32,
+        ) -> i32;
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn LocalFree(memory: *mut c_void) -> *mut c_void;
+        fn GetCurrentProcess() -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
     }
 
     const SE_FILE_OBJECT: u32 = 1;
     const OWNER_SECURITY_INFORMATION: u32 = 0x1;
     const DACL_SECURITY_INFORMATION: u32 = 0x4;
     const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    const WIN_CREATOR_OWNER_SID: u32 = 3;
     const WIN_LOCAL_SYSTEM_SID: u32 = 22;
     const WIN_BUILTIN_ADMINISTRATORS_SID: u32 = 26;
+    const TOKEN_QUERY: u32 = 0x8;
+    const TOKEN_USER: u32 = 1;
     const WRITE_MASK: u32 =
         0x2 | 0x4 | 0x10 | 0x100 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x1000_0000 | 0x4000_0000;
 
@@ -1977,6 +1995,8 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
         let mut admin_len = size_of_val(&admin_sid) as u32;
         let mut system_sid = [0u32; 17];
         let mut system_len = size_of_val(&system_sid) as u32;
+        let mut creator_owner_sid = [0u32; 17];
+        let mut creator_owner_len = size_of_val(&creator_owner_sid) as u32;
         if unsafe {
             CreateWellKnownSid(
                 WIN_BUILTIN_ADMINISTRATORS_SID,
@@ -1993,7 +2013,43 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
                     &mut system_len,
                 )
             } == 0
+            || unsafe {
+                CreateWellKnownSid(
+                    WIN_CREATOR_OWNER_SID,
+                    std::ptr::null(),
+                    creator_owner_sid.as_mut_ptr().cast(),
+                    &mut creator_owner_len,
+                )
+            } == 0
         {
+            return true;
+        }
+        let mut token = std::ptr::null_mut();
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            return true;
+        }
+        let mut user_len = 0;
+        unsafe { GetTokenInformation(token, TOKEN_USER, std::ptr::null_mut(), 0, &mut user_len) };
+        if (user_len as usize) < size_of::<SidAndAttributes>() {
+            unsafe { CloseHandle(token) };
+            return true;
+        }
+        let mut user = vec![0usize; (user_len as usize).div_ceil(size_of::<usize>())];
+        let user_read = unsafe {
+            GetTokenInformation(
+                token,
+                TOKEN_USER,
+                user.as_mut_ptr().cast(),
+                user_len,
+                &mut user_len,
+            )
+        };
+        unsafe { CloseHandle(token) };
+        if user_read == 0 {
+            return true;
+        }
+        let user_sid = unsafe { (*user.as_ptr().cast::<SidAndAttributes>()).sid };
+        if user_sid.is_null() {
             return true;
         }
         let ace_count = unsafe { (*dacl).ace_count };
@@ -2010,8 +2066,15 @@ fn windows_directory_grants_untrusted_write(path: &Path) -> Result<bool> {
             }
             let sid = unsafe { std::ptr::addr_of!((*ace).sid_start) }.cast();
             let trusted = unsafe { EqualSid(sid, owner) } != 0
+                // A directory's owner may be Administrators even when this
+                // process has its own explicit full-control ACE.
+                || unsafe { EqualSid(sid, user_sid) } != 0
                 || unsafe { EqualSid(sid, admin_sid.as_ptr().cast()) } != 0
-                || unsafe { EqualSid(sid, system_sid.as_ptr().cast()) } != 0;
+                || unsafe { EqualSid(sid, system_sid.as_ptr().cast()) } != 0
+                // CREATOR OWNER is an inheritable placeholder for the owner
+                // of each child, not a grant to a different account. Windows
+                // user cache directories commonly inherit this ACE.
+                || unsafe { EqualSid(sid, creator_owner_sid.as_ptr().cast()) } != 0;
             if !trusted {
                 return true;
             }
