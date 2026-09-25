@@ -29,7 +29,10 @@ restart.
    platform library file no larger than 512 MiB, and enforce `modules.toml`
    when present.
 2. Read an adjacent lazy manifest when one is present; otherwise load eagerly
-   and locally (`RTLD_NOW | RTLD_LOCAL` on Unix).
+   and locally (`RTLD_NOW | RTLD_LOCAL` on Unix). On Windows, search the
+   module's directory first for its dependencies, then the application,
+   registered user directories, and System32. Loader refusals include the
+   Win32 error code so a missing dependency can be diagnosed.
 3. Resolve `TINYBUS_MODULE_ABI_V1` against that specific handle.
 4. Read and validate only the frozen 16-byte descriptor prefix.
 5. Validate the full descriptor, then parse the manifest.
