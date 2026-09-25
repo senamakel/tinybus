@@ -685,6 +685,7 @@ where
 #[macro_export]
 macro_rules! module_export {
     (@common
+        export = {$($export:tt)*},
         worker_threads = $threads:expr,
         provides = [$($provides:literal),* $(,)?],
         methods = [$($methods:literal),* $(,)?],
@@ -693,17 +694,14 @@ macro_rules! module_export {
         optional = [$($optional:literal),* $(,)?],
         lazy = $lazy:expr $(,)?
     ) => {
-        // Static hosts link several module crates into one executable. Their
-        // Rust paths remain unique, but the shared C export name would collide
-        // at link time. Standalone cdylibs keep the stable symbol for dlopen.
-        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
+        $($export)*
         pub static TINYBUS_MODULE_ABI_V1: ::tinybus::module::abi::TbAbiDescriptor =
             ::tinybus::module::abi::TbAbiDescriptor::current(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             );
 
-        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
+        $($export)*
         pub extern "C" fn tinybus_module_manifest_v1() -> ::tinybus::module::abi::TbSlice {
             static MANIFEST_BYTES: ::std::sync::OnceLock<::std::vec::Vec<u8>> =
                 ::std::sync::OnceLock::new();
@@ -720,7 +718,8 @@ macro_rules! module_export {
             })
         }
     };
-    (
+    (@configured
+        export = {$($export:tt)*},
         setup = $setup:path,
         config = $config:ty,
         worker_threads = $threads:expr,
@@ -733,6 +732,7 @@ macro_rules! module_export {
     ) => {
         $crate::module_export! {
             @common
+            export = {$($export)*},
             worker_threads = $threads,
             provides = [$($provides),*],
             methods = [$($methods),*],
@@ -742,7 +742,7 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
+        $($export)*
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
@@ -770,7 +770,8 @@ macro_rules! module_export {
             lazy = false,
         }
     };
-    (
+    (@plain
+        export = {$($export:tt)*},
         setup = $setup:path,
         worker_threads = $threads:expr,
         provides = [$($provides:literal),* $(,)?],
@@ -782,6 +783,7 @@ macro_rules! module_export {
     ) => {
         $crate::module_export! {
             @common
+            export = {$($export)*},
             worker_threads = $threads,
             provides = [$($provides),*],
             methods = [$($methods),*],
@@ -791,12 +793,52 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[cfg_attr(not(feature = "static-link"), unsafe(no_mangle))]
+        $($export)*
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
             unsafe { $crate::start_module(host, out, $threads, true, $setup) }
+        }
+    };
+    (
+        setup = $setup:path,
+        config = $config:ty,
+        $($rest:tt)*
+    ) => {
+        $crate::module_export! {
+            @configured export = {#[unsafe(no_mangle)]},
+            setup = $setup,
+            config = $config,
+            $($rest)*
+        }
+    };
+    (setup = $setup:path, $($rest:tt)*) => {
+        $crate::module_export! {
+            @plain export = {#[unsafe(no_mangle)]},
+            setup = $setup,
+            $($rest)*
+        }
+    };
+}
+
+/// Generate Rust-addressable entry points for linking several modules into a
+/// single executable. The entry points have no shared C linker symbol names.
+#[macro_export]
+macro_rules! module_export_static {
+    (setup = $setup:path, config = $config:ty, $($rest:tt)*) => {
+        $crate::module_export! {
+            @configured export = {},
+            setup = $setup,
+            config = $config,
+            $($rest)*
+        }
+    };
+    (setup = $setup:path, $($rest:tt)*) => {
+        $crate::module_export! {
+            @plain export = {},
+            setup = $setup,
+            $($rest)*
         }
     };
 }
@@ -1378,6 +1420,6 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "static-link"))]
+#[cfg(test)]
 #[path = "static_link_tests.rs"]
 mod static_link_tests;

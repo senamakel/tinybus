@@ -5,7 +5,7 @@ mod first {
         Ok(())
     }
 
-    crate::module_export! {
+    crate::module_export_static! {
         setup = setup,
         worker_threads = 1,
         provides = ["ai.tinyhumans.tinybus.StaticFirst"],
@@ -22,7 +22,7 @@ mod second {
         Ok(())
     }
 
-    crate::module_export! {
+    crate::module_export_static! {
         setup = setup,
         worker_threads = 1,
         provides = ["ai.tinyhumans.tinybus.StaticSecond"],
