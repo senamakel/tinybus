@@ -209,6 +209,7 @@ mod platform {
     }
 
     const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
     pub(super) type Handle = *mut c_void;
 
     pub(super) fn open(path: &Path) -> Result<Handle> {
@@ -219,17 +220,19 @@ mod platform {
             LoadLibraryExW(
                 wide.as_ptr(),
                 std::ptr::null_mut(),
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+                // Search only beside the admitted module and in System32. The
+                // load-dir flag alone excludes System32, where OS and installed
+                // VC runtime DLLs live; default directories would also search
+                // application-controlled paths for unverified dependencies.
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
             )
         };
         if handle.is_null() {
-            tracing::debug!(
-                loader_error = unsafe { GetLastError() },
-                "module loader detail"
-            );
+            let code = unsafe { GetLastError() };
+            tracing::debug!(loader_error = code, "module loader detail");
             return Err(Error::module_refused(
                 path,
-                "dynamic loader rejected the artifact",
+                format!("dynamic loader rejected the artifact (Windows error {code})"),
             ));
         }
         Ok(handle)
