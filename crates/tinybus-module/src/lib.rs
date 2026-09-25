@@ -46,35 +46,33 @@ pub struct ManifestDeclaration<'a> {
 /// Build and retain the exported manifest bytes for the process lifetime.
 #[doc(hidden)]
 pub fn manifest_slice(declaration: ManifestDeclaration<'_>) -> tinybus::module::abi::TbSlice {
-    manifest_slice_cached(declaration, &MANIFEST_BYTES)
+    manifest_slice_in(&MANIFEST_BYTES, declaration)
 }
 
-/// Build a manifest with storage owned by one export, so multiple modules
-/// linked into one host cannot reuse the first module's manifest bytes.
+/// Retain a manifest in the caller's slot, allowing multiple linked modules.
 #[doc(hidden)]
-pub fn manifest_slice_cached(
+pub fn manifest_slice_in(
+    slot: &'static OnceLock<Vec<u8>>,
     declaration: ManifestDeclaration<'_>,
-    cache: &'static OnceLock<Vec<u8>>,
 ) -> tinybus::module::abi::TbSlice {
-    catch_unwind(AssertUnwindSafe(|| {
-        build_manifest_slice(declaration, cache)
-    }))
-    .unwrap_or(tinybus::module::abi::TbSlice {
-        ptr: std::ptr::null(),
-        len: 0,
-    })
+    catch_unwind(AssertUnwindSafe(|| build_manifest_slice(slot, declaration))).unwrap_or(
+        tinybus::module::abi::TbSlice {
+            ptr: std::ptr::null(),
+            len: 0,
+        },
+    )
 }
 
 fn build_manifest_slice(
+    slot: &'static OnceLock<Vec<u8>>,
     declaration: ManifestDeclaration<'_>,
-    cache: &'static OnceLock<Vec<u8>>,
 ) -> tinybus::module::abi::TbSlice {
     use tinybus::module::manifest::{
         Dependency, MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy, ProvidedInterface,
     };
     use tinybus::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
-    let bytes = cache.get_or_init(|| {
+    let bytes = slot.get_or_init(|| {
         let package_version =
             Version::parse(declaration.version).expect("package version is semver");
         let provided = |(index, interface): (usize, &&str)| ProvidedInterface {
@@ -412,7 +410,43 @@ where
     F: FnOnce(Connection) -> Fut + Send + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
-    unsafe { start_module_runtime(host, out, worker_threads, detach_on_panic, setup, None) }
+    unsafe {
+        start_module_runtime(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            setup,
+            None,
+            false,
+        )
+    }
+}
+
+/// Start a linked module without replacing the host's process-global hooks.
+#[doc(hidden)]
+pub unsafe fn start_linked_module<F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    F: FnOnce(Connection) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    unsafe {
+        start_module_runtime(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            setup,
+            None,
+            true,
+        )
+    }
 }
 
 unsafe fn start_module_runtime<F, Fut>(
@@ -422,6 +456,7 @@ unsafe fn start_module_runtime<F, Fut>(
     detach_on_panic: bool,
     setup: F,
     reinitialize_factory: Option<ReinitializeFactory>,
+    linked: bool,
 ) -> i32
 where
     F: FnOnce(Connection) -> Fut + Send + 'static,
@@ -449,12 +484,13 @@ where
         // this registration is global to the module's copy, not the embedding
         // host's. Failure therefore means this module runtime was initialized
         // more than once and cannot safely replace the existing subscriber.
-        if tracing::subscriber::set_global_default(HostSubscriber {
-            host,
-            next_span: AtomicU64::new(1),
-            max_level: tracing::level_filters::LevelFilter::TRACE,
-        })
-        .is_err()
+        if !linked
+            && tracing::subscriber::set_global_default(HostSubscriber {
+                host,
+                next_span: AtomicU64::new(1),
+                max_level: tracing::level_filters::LevelFilter::TRACE,
+            })
+            .is_err()
         {
             return TB_CLOSED;
         }
@@ -462,27 +498,29 @@ where
         let panic_host = host;
         let panic_location = std::sync::Arc::new(StdMutex::new(None::<String>));
         let hook_location = panic_location.clone();
-        std::panic::set_hook(Box::new(move |panic| {
-            let location = panic.location().map_or_else(
-                || "module panicked at an unknown location".to_string(),
-                |location| {
-                    let file = std::path::Path::new(location.file())
-                        .file_name()
-                        .and_then(|file| file.to_str())
-                        .unwrap_or("module");
-                    format!(
-                        "module panicked at {}:{}:{}",
-                        file,
-                        location.line(),
-                        location.column()
-                    )
-                },
-            );
-            // The payload is intentionally neither formatted nor forwarded:
-            // it may contain arguments, credentials, or recovery material.
-            *hook_location.lock().expect("panic location lock") = Some(location.clone());
-            panic_host.log(1, location.as_bytes());
-        }));
+        if !linked {
+            std::panic::set_hook(Box::new(move |panic| {
+                let location = panic.location().map_or_else(
+                    || "module panicked at an unknown location".to_string(),
+                    |location| {
+                        let file = std::path::Path::new(location.file())
+                            .file_name()
+                            .and_then(|file| file.to_str())
+                            .unwrap_or("module");
+                        format!(
+                            "module panicked at {}:{}:{}",
+                            file,
+                            location.line(),
+                            location.column()
+                        )
+                    },
+                );
+                // The payload is intentionally neither formatted nor forwarded:
+                // it may contain arguments, credentials, or recovery material.
+                *hook_location.lock().expect("panic location lock") = Some(location.clone());
+                panic_host.log(1, location.as_bytes());
+            }));
+        }
 
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads)
@@ -628,6 +666,43 @@ where
     F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
+    unsafe {
+        start_reconfigurable_module_mode(host, out, worker_threads, detach_on_panic, setup, false)
+    }
+}
+
+/// Start a configurable linked module without process-global hooks.
+#[doc(hidden)]
+pub unsafe fn start_linked_reconfigurable_module<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    unsafe {
+        start_reconfigurable_module_mode(host, out, worker_threads, detach_on_panic, setup, true)
+    }
+}
+
+unsafe fn start_reconfigurable_module_mode<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+    linked: bool,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
     let parsed = catch_unwind(AssertUnwindSafe(|| unsafe { parse_config::<C>(host) }));
     let config = match parsed {
         Ok(Ok(config)) => config,
@@ -675,6 +750,7 @@ where
             detach_on_panic,
             move |connection| initial_setup(connection, config),
             Some(reinitialize_factory),
+            linked,
         )
     }
 }
@@ -687,10 +763,10 @@ where
 #[macro_export]
 macro_rules! module_export {
     (@linked) => {
-        /// Entry points for a host that links this module into its executable.
+        /// Entry points and parsed manifest for a host that links this module.
         ///
         /// # Errors
-        /// Returns an error if the embedded manifest is malformed.
+        /// Returns an error if the generated manifest is invalid.
         pub fn linked_module() -> ::tinybus::Result<::tinybus::module::LinkedModule> {
             unsafe {
                 ::tinybus::module::LinkedModule::from_exports(
@@ -702,6 +778,7 @@ macro_rules! module_export {
         }
     };
     (@common
+        export = {$($export:tt)*},
         worker_threads = $threads:expr,
         provides = [$($provides:literal),* $(,)?],
         methods = [$($methods:literal),* $(,)?],
@@ -710,18 +787,18 @@ macro_rules! module_export {
         optional = [$($optional:literal),* $(,)?],
         lazy = $lazy:expr $(,)?
     ) => {
-        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
+        $($export)*
         pub static TINYBUS_MODULE_ABI_V1: ::tinybus::module::abi::TbAbiDescriptor =
             ::tinybus::module::abi::TbAbiDescriptor::current(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             );
 
-        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
+        $($export)*
         pub extern "C" fn tinybus_module_manifest_v1() -> ::tinybus::module::abi::TbSlice {
             static MANIFEST_BYTES: ::std::sync::OnceLock<::std::vec::Vec<u8>> =
                 ::std::sync::OnceLock::new();
-            $crate::manifest_slice_cached($crate::ManifestDeclaration {
+            $crate::manifest_slice_in(&MANIFEST_BYTES, $crate::ManifestDeclaration {
                 name: env!("CARGO_PKG_NAME"),
                 version: env!("CARGO_PKG_VERSION"),
                 provides: &[$($provides),*],
@@ -731,10 +808,12 @@ macro_rules! module_export {
                 optional: &[$($optional),*],
                 lazy: $lazy,
                 worker_threads: $threads as u32,
-            }, &MANIFEST_BYTES)
+            })
         }
     };
-    (
+    (@configured
+        export = {$($export:tt)*},
+        start = $start:path,
         setup = $setup:path,
         config = $config:ty,
         worker_threads = $threads:expr,
@@ -747,6 +826,7 @@ macro_rules! module_export {
     ) => {
         $crate::module_export! {
             @common
+            export = {$($export)*},
             worker_threads = $threads,
             provides = [$($provides),*],
             methods = [$($methods),*],
@@ -756,13 +836,14 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
+        $($export)*
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
+            use $start as start;
             unsafe {
-                $crate::start_reconfigurable_module::<$config, _, _>(
+                start::<$config, _, _>(
                     host,
                     out,
                     $threads,
@@ -771,7 +852,6 @@ macro_rules! module_export {
                 )
             }
         }
-        $crate::module_export! { @linked }
     };
     (setup = $setup:path, worker_threads = $threads:expr $(,)?) => {
         $crate::module_export! {
@@ -785,7 +865,9 @@ macro_rules! module_export {
             lazy = false,
         }
     };
-    (
+    (@plain
+        export = {$($export:tt)*},
+        start = $start:path,
         setup = $setup:path,
         worker_threads = $threads:expr,
         provides = [$($provides:literal),* $(,)?],
@@ -797,6 +879,7 @@ macro_rules! module_export {
     ) => {
         $crate::module_export! {
             @common
+            export = {$($export)*},
             worker_threads = $threads,
             provides = [$($provides),*],
             methods = [$($methods),*],
@@ -806,12 +889,57 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
+        $($export)*
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
-            unsafe { $crate::start_module(host, out, $threads, true, $setup) }
+            unsafe { $start(host, out, $threads, true, $setup) }
+        }
+    };
+    (
+        setup = $setup:path,
+        config = $config:ty,
+        $($rest:tt)*
+    ) => {
+        $crate::module_export! {
+            @configured export = {#[unsafe(no_mangle)]},
+            start = $crate::start_reconfigurable_module,
+            setup = $setup,
+            config = $config,
+            $($rest)*
+        }
+    };
+    (setup = $setup:path, $($rest:tt)*) => {
+        $crate::module_export! {
+            @plain export = {#[unsafe(no_mangle)]},
+            start = $crate::start_module,
+            setup = $setup,
+            $($rest)*
+        }
+    };
+}
+
+/// Generate Rust-addressable entry points for linking several modules into a
+/// single executable. The entry points have no shared C linker symbol names.
+#[macro_export]
+macro_rules! module_export_static {
+    (setup = $setup:path, config = $config:ty, $($rest:tt)*) => {
+        $crate::module_export! {
+            @configured export = {},
+            start = $crate::start_linked_reconfigurable_module,
+            setup = $setup,
+            config = $config,
+            $($rest)*
+        }
+        $crate::module_export! { @linked }
+    };
+    (setup = $setup:path, $($rest:tt)*) => {
+        $crate::module_export! {
+            @plain export = {},
+            start = $crate::start_linked_module,
+            setup = $setup,
+            $($rest)*
         }
         $crate::module_export! { @linked }
     };
@@ -1016,39 +1144,6 @@ mod tests {
         assert_eq!(manifest.requires.len(), 2);
         assert!(manifest.requires[1].optional);
         assert!(manifest.lazy_init);
-    }
-
-    #[test]
-    fn separately_linked_exports_keep_separate_manifest_bytes() {
-        static FIRST: OnceLock<Vec<u8>> = OnceLock::new();
-        static SECOND: OnceLock<Vec<u8>> = OnceLock::new();
-        let declaration = |name, interface| ManifestDeclaration {
-            name,
-            version: "1.0.0",
-            provides: interface,
-            methods: &[],
-            signals: &[],
-            requires: &[],
-            optional: &[],
-            lazy: false,
-            worker_threads: 1,
-        };
-        let first = manifest_slice_cached(
-            declaration("first", &["ai.tinyhumans.module.First"]),
-            &FIRST,
-        );
-        let second = manifest_slice_cached(
-            declaration("second", &["ai.tinyhumans.module.Second"]),
-            &SECOND,
-        );
-        let first: tinybus::module::manifest::ModuleManifest =
-            serde_json::from_slice(unsafe { std::slice::from_raw_parts(first.ptr, first.len) })
-                .unwrap();
-        let second: tinybus::module::manifest::ModuleManifest =
-            serde_json::from_slice(unsafe { std::slice::from_raw_parts(second.ptr, second.len) })
-                .unwrap();
-        assert_eq!(first.module.name, "first");
-        assert_eq!(second.module.name, "second");
     }
 
     #[test]
@@ -1426,3 +1521,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "static_link_tests.rs"]
+mod static_link_tests;

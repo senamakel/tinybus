@@ -613,7 +613,13 @@ unsafe extern "C" fn host_send(ctx: *mut c_void, ptr: *const u8, len: usize) -> 
             // applies bounded backpressure only to that module and gives the
             // async SDK a reliable completion without adding a fifth callback
             // to the frozen v1 ABI.
-            Some(sender) => match sender.blocking_send(bytes) {
+            Some(sender) => match if tokio::runtime::Handle::try_current().is_ok() {
+                // Linked modules share Tokio's thread-local runtime state with
+                // the host. `blocking_send` directly on their worker panics.
+                tokio::task::block_in_place(|| sender.blocking_send(bytes))
+            } else {
+                sender.blocking_send(bytes)
+            } {
                 Ok(()) => TB_OK,
                 Err(_) => TB_CLOSED,
             },
