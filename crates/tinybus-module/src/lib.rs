@@ -46,21 +46,35 @@ pub struct ManifestDeclaration<'a> {
 /// Build and retain the exported manifest bytes for the process lifetime.
 #[doc(hidden)]
 pub fn manifest_slice(declaration: ManifestDeclaration<'_>) -> tinybus::module::abi::TbSlice {
-    catch_unwind(AssertUnwindSafe(|| build_manifest_slice(declaration))).unwrap_or(
-        tinybus::module::abi::TbSlice {
-            ptr: std::ptr::null(),
-            len: 0,
-        },
-    )
+    manifest_slice_cached(declaration, &MANIFEST_BYTES)
 }
 
-fn build_manifest_slice(declaration: ManifestDeclaration<'_>) -> tinybus::module::abi::TbSlice {
+/// Build a manifest with storage owned by one export, so multiple modules
+/// linked into one host cannot reuse the first module's manifest bytes.
+#[doc(hidden)]
+pub fn manifest_slice_cached(
+    declaration: ManifestDeclaration<'_>,
+    cache: &'static OnceLock<Vec<u8>>,
+) -> tinybus::module::abi::TbSlice {
+    catch_unwind(AssertUnwindSafe(|| {
+        build_manifest_slice(declaration, cache)
+    }))
+    .unwrap_or(tinybus::module::abi::TbSlice {
+        ptr: std::ptr::null(),
+        len: 0,
+    })
+}
+
+fn build_manifest_slice(
+    declaration: ManifestDeclaration<'_>,
+    cache: &'static OnceLock<Vec<u8>>,
+) -> tinybus::module::abi::TbSlice {
     use tinybus::module::manifest::{
         Dependency, MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy, ProvidedInterface,
     };
     use tinybus::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
-    let bytes = MANIFEST_BYTES.get_or_init(|| {
+    let bytes = cache.get_or_init(|| {
         let package_version =
             Version::parse(declaration.version).expect("package version is semver");
         let provided = |(index, interface): (usize, &&str)| ProvidedInterface {
@@ -705,7 +719,9 @@ macro_rules! module_export {
 
         #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
         pub extern "C" fn tinybus_module_manifest_v1() -> ::tinybus::module::abi::TbSlice {
-            $crate::manifest_slice($crate::ManifestDeclaration {
+            static MANIFEST_BYTES: ::std::sync::OnceLock<::std::vec::Vec<u8>> =
+                ::std::sync::OnceLock::new();
+            $crate::manifest_slice_cached($crate::ManifestDeclaration {
                 name: env!("CARGO_PKG_NAME"),
                 version: env!("CARGO_PKG_VERSION"),
                 provides: &[$($provides),*],
@@ -715,7 +731,7 @@ macro_rules! module_export {
                 optional: &[$($optional),*],
                 lazy: $lazy,
                 worker_threads: $threads as u32,
-            })
+            }, &MANIFEST_BYTES)
         }
     };
     (
@@ -1000,6 +1016,39 @@ mod tests {
         assert_eq!(manifest.requires.len(), 2);
         assert!(manifest.requires[1].optional);
         assert!(manifest.lazy_init);
+    }
+
+    #[test]
+    fn separately_linked_exports_keep_separate_manifest_bytes() {
+        static FIRST: OnceLock<Vec<u8>> = OnceLock::new();
+        static SECOND: OnceLock<Vec<u8>> = OnceLock::new();
+        let declaration = |name, interface| ManifestDeclaration {
+            name,
+            version: "1.0.0",
+            provides: interface,
+            methods: &[],
+            signals: &[],
+            requires: &[],
+            optional: &[],
+            lazy: false,
+            worker_threads: 1,
+        };
+        let first = manifest_slice_cached(
+            declaration("first", &["ai.tinyhumans.module.First"]),
+            &FIRST,
+        );
+        let second = manifest_slice_cached(
+            declaration("second", &["ai.tinyhumans.module.Second"]),
+            &SECOND,
+        );
+        let first: tinybus::module::manifest::ModuleManifest =
+            serde_json::from_slice(unsafe { std::slice::from_raw_parts(first.ptr, first.len) })
+                .unwrap();
+        let second: tinybus::module::manifest::ModuleManifest =
+            serde_json::from_slice(unsafe { std::slice::from_raw_parts(second.ptr, second.len) })
+                .unwrap();
+        assert_eq!(first.module.name, "first");
+        assert_eq!(second.module.name, "second");
     }
 
     #[test]
