@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::broker::Broker;
 use crate::build_info;
 use crate::error::{Error, Result, sanitize_untrusted};
+use crate::module::LinkedModule;
 use crate::module::abi::{TB_OK, TbAbiDescriptor, TbModuleInit, TbModuleVtable, field_bytes};
 use crate::module::github::CachedRelease;
 use crate::module::loader::{self, LoadedArtifact};
@@ -492,6 +493,43 @@ impl ModuleHost {
         // than bytes this host read and hashed, so there is nothing to vouch
         // for. Attestation, if any, comes from an allowlist beside the file.
         self.activate(file.as_ref(), artifact, config, None)
+    }
+
+    /// Admit a module whose code is linked into the host executable.
+    ///
+    /// The executable's digest identifies the admitted code in the ordinary
+    /// attestation response. This is host trust, not a digest of a separate
+    /// library or a claim made by the module itself.
+    ///
+    /// # Errors
+    /// Returns an error if the host executable cannot be hashed or the module
+    /// fails the normal descriptor, manifest, dependency, or init checks.
+    pub fn attach_linked_with_config(
+        &self,
+        module: LinkedModule,
+        config: serde_json::Value,
+    ) -> Result<ModuleInfo> {
+        static EXECUTABLE_DIGEST: OnceLock<Option<String>> = OnceLock::new();
+        let digest = EXECUTABLE_DIGEST
+            .get_or_init(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|path| crate::module::sha256_file(path).ok())
+            })
+            .clone()
+            .ok_or_else(|| Error::failed("linked module host executable cannot be hashed"))?;
+        let name = sanitize_untrusted(&module.manifest.module.name);
+        let path = PathBuf::from(format!("linked-{name}"));
+        self.activate(
+            &path,
+            LoadedArtifact {
+                descriptor: module.descriptor,
+                manifest: module.manifest,
+                init: module.init,
+            },
+            config,
+            Some(digest),
+        )
     }
 
     /// Load one module and pass JSON configuration to its setup function.

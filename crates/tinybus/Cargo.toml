@@ -70,6 +70,9 @@ cli = [
 # module shares the host's address space and full privileges.
 modules = ["dep:ureq", "dep:flate2", "dep:tar", "dep:zip", "dep:tempfile", "dep:toml"]
 
+# Use Rust-mangled entry points when examples are linked into one executable.
+linked = ["modules"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "io-util"] }
 tempfile = "3"

@@ -672,6 +672,21 @@ where
 /// ```
 #[macro_export]
 macro_rules! module_export {
+    (@linked) => {
+        /// Entry points for a host that links this module into its executable.
+        ///
+        /// # Errors
+        /// Returns an error if the embedded manifest is malformed.
+        pub fn linked_module() -> ::tinybus::Result<::tinybus::module::LinkedModule> {
+            unsafe {
+                ::tinybus::module::LinkedModule::from_exports(
+                    &TINYBUS_MODULE_ABI_V1,
+                    tinybus_module_manifest_v1,
+                    tinybus_module_init_v1,
+                )
+            }
+        }
+    };
     (@common
         worker_threads = $threads:expr,
         provides = [$($provides:literal),* $(,)?],
@@ -681,14 +696,14 @@ macro_rules! module_export {
         optional = [$($optional:literal),* $(,)?],
         lazy = $lazy:expr $(,)?
     ) => {
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
         pub static TINYBUS_MODULE_ABI_V1: ::tinybus::module::abi::TbAbiDescriptor =
             ::tinybus::module::abi::TbAbiDescriptor::current(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             );
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
         pub extern "C" fn tinybus_module_manifest_v1() -> ::tinybus::module::abi::TbSlice {
             $crate::manifest_slice($crate::ManifestDeclaration {
                 name: env!("CARGO_PKG_NAME"),
@@ -725,7 +740,7 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
@@ -740,6 +755,7 @@ macro_rules! module_export {
                 )
             }
         }
+        $crate::module_export! { @linked }
     };
     (setup = $setup:path, worker_threads = $threads:expr $(,)?) => {
         $crate::module_export! {
@@ -774,13 +790,14 @@ macro_rules! module_export {
             lazy = $lazy,
         }
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "linked"), unsafe(no_mangle))]
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
             unsafe { $crate::start_module(host, out, $threads, true, $setup) }
         }
+        $crate::module_export! { @linked }
     };
 }
 
