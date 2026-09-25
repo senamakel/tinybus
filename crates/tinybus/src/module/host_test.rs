@@ -1146,10 +1146,14 @@ fn a_creator_owner_cache_directory_is_accepted() {
         .output()
         .expect("icacls is installed on Windows");
     assert!(output.status.success(), "icacls failed: {output:?}");
-    assert_eq!(
-        windows_directory_grants_untrusted_write(directory.path()).unwrap(),
-        false,
-        "CREATOR OWNER does not grant another account write access"
+    let acl = std::process::Command::new("icacls")
+        .arg(directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        !windows_directory_grants_untrusted_write(directory.path()).unwrap(),
+        "CREATOR OWNER does not grant another account write access; ACL: {}",
+        String::from_utf8_lossy(&acl.stdout)
     );
 }
 
