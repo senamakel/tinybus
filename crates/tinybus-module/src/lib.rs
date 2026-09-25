@@ -410,7 +410,43 @@ where
     F: FnOnce(Connection) -> Fut + Send + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
-    unsafe { start_module_runtime(host, out, worker_threads, detach_on_panic, setup, None) }
+    unsafe {
+        start_module_runtime(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            setup,
+            None,
+            false,
+        )
+    }
+}
+
+/// Start a linked module without replacing the host's process-global hooks.
+#[doc(hidden)]
+pub unsafe fn start_linked_module<F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    F: FnOnce(Connection) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    unsafe {
+        start_module_runtime(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            setup,
+            None,
+            true,
+        )
+    }
 }
 
 unsafe fn start_module_runtime<F, Fut>(
@@ -420,6 +456,7 @@ unsafe fn start_module_runtime<F, Fut>(
     detach_on_panic: bool,
     setup: F,
     reinitialize_factory: Option<ReinitializeFactory>,
+    linked: bool,
 ) -> i32
 where
     F: FnOnce(Connection) -> Fut + Send + 'static,
@@ -447,12 +484,13 @@ where
         // this registration is global to the module's copy, not the embedding
         // host's. Failure therefore means this module runtime was initialized
         // more than once and cannot safely replace the existing subscriber.
-        if tracing::subscriber::set_global_default(HostSubscriber {
-            host,
-            next_span: AtomicU64::new(1),
-            max_level: tracing::level_filters::LevelFilter::TRACE,
-        })
-        .is_err()
+        if !linked
+            && tracing::subscriber::set_global_default(HostSubscriber {
+                host,
+                next_span: AtomicU64::new(1),
+                max_level: tracing::level_filters::LevelFilter::TRACE,
+            })
+            .is_err()
         {
             return TB_CLOSED;
         }
@@ -460,27 +498,29 @@ where
         let panic_host = host;
         let panic_location = std::sync::Arc::new(StdMutex::new(None::<String>));
         let hook_location = panic_location.clone();
-        std::panic::set_hook(Box::new(move |panic| {
-            let location = panic.location().map_or_else(
-                || "module panicked at an unknown location".to_string(),
-                |location| {
-                    let file = std::path::Path::new(location.file())
-                        .file_name()
-                        .and_then(|file| file.to_str())
-                        .unwrap_or("module");
-                    format!(
-                        "module panicked at {}:{}:{}",
-                        file,
-                        location.line(),
-                        location.column()
-                    )
-                },
-            );
-            // The payload is intentionally neither formatted nor forwarded:
-            // it may contain arguments, credentials, or recovery material.
-            *hook_location.lock().expect("panic location lock") = Some(location.clone());
-            panic_host.log(1, location.as_bytes());
-        }));
+        if !linked {
+            std::panic::set_hook(Box::new(move |panic| {
+                let location = panic.location().map_or_else(
+                    || "module panicked at an unknown location".to_string(),
+                    |location| {
+                        let file = std::path::Path::new(location.file())
+                            .file_name()
+                            .and_then(|file| file.to_str())
+                            .unwrap_or("module");
+                        format!(
+                            "module panicked at {}:{}:{}",
+                            file,
+                            location.line(),
+                            location.column()
+                        )
+                    },
+                );
+                // The payload is intentionally neither formatted nor forwarded:
+                // it may contain arguments, credentials, or recovery material.
+                *hook_location.lock().expect("panic location lock") = Some(location.clone());
+                panic_host.log(1, location.as_bytes());
+            }));
+        }
 
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads)
@@ -626,6 +666,43 @@ where
     F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
+    unsafe {
+        start_reconfigurable_module_mode(host, out, worker_threads, detach_on_panic, setup, false)
+    }
+}
+
+/// Start a configurable linked module without process-global hooks.
+#[doc(hidden)]
+pub unsafe fn start_linked_reconfigurable_module<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    unsafe {
+        start_reconfigurable_module_mode(host, out, worker_threads, detach_on_panic, setup, true)
+    }
+}
+
+unsafe fn start_reconfigurable_module_mode<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+    linked: bool,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
     let parsed = catch_unwind(AssertUnwindSafe(|| unsafe { parse_config::<C>(host) }));
     let config = match parsed {
         Ok(Ok(config)) => config,
@@ -673,6 +750,7 @@ where
             detach_on_panic,
             move |connection| initial_setup(connection, config),
             Some(reinitialize_factory),
+            linked,
         )
     }
 }
@@ -720,6 +798,7 @@ macro_rules! module_export {
     };
     (@configured
         export = {$($export:tt)*},
+        start = $start:path,
         setup = $setup:path,
         config = $config:ty,
         worker_threads = $threads:expr,
@@ -747,8 +826,9 @@ macro_rules! module_export {
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
+            use $start as start;
             unsafe {
-                $crate::start_reconfigurable_module::<$config, _, _>(
+                start::<$config, _, _>(
                     host,
                     out,
                     $threads,
@@ -772,6 +852,7 @@ macro_rules! module_export {
     };
     (@plain
         export = {$($export:tt)*},
+        start = $start:path,
         setup = $setup:path,
         worker_threads = $threads:expr,
         provides = [$($provides:literal),* $(,)?],
@@ -798,7 +879,7 @@ macro_rules! module_export {
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
-            unsafe { $crate::start_module(host, out, $threads, true, $setup) }
+            unsafe { $start(host, out, $threads, true, $setup) }
         }
     };
     (
@@ -808,6 +889,7 @@ macro_rules! module_export {
     ) => {
         $crate::module_export! {
             @configured export = {#[unsafe(no_mangle)]},
+            start = $crate::start_reconfigurable_module,
             setup = $setup,
             config = $config,
             $($rest)*
@@ -816,6 +898,7 @@ macro_rules! module_export {
     (setup = $setup:path, $($rest:tt)*) => {
         $crate::module_export! {
             @plain export = {#[unsafe(no_mangle)]},
+            start = $crate::start_module,
             setup = $setup,
             $($rest)*
         }
@@ -829,6 +912,7 @@ macro_rules! module_export_static {
     (setup = $setup:path, config = $config:ty, $($rest:tt)*) => {
         $crate::module_export! {
             @configured export = {},
+            start = $crate::start_linked_reconfigurable_module,
             setup = $setup,
             config = $config,
             $($rest)*
@@ -837,6 +921,7 @@ macro_rules! module_export_static {
     (setup = $setup:path, $($rest:tt)*) => {
         $crate::module_export! {
             @plain export = {},
+            start = $crate::start_linked_module,
             setup = $setup,
             $($rest)*
         }

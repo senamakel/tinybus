@@ -51,7 +51,7 @@ mod configured {
         signals = [],
         requires = [],
         optional = [],
-        lazy = true,
+        lazy = false,
     }
 }
 
@@ -107,4 +107,55 @@ fn invalid_linked_manifest_never_exposes_partial_bytes() {
     assert!(slice.ptr.is_null());
     assert_eq!(slice.len, 0);
     assert!(BYTES.get().is_none());
+}
+
+#[tokio::test]
+async fn linked_entries_attach_to_one_broker() {
+    fn manifest(slice: tinybus::module::abi::TbSlice) -> tinybus::module::manifest::ModuleManifest {
+        let bytes = unsafe { std::slice::from_raw_parts(slice.ptr, slice.len) };
+        serde_json::from_slice(bytes).expect("generated manifest")
+    }
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    let broker = tinybus::broker::Broker::new();
+    let broker_task = broker.spawn(bus);
+    let host = tinybus::module::ModuleHost::new(broker);
+    let first_info = unsafe {
+        host.attach_raw(
+            "linked-first",
+            first::TINYBUS_MODULE_ABI_V1,
+            manifest(first::tinybus_module_manifest_v1()),
+            first::tinybus_module_init_v1,
+        )
+    }
+    .expect("first linked module attaches");
+    let mut configured_descriptor = configured::TINYBUS_MODULE_ABI_V1;
+    configured_descriptor.module_name = [0; 64];
+    configured_descriptor.module_name[..10].copy_from_slice(b"configured");
+    let mut configured_manifest = manifest(configured::tinybus_module_manifest_v1());
+    configured_manifest.module.name = "configured".to_string();
+    let second_info = unsafe {
+        host.attach_raw_with_config(
+            "linked-configured",
+            configured_descriptor,
+            configured_manifest,
+            configured::tinybus_module_init_v1,
+            serde_json::json!({}),
+        )
+    }
+    .expect("configured linked module attaches");
+    assert_ne!(first_info.manifest.bus_name, second_info.manifest.bus_name);
+    assert_eq!(host.list().len(), 2);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while host
+            .list()
+            .iter()
+            .any(|module| !matches!(module.state, tinybus::module::ModuleState::Ready))
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("linked modules did not become ready: {:?}", host.list()));
+    broker_task.abort();
 }

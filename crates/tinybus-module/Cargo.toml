@@ -13,3 +13,6 @@ serde.workspace = true
 tinybus.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tinybus = { workspace = true, features = ["modules"] }
