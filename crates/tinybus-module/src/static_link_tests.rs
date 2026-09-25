@@ -86,3 +86,25 @@ fn linked_modules_retain_distinct_manifests() {
         configured::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
     );
 }
+
+#[test]
+fn invalid_linked_manifest_never_exposes_partial_bytes() {
+    static BYTES: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let slice = crate::manifest_slice_in(
+        &BYTES,
+        crate::ManifestDeclaration {
+            name: "invalid",
+            version: "not-semver",
+            provides: &["ai.tinyhumans.tinybus.Invalid"],
+            methods: &[],
+            signals: &[],
+            requires: &[],
+            optional: &[],
+            lazy: false,
+            worker_threads: 1,
+        },
+    );
+    assert!(slice.ptr.is_null());
+    assert_eq!(slice.len, 0);
+    assert!(BYTES.get().is_none());
+}
