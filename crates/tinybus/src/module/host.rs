@@ -118,10 +118,9 @@ struct Activation {
     /// The digest a caller pinned for this artifact, where the artifact did not
     /// come from a directory carrying a `modules.toml`.
     ///
-    /// Set only by the release path, which has already checked these bytes
-    /// twice — against the release's own checksum manifest and against the
-    /// value the caller compiled in. `None` everywhere else, which leaves the
-    /// on-disk allowlist as the sole source of attestation exactly as before.
+    /// Set by the verified release path or linked-code path. The release path
+    /// records the pinned archive digest; linked code records the host
+    /// executable digest. `None` for raw attachments and ordinary local files.
     pinned_sha256: Option<String>,
 }
 
@@ -996,9 +995,9 @@ impl ModuleHost {
                 return Err(error);
             }
         };
-        // A module whose bytes an operator vouched for is an attested
-        // recipient. There are two ways to vouch, and they differ only in where
-        // the operator wrote the digest down.
+        // A verified release, an allowlisted local file, or linked code can
+        // become an attested recipient. The linked case identifies the
+        // executable containing its code, not a separate release artifact.
         //
         // On disk, it is `modules.toml` beside the artifact, re-read here
         // rather than plumbed down from the gate so that an artifact which
@@ -1009,9 +1008,9 @@ impl ModuleHost {
         // against the downloaded bytes before extracting anything. There is no
         // `modules.toml` to re-read in that case — the artifact lives in a
         // private temporary directory this host created moments ago — so the
-        // value is carried down instead. Both paths fail closed: no allowlist
-        // and no pin means no attestation, and a slim build that cannot load a
-        // module at all reaches neither.
+        // value is carried down instead. Linked code carries the executable
+        // digest through the same field. Without one of these sources there is
+        // no attestation.
         let vouched = match activation.pinned_sha256 {
             Some(pinned) => Some(pinned),
             None => std::fs::File::open(path)
