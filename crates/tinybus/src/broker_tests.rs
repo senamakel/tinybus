@@ -261,14 +261,12 @@ async fn a_detached_peer_cannot_route_frames_after_its_death_is_announced() {
         )
         .await
         .unwrap();
-    let id = broker
-        .router
-        .lock()
-        .expect("router lock")
-        .names
-        .get(&unique)
-        .copied()
-        .expect("the peer is attached before detach");
+    let id = unique
+        .as_str()
+        .strip_prefix(":1.")
+        .expect("broker unique name has the documented prefix")
+        .parse::<u64>()
+        .expect("broker unique name embeds its peer id");
 
     broker.detach_unique(&unique);
     let death = tokio::time::timeout(Duration::from_secs(2), deaths.recv())
