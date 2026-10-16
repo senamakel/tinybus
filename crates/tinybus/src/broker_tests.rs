@@ -112,7 +112,10 @@ async fn disconnect_announces_unique_name_loss_but_alias_release_does_not() {
     })
     .await
     .expect("peer detach must announce its unique name");
-    assert_eq!(detached.body[1], serde_json::Value::String(unique.to_string()));
+    assert_eq!(
+        detached.body[1],
+        serde_json::Value::String(unique.to_string())
+    );
     assert!(detached.body[2].is_null());
 
     let live = Connection::connect(bus.connect().await.unwrap())
@@ -148,10 +151,16 @@ async fn disconnect_announces_unique_name_loss_but_alias_release_does_not() {
         serde_json::Value::String(live_unique.to_string())
     );
     assert!(alias_released.body[2].is_null());
-    assert_eq!(live.name_owner(live_unique.as_str()).await.unwrap(), Some(live_unique));
-    assert!(tokio::time::timeout(Duration::from_millis(100), changes.recv())
-        .await
-        .is_err(), "releasing an alias from a live peer must not announce peer death");
+    assert_eq!(
+        live.name_owner(live_unique.as_str()).await.unwrap(),
+        Some(live_unique)
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), changes.recv())
+            .await
+            .is_err(),
+        "releasing an alias from a live peer must not announce peer death"
+    );
 }
 
 #[tokio::test]
@@ -183,15 +192,15 @@ async fn an_internally_detached_peer_still_announces_its_unique_name_loss() {
         .await
         .expect("internal detach must announce peer death")
         .unwrap();
-    assert_eq!(
-        detached.body,
-        serde_json::json!([unique, unique, null])
-    );
+    assert_eq!(detached.body, serde_json::json!([unique, unique, null]));
     assert_eq!(observer.name_owner(unique.as_str()).await.unwrap(), None);
     peer.close().await.unwrap();
-    assert!(tokio::time::timeout(Duration::from_millis(100), changes.recv())
-        .await
-        .is_err(), "reader cleanup must not announce the same detach twice");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), changes.recv())
+            .await
+            .is_err(),
+        "reader cleanup must not announce the same detach twice"
+    );
 }
 
 struct ClosedListener;

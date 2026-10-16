@@ -128,7 +128,11 @@ fn detaching_frees_the_names_and_reports_the_change() {
     router.request_name(a, name.clone()).unwrap();
 
     let changes = router.detach(a);
-    assert_eq!(changes.len(), 2, "the alias and unique peer name are announced");
+    assert_eq!(
+        changes.len(),
+        2,
+        "the alias and unique peer name are announced"
+    );
     let alias_change = changes.iter().find(|change| change.name == name).unwrap();
     assert_eq!(alias_change.old_owner, Some(a_unique.clone()));
     assert!(alias_change.new_owner.is_none());
