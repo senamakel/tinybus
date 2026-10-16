@@ -155,6 +155,7 @@ async fn disconnect_announces_unique_name_loss_but_alias_release_does_not() {
 }
 
 #[tokio::test]
+#[cfg(feature = "modules")]
 async fn an_internally_detached_peer_still_announces_its_unique_name_loss() {
     let bus = MemoryBus::new();
     let broker = Broker::new();
