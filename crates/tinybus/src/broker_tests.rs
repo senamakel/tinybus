@@ -154,6 +154,46 @@ async fn disconnect_announces_unique_name_loss_but_alias_release_does_not() {
         .is_err(), "releasing an alias from a live peer must not announce peer death");
 }
 
+#[tokio::test]
+async fn an_internally_detached_peer_still_announces_its_unique_name_loss() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    broker.clone().spawn(bus.clone());
+    let peer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let unique = peer.unique_name().unwrap();
+    let mut changes = observer
+        .add_match(
+            MatchRule::new()
+                .signals()
+                .member(MemberName::new("NameOwnerChanged").unwrap()),
+        )
+        .await
+        .unwrap();
+
+    // This is the synchronous revocation path used by module teardown. The
+    // reader task will later observe EOF, but by then the route is already gone.
+    broker
+        .router
+        .lock()
+        .expect("router lock")
+        .detach_unique(&unique);
+    peer.close().await.unwrap();
+
+    let detached = tokio::time::timeout(Duration::from_secs(2), changes.recv())
+        .await
+        .expect("internal detach must announce peer death")
+        .unwrap();
+    assert_eq!(
+        detached.body,
+        serde_json::json!([unique, unique, null])
+    );
+}
+
 struct ClosedListener;
 
 #[async_trait]
