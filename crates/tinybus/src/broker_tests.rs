@@ -47,6 +47,22 @@ async fn bus() -> (MemoryBus, Connection, Connection) {
     (bus, service, client)
 }
 
+async fn receive_name_change(
+    changes: &mut tokio::sync::broadcast::Receiver<Message>,
+    name: &str,
+) -> Message {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let message = changes.recv().await.unwrap();
+            if message.body[0] == name {
+                break message;
+            }
+        }
+    })
+    .await
+    .expect("the requested name change is announced")
+}
+
 #[tokio::test]
 async fn a_client_calls_a_service_by_its_well_known_name() {
     let (_bus, _service, client) = bus().await;
@@ -304,10 +320,7 @@ async fn a_service_dying_releases_its_name_and_announces_it() {
 
     drop(service);
 
-    let announcement = tokio::time::timeout(Duration::from_secs(5), signals.recv())
-        .await
-        .expect("the kernel is told")
-        .unwrap();
+    let announcement = receive_name_change(&mut signals, VOICE_NAME).await;
     let (name, _old, new): (BusName, Option<BusName>, Option<BusName>) =
         serde_json::from_value(announcement.body).unwrap();
     assert_eq!(name.as_str(), VOICE_NAME);
@@ -713,10 +726,7 @@ async fn a_name_handed_on_to_another_peer_does_not_hand_on_its_attestation() {
         .await
         .unwrap();
     service.close().await.unwrap();
-    let detached = tokio::time::timeout(Duration::from_secs(5), changes.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let detached = receive_name_change(&mut changes, "org.example.Extra").await;
     assert_eq!(detached.body[0], "org.example.Extra");
     assert_eq!(fixed.attestation().await.unwrap(), None);
     assert_eq!(

@@ -250,9 +250,10 @@ impl Router {
 
     /// Detach a peer, releasing every name it owned.
     ///
-    /// Returns one [`NameChange`] per released well-known name so the broker
-    /// can emit `NameOwnerChanged`. That signal is how the kernel learns an
-    /// integration died without polling it.
+    /// Returns one [`NameChange`] for the peer's unique name and each released
+    /// well-known name so the broker can emit `NameOwnerChanged`. The unique
+    /// transition lets observers detect peer death without polling; alias
+    /// transitions still report service ownership changes.
     pub fn detach(&mut self, id: u64) -> Vec<NameChange> {
         let Some(peer) = self.peers.remove(&id) else {
             return Vec::new();
@@ -275,13 +276,11 @@ impl Router {
         let mut changes = Vec::new();
         for name in owned {
             self.names.remove(&name);
-            if !name.is_unique() {
-                changes.push(NameChange {
-                    name,
-                    old_owner: Some(peer.unique.clone()),
-                    new_owner: None,
-                });
-            }
+            changes.push(NameChange {
+                name,
+                old_owner: Some(peer.unique.clone()),
+                new_owner: None,
+            });
         }
         changes
     }
