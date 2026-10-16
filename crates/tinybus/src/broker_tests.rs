@@ -89,14 +89,14 @@ async fn disconnect_announces_unique_name_loss_but_alias_release_does_not() {
     let detached = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let message = changes.recv().await.unwrap();
-            if message.body[0] == unique {
+            if message.body[0] == serde_json::Value::String(unique.to_string()) {
                 break message;
             }
         }
     })
     .await
     .expect("peer detach must announce its unique name");
-    assert_eq!(detached.body[1], unique);
+    assert_eq!(detached.body[1], serde_json::Value::String(unique.to_string()));
     assert!(detached.body[2].is_null());
 
     let live = Connection::connect(bus.connect().await.unwrap())
