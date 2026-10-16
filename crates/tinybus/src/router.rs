@@ -357,6 +357,9 @@ impl Router {
     /// Give up a well-known name. Releasing a name you do not own is an error,
     /// not a no-op — it always means the caller's model of the bus is wrong.
     pub fn release_name(&mut self, id: u64, name: &BusName) -> Result<NameChange> {
+        if name.is_unique() {
+            return Err(Error::protocol("a unique name cannot be released"));
+        }
         match self.names.get(name) {
             Some(owner) if *owner == id => {
                 self.names.remove(name);
