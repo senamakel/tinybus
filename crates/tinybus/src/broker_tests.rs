@@ -103,14 +103,30 @@ async fn disconnect_announces_unique_name_loss_but_alias_release_does_not() {
         .await
         .unwrap();
     let alias = "org.example.LiveAlias";
+    let live_unique = live.unique_name().unwrap();
     live.request_name(alias).await.unwrap();
+    let alias_acquired = tokio::time::timeout(Duration::from_secs(2), changes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(alias_acquired.body[0], alias);
+    assert!(alias_acquired.body[1].is_null());
+    assert_eq!(
+        alias_acquired.body[2],
+        serde_json::Value::String(live_unique.to_string())
+    );
+
     live.release_name(alias).await.unwrap();
     let alias_released = tokio::time::timeout(Duration::from_secs(2), changes.recv())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(alias_released.body[0], alias);
-    let live_unique = live.unique_name().unwrap();
+    assert_eq!(
+        alias_released.body[1],
+        serde_json::Value::String(live_unique.to_string())
+    );
+    assert!(alias_released.body[2].is_null());
     assert_eq!(live.name_owner(live_unique.as_str()).await.unwrap(), Some(live_unique));
     assert!(tokio::time::timeout(Duration::from_millis(100), changes.recv())
         .await
