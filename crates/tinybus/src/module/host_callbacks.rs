@@ -441,11 +441,7 @@ impl Drop for HostCallbackBinding {
         // Drop cannot await. Closing the sender synchronously detaches the
         // owned peer without spawning a task that might never be polled.
         self.transport.close_outbound();
-        self.broker
-            .router
-            .lock()
-            .expect("router lock")
-            .detach_unique(&self.state.destination);
+        self.broker.detach_unique(&self.state.destination);
     }
 }
 
@@ -878,9 +874,6 @@ impl Drop for LoadRollback<'_> {
         self.binding.transport.close_outbound();
         self.binding
             .broker
-            .router
-            .lock()
-            .expect("router lock")
             .detach_unique(&self.binding.state.destination);
         if let Some(transport) = &self.transport {
             transport.release_initialization(false);
@@ -895,13 +888,7 @@ impl Drop for LoadRollback<'_> {
                     .map(|module| module.unique_name.clone())
             });
             if let Some(peer) = peer {
-                self.host
-                    .inner
-                    .broker
-                    .router
-                    .lock()
-                    .expect("router lock")
-                    .detach_unique(&peer);
+                self.host.inner.broker.detach_unique(&peer);
             }
             // A timed-out initializer may still run. Stop is best effort;
             // revocation/detach removes authority without claiming cessation.
@@ -948,11 +935,7 @@ impl Drop for PeerRollback {
     fn drop(&mut self) {
         if !self.committed {
             self.transport.close_outbound();
-            self.broker
-                .router
-                .lock()
-                .expect("router lock")
-                .detach_unique(&self.peer);
+            self.broker.detach_unique(&self.peer);
         }
     }
 }

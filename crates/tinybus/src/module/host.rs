@@ -1175,12 +1175,7 @@ impl ModuleHost {
             Ok(change) => change,
             Err(_) => {
                 transport.commit_terminal(true);
-                self.inner
-                    .broker
-                    .router
-                    .lock()
-                    .expect("router lock")
-                    .detach_unique(&unique);
+                self.inner.broker.detach_unique(&unique);
                 transport.request_terminal(true);
                 let error = Error::module_refused(path, "module bus name is already owned");
                 self.record_manifest_rejection(&error, manifest, RefusalClass::Unresolved);
