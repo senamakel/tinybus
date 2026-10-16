@@ -233,10 +233,7 @@ async fn a_detached_peer_cannot_route_frames_after_its_death_is_announced() {
         .await
         .unwrap();
     service
-        .serve_at(
-            ObjectPath::new(VOICE_PATH).unwrap(),
-            CountingVoice(call_tx),
-        )
+        .serve_at(ObjectPath::new(VOICE_PATH).unwrap(), CountingVoice(call_tx))
         .await
         .unwrap();
     service.request_name(VOICE_NAME).await.unwrap();
