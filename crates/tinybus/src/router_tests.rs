@@ -160,6 +160,15 @@ fn detaching_reports_the_unique_name_as_peer_death() {
 }
 
 #[test]
+fn a_live_peer_cannot_release_its_unique_name() {
+    let mut router = Router::default();
+    let (peer, unique) = router.attach(outbox());
+
+    assert!(router.release_name(peer, &unique).is_err());
+    assert_eq!(router.name_owner(&unique).unwrap(), Some(unique));
+}
+
+#[test]
 fn the_bus_name_and_unique_names_cannot_be_claimed() {
     let mut router = Router::default();
     let (a, _) = router.attach(outbox());
