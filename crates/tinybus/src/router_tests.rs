@@ -165,7 +165,7 @@ fn a_live_peer_cannot_release_its_unique_name() {
     let (peer, unique) = router.attach(outbox());
 
     assert!(router.release_name(peer, &unique).is_err());
-    assert_eq!(router.name_owner(&unique).unwrap(), Some(unique));
+    assert_eq!(router.owner_of(&unique), Some(unique));
 }
 
 #[test]
