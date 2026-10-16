@@ -141,6 +141,19 @@ fn detaching_frees_the_names_and_reports_the_change() {
 }
 
 #[test]
+fn detaching_reports_the_unique_name_as_peer_death() {
+    let mut router = Router::default();
+    let (peer, unique) = router.attach(outbox());
+
+    let changes = router.detach(peer);
+
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].name, unique);
+    assert_eq!(changes[0].old_owner, Some(unique));
+    assert!(changes[0].new_owner.is_none());
+}
+
+#[test]
 fn the_bus_name_and_unique_names_cannot_be_claimed() {
     let mut router = Router::default();
     let (a, _) = router.attach(outbox());

@@ -64,6 +64,59 @@ async fn hello_assigns_distinct_unique_names() {
     assert_ne!(a, b);
 }
 
+#[tokio::test]
+async fn disconnect_announces_unique_name_loss_but_alias_release_does_not() {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let peer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let unique = peer.unique_name().unwrap();
+    let mut changes = observer
+        .add_match(
+            MatchRule::new()
+                .signals()
+                .member(MemberName::new("NameOwnerChanged").unwrap()),
+        )
+        .await
+        .unwrap();
+
+    peer.close().await.unwrap();
+
+    let detached = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let message = changes.recv().await.unwrap();
+            if message.body[0] == unique {
+                break message;
+            }
+        }
+    })
+    .await
+    .expect("peer detach must announce its unique name");
+    assert_eq!(detached.body[1], unique);
+    assert!(detached.body[2].is_null());
+
+    let live = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let alias = "org.example.LiveAlias";
+    live.request_name(alias).await.unwrap();
+    live.release_name(alias).await.unwrap();
+    let alias_released = tokio::time::timeout(Duration::from_secs(2), changes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(alias_released.body[0], alias);
+    let live_unique = live.unique_name().unwrap();
+    assert_eq!(live.name_owner(live_unique.as_str()).await.unwrap(), Some(live_unique));
+    assert!(tokio::time::timeout(Duration::from_millis(100), changes.recv())
+        .await
+        .is_err(), "releasing an alias from a live peer must not announce peer death");
+}
+
 struct ClosedListener;
 
 #[async_trait]
