@@ -203,6 +203,125 @@ async fn an_internally_detached_peer_still_announces_its_unique_name_loss() {
     );
 }
 
+struct CountingVoice(tokio::sync::mpsc::UnboundedSender<()>);
+
+#[async_trait]
+impl Interface for CountingVoice {
+    fn name(&self) -> InterfaceName {
+        InterfaceName::new(VOICE_NAME).unwrap()
+    }
+
+    fn members(&self) -> Vec<MemberName> {
+        vec![MemberName::new("Transcribe").unwrap()]
+    }
+
+    async fn call(&self, _member: &MemberName, _args: Value) -> Result<Value> {
+        let _ = self.0.send(());
+        Ok(Value::Null)
+    }
+}
+
+#[tokio::test]
+#[cfg(feature = "modules")]
+async fn a_detached_peer_cannot_route_frames_after_its_death_is_announced() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    broker.clone().spawn(bus.clone());
+
+    let (call_tx, mut call_rx) = tokio::sync::mpsc::unbounded_channel();
+    let service = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    service
+        .serve_at(
+            ObjectPath::new(VOICE_PATH).unwrap(),
+            CountingVoice(call_tx),
+        )
+        .await
+        .unwrap();
+    service.request_name(VOICE_NAME).await.unwrap();
+
+    let stale_peer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let unique = stale_peer.unique_name().unwrap();
+    let observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let mut deaths = observer
+        .add_match(
+            MatchRule::new()
+                .signals()
+                .member(MemberName::new("NameOwnerChanged").unwrap()),
+        )
+        .await
+        .unwrap();
+    let mut peer_signals = observer
+        .add_match(
+            MatchRule::new()
+                .signals()
+                .member(MemberName::new("PeerPing").unwrap()),
+        )
+        .await
+        .unwrap();
+    let id = broker
+        .router
+        .lock()
+        .expect("router lock")
+        .names
+        .get(&unique)
+        .copied()
+        .expect("the peer is attached before detach");
+
+    broker.detach_unique(&unique);
+    let death = tokio::time::timeout(Duration::from_secs(2), deaths.recv())
+        .await
+        .expect("detach announcement arrives before stale frames")
+        .unwrap();
+    assert_eq!(death.body, serde_json::json!([unique, unique, null]));
+
+    let signal = Message::signal(
+        ObjectPath::new("/ai/tinyhumans/test/Peer").unwrap(),
+        InterfaceName::new("ai.tinyhumans.test.Peer").unwrap(),
+        MemberName::new("PeerPing").unwrap(),
+        Value::Null,
+    );
+    let signal_result = broker.route(id, &unique, signal).await;
+
+    let method = Message::method_call(
+        BusName::new(VOICE_NAME).unwrap(),
+        ObjectPath::new(VOICE_PATH).unwrap(),
+        InterfaceName::new(VOICE_NAME).unwrap(),
+        MemberName::new("Transcribe").unwrap(),
+        serde_json::json!(["/tmp/stale.wav"]),
+    );
+    let method_result = broker.route(id, &unique, method).await;
+
+    let alias = BusName::new("org.example.DetachedGhost").unwrap();
+    let request_name = Message::method_call(
+        BusName::new(crate::BUS_NAME).unwrap(),
+        ObjectPath::new(crate::BUS_PATH).unwrap(),
+        InterfaceName::new(crate::BUS_INTERFACE).unwrap(),
+        MemberName::new("RequestName").unwrap(),
+        serde_json::json!([alias]),
+    );
+    let request_result = broker.route(id, &unique, request_name).await;
+
+    let signal_delivery =
+        tokio::time::timeout(Duration::from_millis(100), peer_signals.recv()).await;
+    let service_delivery = tokio::time::timeout(Duration::from_millis(100), call_rx.recv()).await;
+    let live_names = broker.router.lock().expect("router lock").list_names();
+    assert!(
+        signal_result.is_err()
+            && method_result.is_err()
+            && request_result.is_err()
+            && signal_delivery.is_err()
+            && service_delivery.is_err()
+            && !live_names.contains(&alias),
+        "stale routing: signal={signal_result:?}, method={method_result:?}, request={request_result:?}, signal_delivery={signal_delivery:?}, service_delivery={service_delivery:?}, names={live_names:?}"
+    );
+}
+
 struct ClosedListener;
 
 #[async_trait]
