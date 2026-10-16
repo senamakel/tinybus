@@ -236,7 +236,7 @@ impl Broker {
                     .router
                     .lock()
                     .expect("router lock")
-                    .subscribers(&message, from);
+                    .subscribers_from(&message, from, from_name)?;
                 for target in targets {
                     // A full or closed queue is that subscriber's problem;
                     // signals are best-effort and must not block the sender's
@@ -257,7 +257,12 @@ impl Broker {
                         .router
                         .lock()
                         .expect("router lock")
-                        .directed_signal_target(from_name, destination, &message.header)?;
+                        .directed_signal_target_from(
+                            from,
+                            from_name,
+                            destination,
+                            &message.header,
+                        )?;
                     // This route is one recipient, not a match-rule broadcast.
                     let _ = target.try_send(message);
                     Ok(())
@@ -311,7 +316,9 @@ impl Broker {
                 // connection, which chose to participate in the exchange.
                 let confidential_call =
                     message.header.confidential && message.header.kind == MessageKind::MethodCall;
-                let target = self.router.lock().expect("router lock").resolve_call(
+                let target = self.router.lock().expect("router lock").resolve_call_from(
+                    from,
+                    from_name,
                     &destination,
                     message.header.expected_responder.as_ref(),
                     confidential_call,
@@ -423,10 +430,20 @@ impl Broker {
         body: Value,
     ) -> (Result<Value>, Vec<NameChange>, Vec<Value>) {
         #[cfg(feature = "modules")]
-        if let Some((result, module_states)) =
-            self.module_method(from_name, member, body.clone()).await
         {
-            return (result, Vec::new(), module_states);
+            let admission = self
+                .router
+                .lock()
+                .expect("router lock")
+                .ensure_peer_attached(from, from_name);
+            if let Err(error) = admission {
+                return (Err(error), Vec::new(), Vec::new());
+            }
+            if let Some((result, module_states)) =
+                self.module_method(from_name, member, body.clone()).await
+            {
+                return (result, Vec::new(), module_states);
+            }
         }
 
         // Negotiate conditional routing before building the call body. Keep
@@ -435,7 +452,11 @@ impl Broker {
         if member.as_str() == "ResolveCallTarget" {
             let result = (|| -> Result<Value> {
                 let (name,): (BusName,) = parse_args(member, body)?;
-                let owner = self.router.lock().expect("router lock").owner_of(&name);
+                let owner = {
+                    let router = self.router.lock().expect("router lock");
+                    router.ensure_peer_attached(from, from_name)?;
+                    router.owner_of(&name)
+                };
                 match owner {
                     Some(owner) => Ok(serde_json::to_value(owner)?),
                     None => {
@@ -461,6 +482,7 @@ impl Broker {
         let mut router = self.router.lock().expect("router lock");
 
         let result = (|| -> Result<Value> {
+            router.ensure_peer_attached(from, from_name)?;
             match member.as_str() {
                 "Hello" => Ok(serde_json::to_value(from_name)?),
                 "GetId" => Ok(Value::String(self.id.clone())),
