@@ -187,7 +187,7 @@ async fn an_internally_detached_peer_still_announces_its_unique_name_loss() {
         detached.body,
         serde_json::json!([unique, unique, null])
     );
-    assert_eq!(peer.name_owner(unique.as_str()).await.unwrap(), None);
+    assert_eq!(observer.name_owner(unique.as_str()).await.unwrap(), None);
     peer.close().await.unwrap();
     assert!(tokio::time::timeout(Duration::from_millis(100), changes.recv())
         .await
