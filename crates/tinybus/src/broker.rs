@@ -726,19 +726,36 @@ impl Broker {
     /// user has been staring at a spinner. Subscribers still have to have asked
     /// for it; the broker does not push it at peers that did not.
     pub(crate) async fn announce_name_change(&self, change: NameChange) {
+        self.announce_name_change_now(change);
+    }
+
+    /// Synchronously detach an internally managed peer and announce each name
+    /// transition before its reader task observes the closed transport.
+    #[cfg(feature = "modules")]
+    pub(crate) fn detach_unique(&self, unique: &BusName) {
+        let changes = self
+            .router
+            .lock()
+            .expect("router lock")
+            .detach_unique(unique);
+        for change in changes {
+            self.announce_name_change_now(change);
+        }
+    }
+
+    fn announce_name_change_now(&self, change: NameChange) {
         self.broadcast_bus_signal(
             "NameOwnerChanged",
             serde_json::json!([change.name, change.old_owner, change.new_owner]),
-        )
-        .await;
+        );
     }
 
     #[cfg(feature = "modules")]
     pub(crate) async fn announce_module_state(&self, body: Value) {
-        self.broadcast_bus_signal("ModuleStateChanged", body).await;
+        self.broadcast_bus_signal("ModuleStateChanged", body);
     }
 
-    async fn broadcast_bus_signal(&self, member: &str, body: Value) {
+    fn broadcast_bus_signal(&self, member: &str, body: Value) {
         let signal = Message {
             header: crate::message::Header {
                 kind: MessageKind::Signal,

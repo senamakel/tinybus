@@ -286,9 +286,11 @@ impl Router {
     }
 
     #[cfg(feature = "modules")]
-    pub(crate) fn detach_unique(&mut self, unique: &BusName) {
+    pub(crate) fn detach_unique(&mut self, unique: &BusName) -> Vec<NameChange> {
         if let Some(id) = self.names.get(unique).copied() {
-            self.detach(id);
+            self.detach(id)
+        } else {
+            Vec::new()
         }
     }
 
