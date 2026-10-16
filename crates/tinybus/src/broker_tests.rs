@@ -242,10 +242,13 @@ async fn a_detached_peer_cannot_route_frames_after_its_death_is_announced() {
         .await
         .unwrap();
     let unique = stale_peer.unique_name().unwrap();
-    let observer = Connection::connect(bus.connect().await.unwrap())
+    let death_observer = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let mut deaths = observer
+    let signal_observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let mut deaths = death_observer
         .add_match(
             MatchRule::new()
                 .signals()
@@ -253,7 +256,7 @@ async fn a_detached_peer_cannot_route_frames_after_its_death_is_announced() {
         )
         .await
         .unwrap();
-    let mut peer_signals = observer
+    let mut peer_signals = signal_observer
         .add_match(
             MatchRule::new()
                 .signals()
