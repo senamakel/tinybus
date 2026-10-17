@@ -9,8 +9,7 @@ async fn retry_delay_is_applied_between_typed_initializing_attempts() {
     let (attempt_tx, attempt_rx) = tokio::sync::oneshot::channel();
     access.initializing_notifier = StdMutex::new(Some(attempt_tx));
     let module = Arc::new(
-        ReconfigurableModule::new(access, ID)
-            .retry_while_initializing(2, Duration::from_secs(5)),
+        ReconfigurableModule::new(access, ID).retry_while_initializing(2, Duration::from_secs(5)),
     );
     let config = serde_json::json!({ "route": "after-retry" });
     let retrying_module = module.clone();
