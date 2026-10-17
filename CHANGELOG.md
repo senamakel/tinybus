@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.2
+
+### Added
+
+- `ModuleClient::call_with_stream` and `call_with_stream_detailed` upload
+  payloads through the module's validated proxy; the detailed form preserves
+  untrusted remote wire failures while keeping renderings and reports redacted.
+- `ModuleObjectClient::call_detailed` retains exact remote method failure
+  details for held objects while keeping its sanitized call wrapper.
+
+### Fixed
+
+- A streamed method follows the unique peer that accepted `Open`, so a
+  well-known-name handover cannot split its method from its payload.
+- A refused protocol frame reports as a transport failure rather than as a
+  module execution fault.
+
 ## 0.2.1
 
 ### Added

@@ -1247,6 +1247,24 @@ impl Connection {
         bytes: &[u8],
         timeout: Duration,
     ) -> Result<R> {
+        self.call_with_stream_serialized(destination, path, interface, member, args, bytes, timeout)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Shared transfer path for argument builders that can fail serialization.
+    /// If encoding fails after `Open`, returning drops the writer and triggers
+    /// its best-effort `Abort` before any business method is sent.
+    pub(crate) async fn call_with_stream_serialized<R: DeserializeOwned, A: Serialize>(
+        &self,
+        destination: BusName,
+        path: ObjectPath,
+        interface: InterfaceName,
+        member: MemberName,
+        args: impl FnOnce(&StreamRef) -> A,
+        bytes: &[u8],
+        timeout: Duration,
+    ) -> Result<R> {
         let mut writer = self
             .open_stream_with_timeout(
                 &destination,
@@ -1254,8 +1272,11 @@ impl Connection {
                 timeout,
             )
             .await?;
+        // Keep the method with the peer that accepted Open. A well-known name
+        // may have changed owners while the stream was being opened, and
+        // splitting its handle from its payload would make the transfer fail.
         let message = Message::method_call(
-            destination,
+            writer.destination().clone(),
             path,
             interface,
             member,

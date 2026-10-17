@@ -649,6 +649,15 @@ impl StreamWriter {
         }
     }
 
+    /// The peer that accepted this stream's `Open` request.
+    ///
+    /// A method carrying this writer's handle must use the same destination;
+    /// resolving a well-known name again could select a different peer after a
+    /// name handover.
+    pub(crate) fn destination(&self) -> &BusName {
+        &self.destination
+    }
+
     /// How many bytes have been accepted by the receiver so far.
     pub fn sent(&self) -> u64 {
         self.sent
