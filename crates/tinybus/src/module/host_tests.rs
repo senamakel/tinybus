@@ -215,6 +215,13 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         .unwrap();
     assert_eq!(info.state, ModuleState::Resolved);
 
+    // Identity comes from the module's broker-assigned unique peer. A
+    // well-known alias is only a routing name and must never resolve as a
+    // module sender.
+    let unique = host.inner.loaded.lock().unwrap()[0].unique_name.clone();
+    assert!(host.module_for_sender(&unique).is_some());
+    assert!(host.module_for_sender(&info.manifest.bus_name).is_none());
+
     let connection = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
