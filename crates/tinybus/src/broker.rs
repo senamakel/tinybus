@@ -57,6 +57,53 @@ pub struct Broker {
     module_controller: Option<Arc<Mutex<ModuleControllerBinding>>>,
 }
 
+/// A module peer admitted into the router but not yet made dispatchable.
+/// Module hosts publish its validated identity before calling `start`.
+#[cfg(feature = "modules")]
+pub(crate) struct StagedModulePeer {
+    broker: Broker,
+    id: Option<u64>,
+    unique: BusName,
+    transport: Option<Arc<dyn Transport>>,
+    inbox: Option<mpsc::Receiver<Message>>,
+}
+
+#[cfg(feature = "modules")]
+impl StagedModulePeer {
+    pub(crate) fn unique_name(&self) -> &BusName {
+        &self.unique
+    }
+
+    pub(crate) fn start(mut self) {
+        let id = self.id.take().expect("staged peer is live");
+        let transport = self.transport.take().expect("staged transport");
+        let inbox = self.inbox.take().expect("staged inbox");
+        if let Some(module) = crate::transport::downcast::<
+            crate::module::transport::ModuleTransport,
+        >(transport.as_ref())
+        {
+            module.admit_broker();
+        }
+        tracing::debug!(peer = %self.unique, transport = %transport.describe(), "module peer attached");
+        tokio::spawn(writer_task(transport.clone(), inbox));
+        tokio::spawn(reader_task(
+            self.broker.clone(),
+            transport,
+            id,
+            self.unique.clone(),
+        ));
+    }
+}
+
+#[cfg(feature = "modules")]
+impl Drop for StagedModulePeer {
+    fn drop(&mut self) {
+        if self.id.is_some() {
+            self.broker.detach_unique(&self.unique);
+        }
+    }
+}
+
 #[cfg(feature = "modules")]
 #[derive(Default)]
 enum ModuleControllerBinding {
@@ -196,6 +243,28 @@ impl Broker {
         tokio::spawn(writer_task(transport.clone(), inbox));
         tokio::spawn(reader_task(self.clone(), transport, id, unique.clone()));
         unique
+    }
+
+    /// Reserve a module peer without starting dispatch. The module host must
+    /// validate and publish its exact identity before starting this peer.
+    #[cfg(feature = "modules")]
+    pub(crate) fn attach_module_staged(
+        &self,
+        transport: Arc<dyn Transport>,
+    ) -> StagedModulePeer {
+        let (outbox, inbox) = mpsc::channel(PEER_QUEUE_CAPACITY);
+        let (id, unique) = self
+            .router
+            .lock()
+            .expect("router lock is never held across a panic point")
+            .attach(outbox);
+        StagedModulePeer {
+            broker: self.clone(),
+            id: Some(id),
+            unique,
+            transport: Some(transport),
+            inbox: Some(inbox),
+        }
     }
 
     #[cfg(feature = "modules")]

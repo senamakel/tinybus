@@ -1537,7 +1537,8 @@ impl ModuleHost {
         activation: Activation,
     ) -> Result<ModuleInfo> {
         let transport_for_broker: Arc<dyn Transport> = transport.clone();
-        let unique = self.inner.broker.attach(transport_for_broker);
+        let staged = self.inner.broker.attach_module_staged(transport_for_broker);
+        let unique = staged.unique_name().clone();
         let reserved_change = match self
             .inner
             .broker
@@ -1546,7 +1547,6 @@ impl ModuleHost {
             Ok(change) => change,
             Err(_) => {
                 transport.commit_terminal(true);
-                self.inner.broker.detach_unique(&unique);
                 transport.request_terminal(true);
                 let error = Error::module_refused(path, "module bus name is already owned");
                 self.record_manifest_rejection(&error, manifest, RefusalClass::Unresolved);
@@ -1640,6 +1640,22 @@ impl ModuleHost {
         } else {
             tracing::info!(module = %admitted.name, "module loaded");
         }
+        self.inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .push(LoadedModule {
+                info: admitted.clone(),
+                module_id: ModuleId::new(manifest.module.name.clone()),
+                transport,
+                unique_name: unique,
+                transition_from: None,
+                descriptor_info,
+                lifecycle_busy: false,
+                callback_config: None,
+                callback_state: None,
+            });
+        staged.start();
         #[cfg(test)]
         if let Some(barrier) = self
             .inner
@@ -1657,21 +1673,6 @@ impl ModuleHost {
                 .recv()
                 .expect("test releases loaded publication barrier");
         }
-        self.inner
-            .loaded
-            .lock()
-            .expect("module list lock")
-            .push(LoadedModule {
-                info: admitted.clone(),
-                module_id: ModuleId::new(manifest.module.name.clone()),
-                transport,
-                unique_name: unique,
-                transition_from: None,
-                descriptor_info,
-                lifecycle_busy: false,
-                callback_config: None,
-                callback_state: None,
-            });
         Ok(admitted)
     }
 
