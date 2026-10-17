@@ -419,7 +419,7 @@ fn extract(name: &str, archive: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn refused(reason: impl Into<String>) -> Error {
+pub(super) fn refused(reason: impl Into<String>) -> Error {
     Error::module_refused(Path::new("github-release"), reason)
 }
 
