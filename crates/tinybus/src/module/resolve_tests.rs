@@ -641,3 +641,66 @@ mod resolver {
         }
     }
 }
+
+#[test]
+fn bundled_directory_lookup_uses_registered_then_env_then_executable_sibling() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let registered = root.path().join("registered");
+    let from_env = root.path().join("environment");
+    let exe_dir = root.path().join("bin");
+    let sibling = exe_dir.join("bundled-modules");
+    for directory in [&registered, &from_env, &sibling] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+
+    assert_eq!(
+        resolve_bundled_dir_from(
+            Some(registered.clone()),
+            Some(from_env.clone()),
+            Some(exe_dir.clone()),
+        ),
+        Some(registered)
+    );
+    assert_eq!(
+        resolve_bundled_dir_from(None, Some(from_env.clone()), Some(exe_dir.clone())),
+        Some(from_env)
+    );
+    assert_eq!(
+        resolve_bundled_dir_from(None, None, Some(exe_dir)),
+        Some(sibling)
+    );
+}
+
+#[test]
+fn bundled_directory_lookup_skips_missing_higher_precedence_candidates() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let missing_registered = root.path().join("not-installed");
+    let valid_env = root.path().join("environment");
+    std::fs::create_dir_all(&valid_env).unwrap();
+
+    assert_eq!(
+        resolve_bundled_dir_from(Some(missing_registered), Some(valid_env.clone()), None),
+        Some(valid_env)
+    );
+}
+
+#[test]
+fn linked_registry_replaces_factories_and_returns_the_last_registration() {
+    fn first_factory() -> crate::Result<LinkedModule> {
+        Err(crate::Error::failed("first factory"))
+    }
+    fn replacement_factory() -> crate::Result<LinkedModule> {
+        Err(crate::Error::failed("replacement factory"))
+    }
+
+    let registry = LinkedRegistry::new();
+    assert!(!registry.is_registered("registry-test"));
+    assert!(registry.get("registry-test").is_none());
+
+    registry.register("registry-test", first_factory);
+    assert!(registry.is_registered("registry-test"));
+    assert!(registry.get("registry-test").unwrap()().unwrap_err().to_string().contains("first factory"));
+
+    registry.register("registry-test", replacement_factory);
+    assert!(registry.get("registry-test").unwrap()().unwrap_err().to_string().contains("replacement factory"));
+}

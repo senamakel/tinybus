@@ -508,5 +508,42 @@ async fn unavailable_loads_and_explicit_reports_use_only_registered_identity() {
     );
 }
 
+#[tokio::test]
+async fn unloaded_access_reports_loader_disabled_only_for_known_records() {
+    let sink = Arc::new(Recording::default());
+    let reporter = Arc::new(FailureReporter::new(sink.clone()));
+    let access = UnloadedAccess::new(vec![&RECORD], true, reporter.clone());
+
+    assert!(access.enabled());
+    assert!(std::ptr::eq(access.find(RECORD.id).unwrap(), &RECORD));
+    assert!(access.find("arbitrary-unregistered-id").is_none());
+    assert_eq!(
+        access.ensure_loaded("arbitrary-unregistered-id").await,
+        Err("module is unavailable: this build has no module loader".into())
+    );
+    assert!(sink.0.lock().unwrap().is_empty());
+
+    let error = access.ensure_loaded(RECORD.id).await.unwrap_err();
+    assert!(error.contains("no module loader"));
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::LoaderDisabled)]
+    );
+}
+
+#[tokio::test]
+async fn unloaded_access_preserves_the_disabled_reason_before_loader_disabled() {
+    let sink = Arc::new(Recording::default());
+    let reporter = Arc::new(FailureReporter::new(sink.clone()));
+    let client = ModuleClient::new(UnloadedAccess::new(vec![&RECORD], false, reporter));
+
+    let result: Result<String, _> = client.call(RECORD.id, "Call", ()).await;
+    assert_eq!(result, Err(ModuleCallError::Unavailable));
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::Disabled)]
+    );
+}
+
 #[path = "client_attested_tests.rs"]
 mod attested_tests;
