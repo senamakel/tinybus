@@ -309,6 +309,8 @@ pub(super) struct TerminalState {
     transport_drop_thread: StdMutex<Option<String>>,
     #[cfg(test)]
     before_anchor_removal: StdMutex<Option<Arc<AnchorRemovalGate>>>,
+    #[cfg(test)]
+    initial_future_restored: tokio::sync::Notify,
     lease: SlotLease,
     token: usize,
 }
@@ -411,6 +413,8 @@ impl TerminalState {
             transport_drop_thread: StdMutex::new(None),
             #[cfg(test)]
             before_anchor_removal: StdMutex::new(None),
+            #[cfg(test)]
+            initial_future_restored: tokio::sync::Notify::new(),
             lease: SlotLease {
                 admission: Arc::downgrade(admission),
                 index,
@@ -468,6 +472,14 @@ impl TerminalState {
     }
     pub fn is_terminal(&self) -> bool {
         self.reason.load(Ordering::Acquire) != 0
+    }
+    #[cfg(test)]
+    pub async fn wait_initial_future_restored_for_test(&self) {
+        self.initial_future_restored.notified().await;
+    }
+    #[cfg(test)]
+    pub(super) fn initial_future_restored_for_test(&self) {
+        self.initial_future_restored.notify_one();
     }
     pub fn is_live(self: &Arc<Self>) -> bool {
         if self.is_terminal() {

@@ -180,6 +180,167 @@ async fn a_reply_larger_than_one_frame_arrives_through_a_bounded_stream() {
     assert!(reply.bytes().all(|byte| byte == b'x'));
 }
 
+struct PausedMethodTransport {
+    inner: Box<dyn crate::ports::Transport>,
+    paused_member: &'static str,
+    blocked: tokio::sync::mpsc::UnboundedSender<()>,
+    resume: std::sync::Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl crate::ports::Transport for PausedMethodTransport {
+    async fn send(&self, message: Message) -> Result<()> {
+        if message.header.member.as_ref().map(MemberName::as_str) == Some(self.paused_member) {
+            self.blocked.send(()).unwrap();
+            self.resume.notified().await;
+        }
+        self.inner.send(message).await
+    }
+
+    async fn recv(&self) -> Result<Option<Message>> {
+        self.inner.recv().await
+    }
+
+    async fn close(&self) -> Result<()> {
+        self.inner.close().await
+    }
+}
+
+struct ReadsUploadedStream {
+    connection: Connection,
+    received: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+}
+
+#[async_trait]
+impl Interface for ReadsUploadedStream {
+    fn name(&self) -> InterfaceName {
+        InterfaceName::new("ai.tinyhumans.StreamHandover").unwrap()
+    }
+
+    fn members(&self) -> Vec<MemberName> {
+        vec![MemberName::new("Upload").unwrap()]
+    }
+
+    async fn call(&self, _member: &MemberName, args: Value) -> Result<Value> {
+        let (stream,): (crate::stream::StreamRef,) = serde_json::from_value(args)?;
+        let bytes = self.connection.read_stream(&stream).await?;
+        self.received.send(bytes.clone()).unwrap();
+        Ok(serde_json::to_value(bytes.len())?)
+    }
+}
+
+struct ReplacementUpload {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl Interface for ReplacementUpload {
+    fn name(&self) -> InterfaceName {
+        InterfaceName::new("ai.tinyhumans.StreamHandover").unwrap()
+    }
+
+    fn members(&self) -> Vec<MemberName> {
+        vec![MemberName::new("Upload").unwrap()]
+    }
+
+    async fn call(&self, _member: &MemberName, _args: Value) -> Result<Value> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Value::Null)
+    }
+}
+
+#[tokio::test]
+async fn a_stream_method_stays_with_the_owner_that_opened_its_stream_after_name_handover() {
+    const NAME: &str = "ai.tinyhumans.StreamHandover";
+    const PATH: &str = "/ai/tinyhumans/StreamHandover";
+
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+
+    let owner = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    owner.request_name(NAME).await.unwrap();
+    let (received_tx, mut received_rx) = tokio::sync::mpsc::unbounded_channel();
+    owner
+        .serve_at(
+            ObjectPath::new(PATH).unwrap(),
+            ReadsUploadedStream {
+                connection: owner.clone(),
+                received: received_tx,
+            },
+        )
+        .await
+        .unwrap();
+
+    let replacement = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let replacement_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    replacement
+        .serve_at(
+            ObjectPath::new(PATH).unwrap(),
+            ReplacementUpload {
+                calls: replacement_calls.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let resume = std::sync::Arc::new(tokio::sync::Notify::new());
+    let (blocked_tx, mut blocked_rx) = tokio::sync::mpsc::unbounded_channel();
+    let client_transport = PausedMethodTransport {
+        inner: bus.connect().await.unwrap(),
+        paused_member: "Upload",
+        blocked: blocked_tx,
+        resume: resume.clone(),
+    };
+    let client = Connection::connect(Box::new(client_transport))
+        .await
+        .unwrap();
+    let upload = tokio::spawn(async move {
+        client
+            .call_with_stream::<usize>(
+                BusName::new(NAME).unwrap(),
+                ObjectPath::new(PATH).unwrap(),
+                InterfaceName::new(NAME).unwrap(),
+                MemberName::new("Upload").unwrap(),
+                |stream| serde_json::json!([stream]),
+                b"stream opened by the original owner",
+            )
+            .await
+    });
+
+    // The Open reply has arrived before the transport pauses the following
+    // method call. Move the public name while leaving the original stream peer
+    // alive, then allow the method frame to route.
+    tokio::time::timeout(Duration::from_secs(10), blocked_rx.recv())
+        .await
+        .expect("the post-Open method call reached the transport barrier")
+        .expect("the transport barrier remained connected");
+    owner.release_name(NAME).await.unwrap();
+    replacement.request_name(NAME).await.unwrap();
+    resume.notify_one();
+
+    let result = tokio::time::timeout(Duration::from_secs(10), upload)
+        .await
+        .expect("the streamed method completed after name handover")
+        .unwrap();
+    assert_eq!(
+        result.unwrap(),
+        b"stream opened by the original owner".len()
+    );
+    assert_eq!(
+        replacement_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the replacement owner must not receive the method"
+    );
+    assert_eq!(
+        received_rx.recv().await.unwrap(),
+        b"stream opened by the original owner"
+    );
+}
+
 #[tokio::test]
 async fn a_streaming_caller_accepts_an_ordinary_legacy_reply() {
     let (client, _service) = pair().await;
