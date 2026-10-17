@@ -75,8 +75,8 @@ impl StagedModulePeer {
     }
 
     pub(crate) fn start(mut self) {
-        let id = self.id.expect("staged peer is live");
-        let transport = self.transport.as_ref().expect("staged transport").clone();
+        let id = self.id.take().expect("staged peer is live");
+        let transport = self.transport.take().expect("staged transport");
         let inbox = self.inbox.take().expect("staged inbox");
         if let Some(module) = crate::transport::downcast::<crate::module::transport::ModuleTransport>(
             transport.as_ref(),
@@ -91,8 +91,6 @@ impl StagedModulePeer {
             id,
             self.unique.clone(),
         ));
-        self.id.take();
-        self.transport.take();
     }
 }
 
