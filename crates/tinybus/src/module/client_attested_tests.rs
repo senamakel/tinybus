@@ -267,13 +267,13 @@ async fn an_unprepared_custom_access_refuses_before_serializing_confidential_arg
     let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let result: Result<String, _> = client
-        .call_attested(
+        .call_attested_detailed(
             record.id,
             "Consume",
             SerializeCounter(serializations.clone()),
         )
         .await;
-    assert_eq!(result, Err(ModuleCallError::Unavailable));
+    assert_eq!(result.unwrap_err().kind, ModuleCallError::Unavailable);
     assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(
         sink.0.lock().unwrap().as_slice(),
@@ -301,13 +301,13 @@ async fn a_short_client_deadline_bounds_readiness_before_argument_serialization(
     let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let result: Result<String, _> = client
-        .call_attested(
+        .call_attested_detailed(
             record.id,
             "Consume",
             SerializeCounter(serializations.clone()),
         )
         .await;
-    assert_eq!(result, Err(ModuleCallError::Unavailable));
+    assert_eq!(result.unwrap_err().kind, ModuleCallError::Unavailable);
     assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(
         sink.0.lock().unwrap().as_slice(),
@@ -377,13 +377,13 @@ async fn a_lazy_module_that_never_announces_ready_fails_before_serializing_argum
     let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let result: Result<String, _> = client
-        .call_attested(
+        .call_attested_detailed(
             record.id,
             "Consume",
             SerializeCounter(serializations.clone()),
         )
         .await;
-    assert_eq!(result, Err(ModuleCallError::Unavailable));
+    assert_eq!(result.unwrap_err().kind, ModuleCallError::Unavailable);
     assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(
         sink.0.lock().unwrap().as_slice(),
@@ -530,7 +530,7 @@ impl crate::Interface for AttestedReceiver {
 
 #[cfg(feature = "modules")]
 struct AttestedCallObservation {
-    result: Result<String, ModuleCallError>,
+    result: Result<String, ModuleCallFailure>,
     serialized_arguments: usize,
     receiver_calls: usize,
 }
@@ -578,7 +578,7 @@ async fn call_with_attestation(
     };
     let serialized_arguments = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let result = ModuleClient::new(access)
-        .call_attested(
+        .call_attested_detailed(
             record.id,
             "Consume",
             SerializeCounter(serialized_arguments.clone()),
@@ -623,7 +623,10 @@ async fn attested_calls_reject_archive_and_library_digests_crossed_between_asset
 
     let observed =
         call_with_attestation(record, first.sha256, fallback.library_sha256.unwrap()).await;
-    assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
+    assert_eq!(
+        observed.result.unwrap_err().kind,
+        ModuleCallError::Unavailable
+    );
     assert_eq!(observed.serialized_arguments, 0);
     assert_eq!(observed.receiver_calls, 0);
 }
@@ -641,7 +644,10 @@ async fn attested_calls_reject_a_post_sign_library_digest_not_in_the_release_pin
     let post_sign_library = "c".repeat(64);
 
     let observed = call_with_attestation(record, release_asset.sha256, &post_sign_library).await;
-    assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
+    assert_eq!(
+        observed.result.unwrap_err().kind,
+        ModuleCallError::Unavailable
+    );
     assert_eq!(observed.serialized_arguments, 0);
     assert_eq!(observed.receiver_calls, 0);
 }
@@ -659,7 +665,10 @@ async fn attested_calls_refuse_post_sign_bytes_before_sending_confidential_argum
     let post_sign_library = "c".repeat(64);
 
     let observed = call_with_attestation(record, release_asset.sha256, &post_sign_library).await;
-    assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
+    assert_eq!(
+        observed.result.unwrap_err().kind,
+        ModuleCallError::Unavailable
+    );
     assert_eq!(observed.serialized_arguments, 0);
     assert_eq!(observed.receiver_calls, 0);
 }
@@ -678,7 +687,10 @@ async fn attested_calls_reject_a_valid_pair_for_an_unrelated_platform() {
 
     let observed =
         call_with_attestation(record, unrelated.sha256, unrelated.library_sha256.unwrap()).await;
-    assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
+    assert_eq!(
+        observed.result.unwrap_err().kind,
+        ModuleCallError::Unavailable
+    );
     assert_eq!(observed.serialized_arguments, 0);
     assert_eq!(observed.receiver_calls, 0);
 }
@@ -759,7 +771,7 @@ async fn a_confidential_call_stays_on_the_attested_unique_peer_after_name_handov
     };
     let call = tokio::spawn(async move {
         client
-            .call_attested::<String>(record.id, "Consume", args)
+            .call_attested_detailed::<String>(record.id, "Consume", args)
             .await
     });
     started_rx.await.unwrap();
@@ -767,7 +779,7 @@ async fn a_confidential_call_stays_on_the_attested_unique_peer_after_name_handov
     service_b.request_name(record.bus_name).await.unwrap();
     barrier.wait();
 
-    assert_eq!(call.await.unwrap(), Ok("attested".to_string()));
+    assert_eq!(call.await.unwrap().unwrap(), "attested".to_string());
     assert_eq!(preparations.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(calls_a.lock().unwrap().len(), 1);
     assert!(calls_b.lock().unwrap().is_empty());
