@@ -116,7 +116,12 @@ impl<K, S, E> ModuleServiceSlot<K, S, E> {
     /// error because the shutdown hook has no error return. Registration may be
     /// repeated after the callback runs, including when cleanup returns an
     /// error.
-    pub fn on_shutdown(&'static self, register: impl FnOnce(ShutdownHook)) {
+    pub fn on_shutdown(&'static self, register: impl FnOnce(ShutdownHook))
+    where
+        K: Send + 'static,
+        S: Send + 'static,
+        E: 'static,
+    {
         if self
             .shutdown_registered
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
