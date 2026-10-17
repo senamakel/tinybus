@@ -101,6 +101,38 @@ impl ModuleAccess for UnpreparedAccess {
     }
 }
 
+struct PendingAccess(PreparedAccess);
+
+impl ModuleAccess for PendingAccess {
+    fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
+        self.0.find(id)
+    }
+
+    fn enabled(&self) -> bool {
+        self.0.enabled()
+    }
+
+    fn reporter(&self) -> &FailureReporter {
+        self.0.reporter()
+    }
+
+    fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        self.0.ensure_loaded(id)
+    }
+
+    fn prepare_attested<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(std::future::pending())
+    }
+
+    fn proxy<'a>(
+        &'a self,
+        bus_name: &'a str,
+        object_path: &'a str,
+    ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
+        self.0.proxy(bus_name, object_path)
+    }
+}
+
 struct ReadinessAccess {
     record: &'static ReleaseRecord,
     connection: crate::Connection,
@@ -222,6 +254,38 @@ async fn an_unprepared_custom_access_refuses_before_serializing_confidential_arg
         &[(record.id.to_string(), Reason::ModuleUnavailable)]
     );
     broker_task.abort();
+}
+
+#[tokio::test]
+async fn a_short_client_deadline_bounds_readiness_before_argument_serialization() {
+    let bus = crate::transport::memory::MemoryBus::new();
+    let connection = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = strict_record();
+    let sink = Arc::new(Recording::default());
+    let access = PendingAccess(PreparedAccess {
+        record,
+        connection,
+        reporter: FailureReporter::new(sink.clone()),
+        preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    });
+    let client = ModuleClient::new(access).with_timeout(Duration::from_millis(10));
+    let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let result: Result<String, _> = client
+        .call_attested(
+            record.id,
+            "Consume",
+            SerializeCounter(serializations.clone()),
+        )
+        .await;
+    assert_eq!(result, Err(ModuleCallError::Unavailable));
+    assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(record.id.to_string(), Reason::ModuleUnavailable)]
+    );
 }
 
 #[tokio::test]

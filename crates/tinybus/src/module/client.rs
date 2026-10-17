@@ -313,7 +313,15 @@ impl ModuleClient {
             report(&*self.access, record, Reason::ModuleUnavailable);
             return Err(ModuleCallError::Unavailable);
         };
-        if self.fixture.is_some() || self.access.prepare_attested(record.id).await.is_err() {
+        let preparation = self.access.prepare_attested(record.id);
+        let prepared = if let Some(timeout) = self.timeout {
+            tokio::time::timeout(timeout, preparation)
+                .await
+                .is_ok_and(|result| result.is_ok())
+        } else {
+            preparation.await.is_ok()
+        };
+        if self.fixture.is_some() || !prepared {
             report(&*self.access, record, Reason::ModuleUnavailable);
             return Err(ModuleCallError::Unavailable);
         }

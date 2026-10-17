@@ -356,10 +356,14 @@ impl Resolver {
             .runtime()
             .await
             .map_err(|_| "module bus is unavailable".to_string())?;
+        // Keep native initialization on the process-lifetime module runtime.
+        // A caller's deadline may cancel its wait, but must not cancel the
+        // initializer or strand the module between `INITIALIZING` and `READY`.
+        let host = runtime.host();
         runtime
-            .host()
-            .ensure_ready(record.bus_name)
+            .spawn(async move { host.ensure_ready(record.bus_name).await })
             .await
+            .map_err(|_| "module readiness task did not finish".to_string())?
             .map_err(|_| "module did not reach READY".to_string())
     }
 
