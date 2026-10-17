@@ -13,15 +13,26 @@ use tokio::sync::{mpsc, oneshot};
 const CALLBACK_NAME: &str = "ai.tinyhumans.tinybus.tests.RuntimeLease";
 const CALLBACK_PATH: &str = "/ai/tinyhumans/tinybus/tests/RuntimeLease";
 
-struct Reservation;
-struct Object;
+#[derive(Clone)]
+struct Identity(Arc<()>);
+
+struct Reservation(Identity);
+struct Object(Identity);
 
 #[derive(Debug)]
 struct DriverError(&'static str);
 
+impl std::fmt::Display for DriverError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for DriverError {}
+
 enum DriverCall {
     Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
-    Object(oneshot::Sender<Result<Object, DriverError>>),
+    Object(Identity, oneshot::Sender<Result<Object, DriverError>>),
     Start(oneshot::Sender<Result<(), DriverError>>),
     Stop(oneshot::Sender<Result<(), DriverError>>),
     Validated,
@@ -32,6 +43,7 @@ struct ControlledDriver {
     calls: mpsc::UnboundedSender<DriverCall>,
     failed: Arc<AtomicBool>,
     validation_error: Arc<AtomicBool>,
+    identity: Identity,
 }
 
 #[async_trait::async_trait]
@@ -57,18 +69,21 @@ impl RuntimeLeaseDriver for ControlledDriver {
 
     fn callback_address(
         &self,
-        _: &Self::Reservation,
+        reservation: &Self::Reservation,
         _: &Self::Object,
     ) -> Result<(crate::BusName, crate::ObjectPath), Self::Error> {
+        assert!(Arc::ptr_eq(&self.identity.0, &reservation.0.0));
         Ok((
             CALLBACK_NAME.parse().unwrap(),
             CALLBACK_PATH.parse().unwrap(),
         ))
     }
 
-    async fn object(&self, _: &Self::Reservation) -> Result<Self::Object, Self::Error> {
+    async fn object(&self, reservation: &Self::Reservation) -> Result<Self::Object, Self::Error> {
         let (reply, result) = oneshot::channel();
-        self.calls.send(DriverCall::Object(reply)).unwrap();
+        self.calls
+            .send(DriverCall::Object(reservation.0.clone(), reply))
+            .unwrap();
         result.await.unwrap()
     }
 
@@ -130,6 +145,7 @@ impl Harness {
                 calls,
                 failed: Arc::new(AtomicBool::new(false)),
                 validation_error: Arc::new(AtomicBool::new(false)),
+                identity: Identity(Arc::new(())),
             },
             calls: receiver,
             callback_calls: Arc::new(AtomicUsize::new(0)),
@@ -151,7 +167,12 @@ impl Harness {
         .unwrap();
         self.runtime.lease(
             driver,
-            move |_: &Reservation, _: &Object| Ok(Callback(calls)),
+            move |reservation: &Reservation, object: &Object| {
+                if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
+                    return Err(DriverError("reservation/object mismatch"));
+                }
+                Ok(Callback(calls))
+            },
             policy,
             |_| {},
         )
@@ -161,7 +182,9 @@ impl Harness {
         let opening = tokio::spawn(self.open());
         match self.calls.recv().await.unwrap() {
             DriverCall::Reserve(reply) => {
-                reply.send(Ok(Reservation)).unwrap();
+                reply
+                    .send(Ok(Reservation(self.driver.identity.clone())))
+                    .unwrap();
             }
             _ => panic!("reserve must be the first driver operation"),
         }
@@ -170,7 +193,7 @@ impl Harness {
             Some(DriverCall::Validated)
         ));
         match self.calls.recv().await.unwrap() {
-            DriverCall::Object(reply) => reply.send(Ok(Object)).unwrap(),
+            DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
             _ => panic!("object creation follows validation"),
         }
         match self.calls.recv().await.unwrap() {
@@ -198,14 +221,16 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         _ => panic!("reserve must begin the activation transaction"),
     };
     opening.abort();
-    reply.send(Ok(Reservation)).unwrap();
+    reply
+        .send(Ok(Reservation(harness.driver.identity.clone())))
+        .unwrap();
 
     assert!(matches!(
         harness.calls.recv().await,
         Some(DriverCall::Validated)
     ));
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Object(reply) => reply.send(Ok(Object)).unwrap(),
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object creation follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
@@ -228,7 +253,9 @@ async fn validation_failure_after_reserve_still_stops_and_never_starts() {
         .store(true, Ordering::Release);
     let opening = tokio::spawn(harness.open());
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Reserve(reply) => reply.send(Ok(Reservation)).unwrap(),
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
         _ => panic!("reserve must be first"),
     }
     assert!(matches!(
