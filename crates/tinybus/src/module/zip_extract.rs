@@ -242,7 +242,7 @@ fn extract_with_limits(
         }
 
         plans.push(EntryPlan {
-            wayfinder: entry.wayfinder().clone(),
+            wayfinder: entry.wayfinder(),
             path,
             is_dir,
             method,
@@ -409,7 +409,7 @@ fn is_windows_device_name(component: &str) -> bool {
         .split('.')
         .next()
         .unwrap_or_default()
-        .trim_end_matches(|ch| ch == '.' || ch == ' ');
+        .trim_end_matches(['.', ' ']);
     let upper = stem.to_ascii_uppercase();
     matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || ["COM", "LPT"].iter().any(|prefix| {
