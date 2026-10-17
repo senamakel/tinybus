@@ -173,6 +173,27 @@ pub(super) fn manifest() -> ModuleManifest {
     named_manifest("clock", "Clock")
 }
 
+struct LinkedSetupValue(&'static str);
+
+#[async_trait::async_trait]
+impl crate::Interface for LinkedSetupValue {
+    fn name(&self) -> crate::InterfaceName {
+        "org.example.LinkedSetup".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Value".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        Ok(serde_json::json!(self.0))
+    }
+}
+
 fn named_manifest(module_name: &str, surface_name: &str) -> ModuleManifest {
     ModuleManifest {
         schema: MANIFEST_SCHEMA,
@@ -219,7 +240,10 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
     // well-known alias is only a routing name and must never resolve as a
     // module sender.
     let unique = host.inner.loaded.lock().unwrap()[0].unique_name.clone();
-    assert!(host.module_for_sender(&unique).is_some());
+    let module_id = host
+        .module_for_sender(&unique)
+        .expect("an admitted module resolves from its unique peer");
+    assert_eq!(module_id.as_str(), "clock");
     assert!(host.module_for_sender(&info.manifest.bus_name).is_none());
 
     let connection = Connection::connect(bus.connect().await.unwrap())
@@ -235,6 +259,76 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         attestation.sha256,
         crate::module::sha256_file(executable).unwrap()
     );
+    broker_task.abort();
+}
+
+#[tokio::test]
+async fn concurrent_linked_setup_keeps_each_export_bound_to_its_own_host_connection() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let host = ModuleHost::new(broker);
+    let setups = Arc::new(StdMutex::new(Vec::<(String, &'static str, Connection)>::new()));
+
+    let setup_a = setups.clone();
+    let mut manifest_a = named_manifest("linked-a", "LinkedA");
+    manifest_a.lazy_init = true;
+    let attach_a = host.attach_linked_with_setup(
+        LinkedModule {
+            descriptor: TbAbiDescriptor::current("linked-a", "0.1.0"),
+            manifest: manifest_a,
+            init: lazy_echo_init,
+        },
+        serde_json::json!({"setup": "a"}),
+        move |connection| async move {
+            let unique = connection
+                .unique_name()
+                .expect("each linked setup gets a broker peer")
+                .to_string();
+            connection
+                .serve_at("/linked/setup".parse().unwrap(), LinkedSetupValue("a"))
+                .await?;
+            setup_a.lock().unwrap().push((unique, "a", connection));
+            Ok(())
+        },
+    );
+
+    let setup_b = setups.clone();
+    let mut manifest_b = named_manifest("linked-b", "LinkedB");
+    manifest_b.lazy_init = true;
+    let attach_b = host.attach_linked_with_setup(
+        LinkedModule {
+            descriptor: TbAbiDescriptor::current("linked-b", "0.1.0"),
+            manifest: manifest_b,
+            init: lazy_echo_init,
+        },
+        serde_json::json!({"setup": "b"}),
+        move |connection| async move {
+            let unique = connection
+                .unique_name()
+                .expect("each linked setup gets a broker peer")
+                .to_string();
+            connection
+                .serve_at("/linked/setup".parse().unwrap(), LinkedSetupValue("b"))
+                .await?;
+            setup_b.lock().unwrap().push((unique, "b", connection));
+            Ok(())
+        },
+    );
+
+    let (a, b) = tokio::join!(attach_a, attach_b);
+    assert_eq!(a.unwrap().state, ModuleState::Resolved);
+    assert_eq!(b.unwrap().state, ModuleState::Resolved);
+    let setups = std::mem::take(&mut *setups.lock().unwrap());
+    assert_eq!(setups.len(), 2);
+    assert_ne!(setups[0].0, setups[1].0);
+    for (unique, expected, connection) in setups.iter() {
+        let proxy = connection
+            .proxy(unique.as_str(), "/linked/setup", "org.example.LinkedSetup")
+            .unwrap();
+        let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
+        assert_eq!(value, serde_json::json!(expected));
+    }
     broker_task.abort();
 }
 
