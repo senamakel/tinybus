@@ -705,10 +705,14 @@ fn bundled_directory_lookup_reads_the_explicit_environment_variable_name() {
     let env_var = "TINYBUS_TEST_BUNDLED_RELEASES";
     unsafe { std::env::set_var(env_var, &from_env) };
 
-    let resolved = resolve_bundled_dir(env_var);
+    let resolved_from_env = resolve_bundled_dir(env_var);
     unsafe { std::env::remove_var(env_var) };
+    assert_eq!(resolved_from_env, Some(from_env));
 
-    assert_eq!(resolved, Some(from_env));
+    let registered = root.path().join("registered");
+    std::fs::create_dir_all(&registered).unwrap();
+    assert!(set_bundled_releases_dir(registered.clone()).is_ok());
+    assert_eq!(resolve_bundled_dir(env_var), Some(registered));
 }
 
 #[test]
@@ -732,6 +736,13 @@ fn linked_registry_replaces_factories_and_returns_the_last_registration() {
     registry.register("registry-test", replacement_factory);
     let replacement = (registry.get("registry-test").unwrap())();
     assert!(matches!(replacement, Err(error) if error.to_string().contains("replacement factory")));
+
+    let global = LinkedRegistry::global();
+    let same_global = LinkedRegistry::global();
+    global.register("global-registry-test", first_factory);
+    assert!(same_global.is_registered("global-registry-test"));
+    let global_result = (same_global.get("global-registry-test").unwrap())();
+    assert!(matches!(global_result, Err(error) if error.to_string().contains("first factory")));
 }
 
 struct ResolverSearchSink;
