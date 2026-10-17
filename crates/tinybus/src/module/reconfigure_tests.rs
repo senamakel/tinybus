@@ -291,10 +291,16 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
     let unattested_service = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    unattested_service.request_name(UNATTESTED_BUS).await.unwrap();
+    unattested_service
+        .request_name(UNATTESTED_BUS)
+        .await
+        .unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     unattested_service
-        .serve_at(ObjectPath::new(PATH).unwrap(), UnattestedService(calls.clone()))
+        .serve_at(
+            ObjectPath::new(PATH).unwrap(),
+            UnattestedService(calls.clone()),
+        )
         .await
         .unwrap();
     (
@@ -414,8 +420,11 @@ async fn member_strategy_refuses_an_unattested_recipient_before_delivery() {
     let _test_guard = FIXTURE_LOCK.lock().await;
     let (access, calls) = fixture_with_unattested_destination().await;
     assert!(access.unattested_service.is_some());
-    let module = ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure"));
-    let result = module.proxy(&serde_json::json!({ "token": "private" })).await;
+    let module =
+        ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure"));
+    let result = module
+        .proxy(&serde_json::json!({ "token": "private" }))
+        .await;
     assert_eq!(result.unwrap_err(), ModuleCallError::ModuleFault);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
