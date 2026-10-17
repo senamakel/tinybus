@@ -142,10 +142,36 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
         .unwrap();
     let remaining: serde_json::Value = remaining_proxy.call("Value", ()).await.unwrap();
     assert_eq!(remaining, serde_json::json!("second"));
+
+    runtime
+        .connection()
+        .serve_at(first_path.clone(), HostObjectValue("direct replacement"))
+        .await
+        .unwrap();
     drop(replacement);
+    let direct_replacement = runtime
+        .connection()
+        .proxy(
+            runtime.connection().unique_name().unwrap().as_str(),
+            first_path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
+        .unwrap();
+    let value: serde_json::Value = direct_replacement.call("Value", ()).await.unwrap();
+    assert_eq!(value, serde_json::json!("direct replacement"));
+    wait_for_owner(
+        runtime.connection(),
+        name.as_str(),
+        runtime.connection().unique_name(),
+    )
+    .await;
+
+    drop(second);
     wait_for_owner(runtime.connection(), name.as_str(), None).await;
-    let removed: crate::Result<serde_json::Value> = old_guard_proxy.call("Value", ()).await;
+    let removed: crate::Result<serde_json::Value> = remaining_proxy.call("Value", ()).await;
     assert!(removed.is_err());
+    let direct: serde_json::Value = direct_replacement.call("Value", ()).await.unwrap();
+    assert_eq!(direct, serde_json::json!("direct replacement"));
 }
 
 #[tokio::test]
