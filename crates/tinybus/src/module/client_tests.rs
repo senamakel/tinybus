@@ -277,6 +277,73 @@ async fn a_fixture_proxy_is_classified_and_reported_when_the_call_fails() {
     assert_eq!(sink.0.lock().unwrap().len(), 1);
 }
 
+struct DetailedFailure;
+
+#[async_trait::async_trait]
+impl crate::Interface for DetailedFailure {
+    fn name(&self) -> crate::InterfaceName {
+        crate::InterfaceName::new(RECORD.bus_name).unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec![crate::MemberName::new("Fail").unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Err(Error::MethodFailed {
+            name: "com.example.PrivateFailure".to_string(),
+            message: "private remote detail".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn detailed_call_preserves_remote_failure_without_rendering_it() {
+    let sink = Arc::new(Recording::default());
+    let transport = crate::transport::memory::MemoryBus::new();
+    let _broker = crate::Broker::new().spawn(transport.clone());
+    let service = crate::Connection::connect(transport.connect().await.unwrap())
+        .await
+        .unwrap();
+    service.request_name(RECORD.bus_name).await.unwrap();
+    service
+        .serve_at(
+            crate::ObjectPath::new(RECORD.object_path).unwrap(),
+            DetailedFailure,
+        )
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(transport.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = caller
+        .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+        .unwrap();
+    let client = ModuleClient::new(ReadyAccess {
+        connection: caller,
+        reporter: FailureReporter::new(sink.clone()),
+        proxy_failure: None,
+    })
+    .with_fixture(proxy);
+
+    let failure = client
+        .call_detailed::<String>(RECORD.id, "Fail", ())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, ModuleCallError::ModuleFault);
+    assert_eq!(failure.wire_name, "com.example.PrivateFailure");
+    assert_eq!(failure.message, "private remote detail");
+    for rendered in [format!("{failure:?}"), failure.to_string()] {
+        assert!(!rendered.contains("com.example.PrivateFailure"));
+        assert!(!rendered.contains("private remote detail"));
+    }
+    assert_eq!(sink.0.lock().unwrap().len(), 1);
+}
+
 struct JsonFixture;
 #[async_trait::async_trait]
 impl crate::Interface for JsonFixture {
