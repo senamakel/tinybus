@@ -250,17 +250,83 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
     let (received_tx, _received_rx) = tokio::sync::mpsc::unbounded_channel();
     let fixture = fixture(Behavior::Consume(received_tx)).await;
     let builder_calls = Arc::new(AtomicUsize::new(0));
-    let make_args = {
-        let builder_calls = builder_calls.clone();
-        move |stream: &StreamRef| {
-            builder_calls.fetch_add(1, Ordering::SeqCst);
-            (stream,)
-        }
-    };
+    assert!(fixture
+        .client
+        .call_with_stream_detailed::<Value, _, _>(
+            "unknown",
+            "Upload",
+            {
+                let builder_calls = builder_calls.clone();
+                move |stream: &StreamRef| {
+                    builder_calls.fetch_add(1, Ordering::SeqCst);
+                    (stream,)
+                }
+            },
+            b"x",
+        )
+        .await
+        .is_err());
+
+    let proxy = fixture.client.fixture_proxy().unwrap();
+    let disabled = ModuleClient::new(StreamAccess {
+        connection: fixture.connection.clone(),
+        reporter: FailureReporter::new(Arc::new(Reports::default())),
+        enabled: false,
+        ready: true,
+    })
+    .with_fixture(proxy.clone());
+    assert!(disabled
+        .call_with_stream_detailed::<Value, _, _>(
+            RECORD.id,
+            "Upload",
+            {
+                let builder_calls = builder_calls.clone();
+                move |stream: &StreamRef| {
+                    builder_calls.fetch_add(1, Ordering::SeqCst);
+                    (stream,)
+                }
+            },
+            b"x",
+        )
+        .await
+        .is_err());
+
+    let unready = ModuleClient::new(StreamAccess {
+        connection: fixture.connection.clone(),
+        reporter: FailureReporter::new(Arc::new(Reports::default())),
+        enabled: true,
+        ready: false,
+    });
+    assert!(unready
+        .call_with_stream_detailed::<Value, _, _>(
+            RECORD.id,
+            "Upload",
+            {
+                let builder_calls = builder_calls.clone();
+                move |stream: &StreamRef| {
+                    builder_calls.fetch_add(1, Ordering::SeqCst);
+                    (stream,)
+                }
+            },
+            b"x",
+        )
+        .await
+        .is_err());
 
     assert!(fixture
         .client
-        .call_with_stream_detailed::<Value, _, _>("unknown", "Upload", make_args, b"x")
+        .call_with_stream_detailed::<Value, _, _>(
+            RECORD.id,
+            "invalid/member",
+            {
+                let builder_calls = builder_calls.clone();
+                move |stream: &StreamRef| {
+                    builder_calls.fetch_add(1, Ordering::SeqCst);
+                    (stream,)
+                }
+            },
+            b"x",
+        )
         .await
         .is_err());
     assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
@@ -317,7 +383,7 @@ async fn method_failure_and_cancellation_abort_a_streamed_upload() {
         .await
         .unwrap_err();
     assert_eq!(failure.wire_name, "ai.tinyhumans.tinydocs.Error.InvalidInput");
-    tokio::time::timeout(Duration::from_secs(10), fixture.aborts.recv())
+    tokio::time::timeout(Duration::from_secs(10), failed_fixture.aborts.recv())
         .await
         .expect("method failure dropped the unfinished stream writer")
         .expect("the abort observer remained connected");
