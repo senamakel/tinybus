@@ -29,6 +29,14 @@ static INITIALIZER_STARTED: OnceLock<StdMutex<Option<std::sync::mpsc::SyncSender
     OnceLock::new();
 static INITIALIZER_RELEASE: OnceLock<StdMutex<Option<std::sync::mpsc::Receiver<()>>>> =
     OnceLock::new();
+static BLOCKED_MEMBER: OnceLock<StdMutex<Option<BlockedMember>>> = OnceLock::new();
+static MEMBER_CONFIG_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+struct BlockedMember {
+    entered: std::sync::mpsc::SyncSender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    finished: std::sync::mpsc::SyncSender<()>,
+}
 
 struct FixtureState {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
@@ -86,30 +94,62 @@ unsafe extern "C" fn fixture_init(host: *const TbHostVtable, out: *mut TbModuleV
     std::thread::spawn(move || {
         unsafe { ready(host_ctx as *mut c_void) };
         while let Ok(bytes) = rx.recv() {
-            let Ok(message) = serde_json::from_slice::<Message>(&bytes) else {
-                continue;
-            };
-            if message.header.kind != crate::message::MessageKind::MethodCall {
-                continue;
-            }
-            let member = message.header.member.as_ref().map(|name| name.as_str());
-            let body = match member {
-                Some("ReadConfig") => service_config.lock().unwrap().clone(),
-                Some("Configure") => {
+            let service_config = service_config.clone();
+            std::thread::spawn(move || {
+                let Ok(message) = serde_json::from_slice::<Message>(&bytes) else {
+                    return;
+                };
+                if message.header.kind != crate::message::MessageKind::MethodCall {
+                    return;
+                }
+                let member = message.header.member.as_ref().map(|name| name.as_str());
+                let blocked = if member == Some("Configure") {
                     let config = message
                         .body
                         .as_array()
                         .and_then(|values| values.first())
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
-                    *service_config.lock().unwrap() = config.clone();
-                    config
+                    MEMBER_CONFIG_CALLS.fetch_add(1, Ordering::SeqCst);
+                    if config.get("hold_member").and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                    {
+                        BLOCKED_MEMBER
+                            .get_or_init(|| StdMutex::new(None))
+                            .lock()
+                            .expect("blocked member fixture lock")
+                            .take()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(blocked) = &blocked {
+                    let _ = blocked.entered.send(());
+                    let _ = blocked.release.recv();
                 }
-                _ => serde_json::Value::Null,
-            };
-            let reply = Message::method_return(&message.header, body);
-            let reply = serde_json::to_vec(&reply).expect("fixture reply serializes");
-            let _ = unsafe { send(host_ctx as *mut c_void, reply.as_ptr(), reply.len()) };
+                let body = match member {
+                    Some("ReadConfig") => service_config.lock().unwrap().clone(),
+                    Some("Configure") => {
+                        let config = message
+                            .body
+                            .as_array()
+                            .and_then(|values| values.first())
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        *service_config.lock().unwrap() = config.clone();
+                        config
+                    }
+                    _ => serde_json::Value::Null,
+                };
+                let reply = Message::method_return(&message.header, body);
+                let reply = serde_json::to_vec(&reply).expect("fixture reply serializes");
+                let _ = unsafe { send(host_ctx as *mut c_void, reply.as_ptr(), reply.len()) };
+                if let Some(blocked) = blocked {
+                    let _ = blocked.finished.send(());
+                }
+            });
         }
     });
     let state = Box::into_raw(Box::new(FixtureState { tx, config }));
@@ -166,6 +206,7 @@ struct FixtureAccess {
     use_unattested_proxy: bool,
     /// The retry scenario holds a concurrent first call inside initialization.
     skip_ready_wait: bool,
+    member_proxy_timeout: Option<Duration>,
     forced_reinitialize_failure: Option<ReconfigureFailure>,
     proxy_failure: Option<ProxyFailure>,
     initializing_left: StdMutex<usize>,
@@ -225,9 +266,12 @@ impl ModuleAccess for FixtureAccess {
             } else {
                 bus_name
             };
-            self.connection
+            let proxy = self.connection
                 .proxy(destination, object_path, bus_name)
-                .map_err(|_| ProxyFailure::Contract)
+                .map_err(|_| ProxyFailure::Contract)?;
+            Ok(self
+                .member_proxy_timeout
+                .map_or(proxy.clone(), |timeout| proxy.with_timeout(timeout)))
         })
     }
     fn reinitialize<'a>(
@@ -345,6 +389,7 @@ async fn fixture() -> FixtureAccess {
         unattested_service: None,
         use_unattested_proxy: false,
         skip_ready_wait: false,
+        member_proxy_timeout: None,
         forced_reinitialize_failure: None,
         proxy_failure: None,
         initializing_left: StdMutex::new(0),
@@ -475,6 +520,7 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
         unattested_service: None,
         use_unattested_proxy: false,
         skip_ready_wait: true,
+        member_proxy_timeout: None,
         forced_reinitialize_failure: None,
         proxy_failure: None,
         initializing_left: StdMutex::new(0),
@@ -564,6 +610,7 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
             unattested_service: Some(unattested_service),
             use_unattested_proxy: true,
             skip_ready_wait: false,
+            member_proxy_timeout: None,
             forced_reinitialize_failure: None,
             proxy_failure: None,
             initializing_left: StdMutex::new(0),
