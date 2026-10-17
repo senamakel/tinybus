@@ -765,6 +765,7 @@ impl ModuleHost {
             .find(|loaded| loaded.info.name == info.name)
             .map(|loaded| loaded.transport.clone())
             .ok_or_else(|| Error::failed("linked module did not retain its admitted transport"))?;
+        transport.ensure_initialized().await?;
         if tokio::time::timeout(Duration::from_secs(5), transport.wait_ready())
             .await
             .is_err()
@@ -1323,7 +1324,7 @@ impl ModuleHost {
         })?;
         let (transport, host_vtable) = ModuleTransport::new(admitted.name.clone(), config);
         match linked_setup {
-            Some((init, setup)) if artifact.manifest.lazy_init => {
+            Some((init, setup)) => {
                 admitted.state = ModuleState::Resolved;
                 transport.defer_initializer(host_vtable, move |host| {
                     let mut module = TbModuleVtable::default();
@@ -1334,27 +1335,6 @@ impl ModuleHost {
                         Err("linked module initialization failed".to_string())
                     }
                 });
-            }
-            Some((init, setup)) => {
-                admitted.state = ModuleState::Initializing;
-                if let Err(failure) = transport.eager_initialize_with(host_vtable, move |host| {
-                    let mut module = TbModuleVtable::default();
-                    let code = unsafe { init(&host, &mut module, setup) };
-                    if code == TB_OK {
-                        Ok(module)
-                    } else {
-                        Err("linked module initialization failed".to_string())
-                    }
-                }) {
-                    let reason = if failure.to_string().contains("vtable") {
-                        "module returned an invalid vtable"
-                    } else {
-                        "module initialization failed"
-                    };
-                    let error = Error::module_refused(path, reason);
-                    self.record_manifest_rejection(&error, manifest, RefusalClass::Failed);
-                    return Err(error);
-                }
             }
             None if artifact.manifest.lazy_init => {
                 admitted.state = ModuleState::Resolved;

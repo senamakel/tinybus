@@ -80,7 +80,7 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
     let bus = MemoryBus::new();
     let broker = Broker::new();
     let broker_task = broker.clone().spawn(bus.clone());
-    let host = ModuleHost::new(broker);
+    let host = Arc::new(ModuleHost::new(broker));
     let observer = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
@@ -89,11 +89,19 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
     ));
 
     let setup_a = setups.clone();
+    let host_a = host.clone();
     let first = host.attach_linked_with_setup(
         linked_export("linked_a"),
         serde_json::json!({}),
         move |connection| async move {
             let peer = connection.unique_name().expect("connected module peer");
+            assert_eq!(
+                host_a
+                    .module_for_sender(&peer)
+                    .as_ref()
+                    .map(tinybus::module::ModuleId::as_str),
+                Some("linked_a")
+            );
             connection
                 .serve_at("/linked/setup".parse().unwrap(), SetupValue("a"))
                 .await?;
@@ -108,11 +116,19 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
     );
 
     let setup_b = setups.clone();
+    let host_b = host.clone();
     let second = host.attach_linked_with_setup(
         linked_export("linked_b"),
         serde_json::json!({}),
         move |connection| async move {
             let peer = connection.unique_name().expect("connected module peer");
+            assert_eq!(
+                host_b
+                    .module_for_sender(&peer)
+                    .as_ref()
+                    .map(tinybus::module::ModuleId::as_str),
+                Some("linked_b")
+            );
             connection
                 .serve_at("/linked/setup".parse().unwrap(), SetupValue("b"))
                 .await?;
