@@ -698,5 +698,5 @@ async fn an_exclusive_guard_keeps_the_config_stable_until_the_bus_call_finishes(
     assert_eq!(read_config(&second_proxy).await, second);
 }
 
-#[path = "../reconfigure_policy_tests.rs"]
+#[path = "reconfigure_policy_tests.rs"]
 mod policy;
