@@ -906,6 +906,36 @@ impl ModuleTransport {
                 return Err(Error::ConnectionClosed);
             }
         }
+        if !self.is_ready() {
+            // The C initializer only publishes its vtable. SDK setup is
+            // asynchronous and installs the reinitialization connection slot
+            // immediately before host.ready, so invoking the callback earlier
+            // can reject a valid replacement as closed. Readiness may wait on
+            // module code; never retain the lifecycle lock across that wait.
+            drop(lifecycle);
+            let remaining = MODULE_INIT_DEADLINE.saturating_sub(started.elapsed());
+            tokio::time::timeout(remaining, self.wait_ready())
+                .await
+                .map_err(|_| Error::Timeout {
+                    member: crate::MemberName::new("ReinitializeModule")
+                        .expect("static member name is valid"),
+                    timeout_ms: MODULE_INIT_DEADLINE.as_millis() as u64,
+                })?;
+            if !self.is_ready() {
+                return Err(Error::ConnectionClosed);
+            }
+            let remaining = MODULE_INIT_DEADLINE.saturating_sub(started.elapsed());
+            lifecycle = tokio::time::timeout(remaining, self.lifecycle.clone().lock_owned())
+                .await
+                .map_err(|_| Error::Timeout {
+                    member: crate::MemberName::new("ReinitializeModule")
+                        .expect("static member name is valid"),
+                    timeout_ms: MODULE_INIT_DEADLINE.as_millis() as u64,
+                })?;
+            if self.admission_closed() || self.is_faulted() || !self.is_ready() {
+                return Err(Error::ConnectionClosed);
+            }
+        }
         let module = self
             .module
             .lock()
