@@ -480,6 +480,45 @@ async fn failed_shared_registration_preserves_the_existing_host_object_guard() {
 }
 
 #[tokio::test]
+async fn failed_registration_preserves_a_name_owned_before_the_helper() {
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let name: crate::BusName = "ai.tinyhumans.test.PreownedHostObjectFailure"
+        .parse()
+        .unwrap();
+    let path: crate::ObjectPath = "/runtime/preowned_failure".parse().unwrap();
+    runtime
+        .connection()
+        .request_name(name.as_str())
+        .await
+        .unwrap();
+    let owner = runtime.connection().unique_name();
+
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path, PanickingHostObjectName)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime
+            .connection()
+            .name_owner(name.as_str())
+            .await
+            .unwrap(),
+        owner,
+        "failed registration must retain the name claimed before the helper"
+    );
+    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+
+    runtime
+        .connection()
+        .release_name(name.as_str())
+        .await
+        .unwrap();
+    wait_for_owner(runtime.connection(), name.as_str(), None).await;
+}
+
+#[tokio::test]
 async fn canceling_after_name_claim_rolls_back_on_the_module_runtime() {
     let runtime = Arc::new(ModuleRuntime::start(&RuntimeNames::default(), None).unwrap());
     let name: crate::BusName = "ai.tinyhumans.test.CancelAfterClaim".parse().unwrap();
