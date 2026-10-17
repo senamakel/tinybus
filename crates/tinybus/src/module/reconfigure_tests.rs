@@ -281,6 +281,21 @@ async fn changed_configuration_reinitializes_and_equal_configuration_does_not() 
 }
 
 #[tokio::test]
+async fn recorded_load_configuration_is_reused_until_invalidated() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let access = fixture().await;
+    let calls = access.reinitialize_calls.clone();
+    let module = ReconfigurableModule::new(access, ID);
+    module.record_loaded_with(&serde_json::Value::Null).unwrap();
+    let proxy = module.proxy(&serde_json::Value::Null).await.unwrap();
+    assert_eq!(read_config(&proxy).await, serde_json::Value::Null);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    module.invalidate();
+    module.proxy(&serde_json::Value::Null).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn a_failed_change_forgets_the_old_fingerprint_before_a_revert() {
     let _test_guard = FIXTURE_LOCK.lock().await;
     let access = fixture().await;
