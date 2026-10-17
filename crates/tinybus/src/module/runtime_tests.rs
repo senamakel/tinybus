@@ -469,19 +469,24 @@ async fn a_same_connection_name_claim_that_wins_before_registration_is_preserved
             .serve_host_object(serving_name, serving_path, HostObjectValue("direct owner"))
             .await
     });
-    let entered = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        barrier.entered.acquire(),
-    )
-    .await
-    .expect("host registration did not reach the name-request race")
-    .unwrap();
+    let entered =
+        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.entered.acquire())
+            .await
+            .expect("host registration did not reach the name-request race")
+            .unwrap();
 
-    runtime.connection().request_name(name.as_str()).await.unwrap();
+    runtime
+        .connection()
+        .request_name(name.as_str())
+        .await
+        .unwrap();
     let owner = runtime.connection().unique_name();
     barrier.release.add_permits(1);
     drop(entered);
-    let guard = serving.await.unwrap().expect("helper registers the interface");
+    let guard = serving
+        .await
+        .unwrap()
+        .expect("helper registers the interface");
     runtime.host_objects.lock().await.before_name_request = None;
 
     let proxy = runtime
@@ -498,13 +503,24 @@ async fn a_same_connection_name_claim_that_wins_before_registration_is_preserved
     wait_for_host_name_lease_cleanup(&runtime, &name).await;
 
     assert_eq!(
-        runtime.connection().name_owner(name.as_str()).await.unwrap(),
+        runtime
+            .connection()
+            .name_owner(name.as_str())
+            .await
+            .unwrap(),
         owner,
         "dropping a helper guard must preserve an earlier same-peer claim"
     );
     let removed: crate::Result<serde_json::Value> = proxy.call("Value", ()).await;
-    assert!(removed.is_err(), "dropping the guard still removes its object");
-    runtime.connection().release_name(name.as_str()).await.unwrap();
+    assert!(
+        removed.is_err(),
+        "dropping the guard still removes its object"
+    );
+    runtime
+        .connection()
+        .release_name(name.as_str())
+        .await
+        .unwrap();
     wait_for_owner(runtime.connection(), name.as_str(), None).await;
 }
 
