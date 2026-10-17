@@ -65,6 +65,9 @@ pub struct CachedRelease<'a> {
     /// The archive digest compiled into the host, if it pins one. Checked
     /// against the release's own manifest and against the bytes.
     pub expected_sha256: Option<&'a str>,
+    /// The expected extracted-library digest, correlated with the archive in
+    /// the release checksum manifest.
+    pub expected_library_sha256: Option<&'a str>,
     /// Where the verified archive and its extraction live between launches.
     /// One directory per module version; the host names it.
     pub cache_dir: &'a Path,
@@ -88,6 +91,8 @@ struct ReleaseAsset {
 struct Checksums {
     #[serde(default)]
     sha256: HashMap<String, String>,
+    #[serde(default)]
+    library_sha256: HashMap<String, String>,
 }
 
 /// Where one release's manifest and archive were found.
@@ -279,6 +284,7 @@ fn manifest_digest(
 ) -> Result<String> {
     let checksums = parse_checksums(&located.manifest_name, &located.manifest)?;
     let manifest_sha = checksums
+        .sha256
         .get(asset_name)
         .ok_or_else(|| refused("release asset is absent from its checksum manifest"))?;
     validate_hash(manifest_sha)?;
@@ -289,6 +295,32 @@ fn manifest_digest(
         }
     }
     Ok(manifest_sha.to_ascii_lowercase())
+}
+
+/// The optional extracted-library digest correlated to the same release asset.
+fn manifest_library_digest(
+    located: &Located,
+    asset_name: &str,
+    expected: Option<&str>,
+) -> Result<Option<String>> {
+    let checksums = parse_checksums(&located.manifest_name, &located.manifest)?;
+    let Some(digest) = checksums.library_sha256.get(asset_name) else {
+        return if expected.is_some() {
+            Err(refused(
+                "release asset has no library digest in its checksum manifest",
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    validate_hash(digest)?;
+    if let Some(expected) = expected {
+        validate_hash(expected)?;
+        if !digest.eq_ignore_ascii_case(expected) {
+            return Err(refused("host library checksum disagrees with release checksum"));
+        }
+    }
+    Ok(Some(digest.to_ascii_lowercase()))
 }
 
 fn send(
@@ -376,18 +408,25 @@ fn parse_release_url(url: &str) -> Result<(&str, &str, &str)> {
     }
 }
 
-fn parse_checksums(name: &str, bytes: &[u8]) -> Result<HashMap<String, String>> {
+fn parse_checksums(name: &str, bytes: &[u8]) -> Result<Checksums> {
     if name.ends_with(".toml") {
         let source = std::str::from_utf8(bytes).map_err(|_| refused("checksum.toml is invalid"))?;
-        let parsed: Checksums =
-            toml::from_str(source).map_err(|_| refused("checksum.toml is invalid"))?;
-        return Ok(parsed.sha256);
+        return toml::from_str(source)
+            .map_err(|_| refused("checksum.toml is invalid"));
     }
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| refused("checksum.json is invalid"))?;
-    let object = value.get("sha256").unwrap_or(&value);
-    serde_json::from_value(object.clone())
-        .map_err(|_| refused("checksum.json has an invalid shape"))
+    let sha256 = value.get("sha256").unwrap_or(&value).clone();
+    let library_sha256 = value
+        .get("library_sha256")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    Ok(Checksums {
+        sha256: serde_json::from_value(sha256)
+            .map_err(|_| refused("checksum.json has an invalid shape"))?,
+        library_sha256: serde_json::from_value(library_sha256)
+            .map_err(|_| refused("checksum.json has an invalid library digest shape"))?,
+    })
 }
 
 fn validate_hash(hash: &str) -> Result<()> {

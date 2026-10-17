@@ -97,6 +97,14 @@ pub struct Attestation {
     /// its code, not a release archive pin. A sender of a secret must recognize
     /// linked registration explicitly before accepting that digest.
     pub sha256: String,
+    /// Lowercase hex SHA-256 of the extracted library, when the host verified
+    /// one separately from the admitted artifact digest.
+    ///
+    /// GitHub release attestations keep [`Self::sha256`] bound to the pinned
+    /// archive and carry this value for the extracted library. Legacy peers
+    /// omit it, which leaves strict library-pinned calls ineligible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_sha256: Option<String>,
 }
 
 /// Whether `value` is exactly 64 hex digits.
