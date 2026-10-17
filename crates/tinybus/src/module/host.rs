@@ -241,7 +241,7 @@ struct ModuleHostInner {
     warned: AtomicBool,
     search_path_config: RwLock<Option<SearchPathConfig>>,
     #[cfg(test)]
-    before_loaded_publish: Mutex<Option<LoadedPublishBarrier>>,
+    after_loaded_publish: Mutex<Option<LoadedPublishBarrier>>,
 }
 
 #[cfg(test)]
@@ -445,7 +445,7 @@ impl ModuleHost {
             warned: AtomicBool::new(false),
             search_path_config: RwLock::new(None),
             #[cfg(test)]
-            before_loaded_publish: Mutex::new(None),
+            after_loaded_publish: Mutex::new(None),
         });
         let control: Arc<dyn ModuleControl> = inner.clone();
         broker.set_module_control(Arc::downgrade(&control));
@@ -1659,7 +1659,7 @@ impl ModuleHost {
         #[cfg(test)]
         if let Some(barrier) = self
             .inner
-            .before_loaded_publish
+            .after_loaded_publish
             .lock()
             .expect("loaded publication barrier lock")
             .take()

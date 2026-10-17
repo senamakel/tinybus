@@ -2909,7 +2909,7 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
     *modules
         .inner
-        .before_loaded_publish
+        .after_loaded_publish
         .lock()
         .expect("loaded publication barrier lock") = Some(LoadedPublishBarrier {
         reached: reached_tx,
