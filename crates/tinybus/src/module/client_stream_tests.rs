@@ -76,6 +76,7 @@ struct ObservedTransport {
     inner: Box<dyn crate::ports::Transport>,
     opens: Arc<AtomicUsize>,
     aborts: tokio::sync::mpsc::UnboundedSender<()>,
+    refuse_first_write: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait]
@@ -92,6 +93,13 @@ impl crate::ports::Transport for ObservedTransport {
                     self.aborts.send(()).unwrap();
                 }
                 _ => {}
+            }
+            if member == Some("Write")
+                && self
+                    .refuse_first_write
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(Error::protocol("private write refusal detail"));
             }
         }
         self.inner.send(message).await
@@ -167,6 +175,7 @@ struct Fixture {
     connection: Connection,
     opens: Arc<AtomicUsize>,
     calls: Arc<AtomicUsize>,
+    refuse_first_write: Arc<std::sync::atomic::AtomicBool>,
     aborts: tokio::sync::mpsc::UnboundedReceiver<()>,
     reports: Arc<Reports>,
 }
@@ -179,6 +188,9 @@ async fn fixture(behavior: Behavior) -> Fixture {
         .await
         .unwrap();
     service.request_name(RECORD.bus_name).await.unwrap();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse_first_write = Arc::new(std::sync::atomic::AtomicBool::new(false));
     service
         .serve_at(
             ObjectPath::new(RECORD.object_path).unwrap(),
@@ -202,13 +214,12 @@ async fn fixture(behavior: Behavior) -> Fixture {
         .await
         .unwrap();
 
-    let opens = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::new(AtomicUsize::new(0));
     let (aborts_tx, aborts) = tokio::sync::mpsc::unbounded_channel();
     let observed = ObservedTransport {
         inner: bus.connect().await.unwrap(),
         opens: opens.clone(),
         aborts: aborts_tx,
+        refuse_first_write: refuse_first_write.clone(),
     };
     let connection = Connection::connect(Box::new(observed)).await.unwrap();
     let reports = Arc::new(Reports::default());
@@ -226,6 +237,7 @@ async fn fixture(behavior: Behavior) -> Fixture {
         connection,
         opens,
         calls,
+        refuse_first_write,
         aborts,
         reports,
     }
@@ -396,6 +408,23 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
         .unwrap_err();
     assert_eq!(object_failure.wire_name, failure.wire_name);
     assert_eq!(object_failure.message, failure.message);
+    let sanitized_stream = invalid_fixture
+        .client
+        .call_with_stream::<Value, _, _>(
+            RECORD.id,
+            "InvalidInput",
+            |stream| serde_json::json!([stream]),
+            b"untrusted input",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(sanitized_stream, ModuleCallError::ModuleFault);
+    assert!(!format!("{sanitized_stream:?}").contains("secret document detail"));
+    assert!(
+        !sanitized_stream
+            .to_string()
+            .contains("secret document detail")
+    );
     let unavailable_fixture = fixture(Behavior::Unavailable).await;
     let unavailable_object = unavailable_fixture
         .client
@@ -421,8 +450,130 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
             Reason::ModuleFault,
             Reason::ModuleFault,
             Reason::ModuleFault,
+            Reason::ModuleFault,
         ]
     );
+}
+
+struct FailsSerialization;
+
+impl serde::Serialize for FailsSerialization {
+    fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(serde::ser::Error::custom("secret serialization detail"))
+    }
+}
+
+#[tokio::test]
+async fn argument_serialization_failure_aborts_before_delivering_the_business_method() {
+    let (received_tx, _received_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut fixture = fixture(Behavior::Consume(received_tx)).await;
+    let builder_calls = Arc::new(AtomicUsize::new(0));
+    let called = builder_calls.clone();
+    let failure = fixture
+        .client
+        .call_with_stream_detailed::<Value, _, FailsSerialization>(
+            RECORD.id,
+            "Upload",
+            move |_stream| {
+                called.fetch_add(1, Ordering::SeqCst);
+                FailsSerialization
+            },
+            b"payload",
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(failure.kind, ModuleCallError::IncompatibleContract);
+    assert!(!format!("{failure:?}").contains("secret serialization detail"));
+    assert!(!failure.to_string().contains("secret serialization detail"));
+    assert_eq!(builder_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.opens.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    tokio::time::timeout(Duration::from_secs(10), fixture.aborts.recv())
+        .await
+        .expect("failed argument serialization dropped the opened writer")
+        .expect("the abort observer remained connected");
+}
+
+#[tokio::test]
+async fn module_client_timeout_bounds_a_stalled_method_reply() {
+    let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let fixture = fixture(Behavior::Stall {
+        entered: entered_tx,
+        resume: resume.clone(),
+    })
+    .await;
+    let client = fixture
+        .client
+        .clone()
+        .with_timeout(Duration::from_millis(100));
+    let call = tokio::spawn(async move {
+        client
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "Stall",
+                |stream| serde_json::json!([stream]),
+                &[],
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(10), entered_rx.recv())
+        .await
+        .expect("stalled method was dispatched")
+        .expect("the method-entry observer remained connected");
+    let failure = tokio::time::timeout(Duration::from_secs(2), call)
+        .await
+        .expect("ModuleClient timeout bounded the stalled reply")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(failure.kind, ModuleCallError::TransportFailed);
+    resume.notify_one();
+}
+
+#[tokio::test]
+async fn a_refused_stream_write_aborts_the_opened_upload() {
+    let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let mut fixture = fixture(Behavior::Stall {
+        entered: entered_tx,
+        resume: resume.clone(),
+    })
+    .await;
+    fixture
+        .refuse_first_write
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let client = fixture.client.clone();
+    let task = tokio::spawn(async move {
+        client
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "Stall",
+                |stream| serde_json::json!([stream]),
+                b"write will be refused",
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(10), entered_rx.recv())
+        .await
+        .expect("stalled method was dispatched")
+        .expect("the method-entry observer remained connected");
+    let failure = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("the refused chunk failed without waiting for the stalled method")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(failure.kind, ModuleCallError::TransportFailed);
+    tokio::time::timeout(Duration::from_secs(10), fixture.aborts.recv())
+        .await
+        .expect("write failure dropped the unfinished stream writer")
+        .expect("the abort observer remained connected");
+    resume.notify_one();
 }
 
 #[tokio::test]
