@@ -32,7 +32,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use super::refused;
 use crate::module::cache;
 use crate::module::hash::file_hex;

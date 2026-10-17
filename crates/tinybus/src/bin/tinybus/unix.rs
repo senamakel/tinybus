@@ -505,6 +505,9 @@ fn library_sha256_in_archive(path: &Path) -> Result<Option<String>> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err(Error::failed("checksum path has no safe filename"));
     };
+    if name.ends_with(".zip") {
+        return tinybus::module::sha256_zip_module_library(path).map(Some);
+    }
     let file = std::fs::File::open(path)?;
     let reader: Box<dyn Read> = if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
         Box::new(flate2::read::GzDecoder::new(file))
