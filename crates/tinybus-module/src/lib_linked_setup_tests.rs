@@ -1,15 +1,16 @@
-//! Per-attachment stateful setup for generated linked module exports.
+use super::*;
+// Per-attachment stateful setup for generated linked module exports.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tinybus::Interface;
 use tinybus::broker::Broker;
 use tinybus::module::{
     LinkedModule, ModuleHost, ModuleId, ModuleRuntime, ModuleSenderLookup, ModuleState,
     RuntimeNames, RuntimeSetup,
 };
 use tinybus::transport::memory::MemoryBus;
-use tinybus::{Connection, Interface};
 
 static DEFAULT_SETUP_CALLS: AtomicUsize = AtomicUsize::new(0);
 

@@ -1289,7 +1289,7 @@ mod tests;
 mod static_link_tests;
 
 #[cfg(test)]
-#[path = "linked_setup_tests.rs"]
+#[path = "lib_linked_setup_tests.rs"]
 mod linked_setup_tests;
 
 #[cfg(test)]
