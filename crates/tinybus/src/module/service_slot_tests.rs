@@ -3,6 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use tokio::sync::oneshot;
 
+#[derive(Debug, PartialEq, Eq)]
+struct HostError(&'static str);
+
 fn slot<K, S>() -> ModuleServiceSlot<K, S> {
     ModuleServiceSlot::new()
 }
@@ -171,6 +174,29 @@ async fn a_failed_open_leaves_the_slot_empty() {
     .await
     .expect("a later open should succeed");
     assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_partial_eq_key_and_host_error_type_need_no_tinybus_policy() {
+    let slot = ModuleServiceSlot::<f64, u8, HostError>::new();
+    let result = slot
+        .with(
+            1.25,
+            || async { Ok::<_, HostError>(7) },
+            |_| async { Err(HostError("host close error")) },
+            |service| {
+                Box::pin(async move {
+                    *service += 1;
+                    Ok::<_, HostError>(*service)
+                })
+            },
+        )
+        .await
+        .expect("the host error type should flow through the generic slot");
+
+    assert_eq!(result, 8);
+    assert_eq!(slot.close().await, Err(HostError("host close error")));
+    assert_eq!(slot.close().await, Ok(()));
 }
 
 #[tokio::test]
