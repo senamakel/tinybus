@@ -583,7 +583,7 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
 
     tokio::time::pause();
     tokio::time::advance(MODULE_INIT_DEADLINE).await;
-    let timed_out_before_ready = reinitializing.await.is_err();
+    let timed_out_before_ready = matches!(reinitializing.await, Err(Error::Timeout { .. }));
 
     release_setup_tx.send(()).unwrap();
     let first_call_result = tokio::time::timeout(Duration::from_secs(2), first_call)
