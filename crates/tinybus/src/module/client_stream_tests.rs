@@ -531,16 +531,7 @@ async fn module_client_timeout_bounds_a_stalled_method_reply() {
         .expect("ModuleClient timeout bounded the stalled reply")
         .unwrap()
         .unwrap_err();
-    assert_eq!(
-        failure.kind,
-        ModuleCallError::TransportFailed,
-        "wire failure: {} ({})",
-        failure.wire_name,
-        failure.message
-    );
-    assert!(!fixture
-        .refuse_first_write
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(failure.kind, ModuleCallError::TransportFailed);
     resume.notify_one();
 }
 
@@ -577,7 +568,18 @@ async fn a_refused_stream_write_aborts_the_opened_upload() {
         .expect("the refused chunk failed without waiting for the stalled method")
         .unwrap()
         .unwrap_err();
-    assert_eq!(failure.kind, ModuleCallError::TransportFailed);
+    assert_eq!(
+        failure.kind,
+        ModuleCallError::TransportFailed,
+        "wire failure: {} ({})",
+        failure.wire_name,
+        failure.message
+    );
+    assert!(
+        !fixture
+            .refuse_first_write
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
     tokio::time::timeout(Duration::from_secs(10), fixture.aborts.recv())
         .await
         .expect("write failure dropped the unfinished stream writer")
