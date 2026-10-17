@@ -89,6 +89,34 @@ fn checksum_manifest_keeps_archive_hash_and_adds_its_library_hash() {
 }
 
 #[test]
+fn checksum_manifest_reads_a_windows_library_from_zip_on_unix() {
+    use std::io::Write as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let archive_path = directory.path().join("clock-windows.zip");
+    let library = b"windows module bytes";
+    let mut archive = rawzip::ZipArchiveWriter::new(Vec::new());
+    let (mut entry, config) = archive.new_file("clock.dll").start().unwrap();
+    let mut writer = config.wrap(&mut entry);
+    writer.write_all(library).unwrap();
+    let (_, descriptor) = writer.finish().unwrap();
+    entry.finish(descriptor).unwrap();
+    std::fs::write(&archive_path, archive.finish().unwrap()).unwrap();
+
+    let library_path = directory.path().join("clock.dll");
+    std::fs::write(&library_path, library).unwrap();
+    let manifest_path = directory.path().join("checksum.toml");
+    write_checksum_manifest(std::slice::from_ref(&archive_path), Some(&manifest_path)).unwrap();
+    let manifest = std::fs::read_to_string(manifest_path).unwrap();
+    assert!(manifest.contains("[sha256]"));
+    assert!(manifest.contains("[library_sha256]"));
+    assert!(manifest.contains(&format!(
+        "\"clock-windows.zip\" = \"{}\"",
+        tinybus::module::sha256_file(library_path).unwrap()
+    )));
+}
+
+#[test]
 fn the_cli_parses_its_declared_commands_and_uses_explicit_addresses() {
     let cli = Cli::try_parse_from([
         "tinybus",
