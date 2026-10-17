@@ -64,7 +64,7 @@ fn initializing_metadata_roundtrips_without_changing_the_error_name() {
 }
 
 #[test]
-fn legacy_errors_and_unknown_or_misplaced_metadata_fail_safely() {
+fn legacy_errors_and_unknown_or_misplaced_metadata_fall_back_safely() {
     let call = call();
     let legacy = Message::error_reply(
         &call.header,
@@ -85,7 +85,11 @@ fn legacy_errors_and_unknown_or_misplaced_metadata_fail_safely() {
 
     let mut misplaced = Message::method_return(&call.header, Value::Null);
     misplaced.header.module_lifecycle = Some(ModuleLifecycle::Initializing);
-    assert!(misplaced.validate().is_err());
+    misplaced.validate().unwrap();
+    assert!(matches!(
+        misplaced.into_error(),
+        Error::MethodFailed { name, .. } if name == Error::FAILED
+    ));
 
     let mut wrong_name = Message::error_reply(
         &call.header,
@@ -96,7 +100,11 @@ fn legacy_errors_and_unknown_or_misplaced_metadata_fail_safely() {
         },
     );
     wrong_name.header.error_name = Some(Error::FAILED.to_owned());
-    assert!(wrong_name.validate().is_err());
+    wrong_name.validate().unwrap();
+    assert!(matches!(
+        wrong_name.into_error(),
+        Error::MethodFailed { name, .. } if name == Error::FAILED
+    ));
 
     let mut future: serde_json::Value = serde_json::to_value(Message::error_reply(
         &call.header,
@@ -109,7 +117,11 @@ fn legacy_errors_and_unknown_or_misplaced_metadata_fail_safely() {
     .unwrap();
     future["header"]["module_lifecycle"] = Value::String("future_state".into());
     let future: Message = serde_json::from_value(future).unwrap();
-    assert!(future.validate().is_err());
+    future.validate().unwrap();
+    assert!(matches!(
+        future.into_error(),
+        Error::MethodFailed { name, .. } if name == Error::MODULE_UNAVAILABLE
+    ));
 }
 
 #[test]
