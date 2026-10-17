@@ -633,7 +633,7 @@ impl ModuleHost {
         path: impl AsRef<Path>,
         config: serde_json::Value,
     ) -> Result<ModuleInfo> {
-        self.load_file_pinned(path, config, None)
+        self.load_file_pinned(path, config, None, None)
     }
 
     /// Load an artifact only if its actual manifest satisfies host requirements.
@@ -1073,6 +1073,7 @@ impl ModuleHost {
         config: serde_json::Value,
         pinned_sha256: Option<String>,
     ) -> Result<ModuleInfo> {
+        let pinned_library_sha256 = artifact.library_sha256.clone();
         let _admission = self.inner.admission.lock().expect("module admission lock");
         let manifest = artifact.manifest.clone();
         let mut admitted = self
@@ -1126,6 +1127,7 @@ impl ModuleHost {
                 lazy_load: false,
                 descriptor_info: None,
                 pinned_sha256,
+                pinned_library_sha256,
             },
         )
     }
