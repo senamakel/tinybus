@@ -75,3 +75,7 @@ impl ModuleAccess for Resolver {
         resolution::global().mark_faulted(id, "module reconfiguration failed".to_owned());
     }
 }
+
+#[cfg(test)]
+#[path = "resolve_access_tests.rs"]
+mod tests;

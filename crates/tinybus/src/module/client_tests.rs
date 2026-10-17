@@ -60,6 +60,45 @@ impl ModuleAccess for Loaderless {
     }
 }
 
+struct ReadyAccess {
+    connection: crate::Connection,
+    reporter: FailureReporter,
+    proxy_failure: Option<ProxyFailure>,
+}
+
+impl ModuleAccess for ReadyAccess {
+    fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
+        (id == RECORD.id).then_some(&RECORD)
+    }
+
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    fn reporter(&self) -> &FailureReporter {
+        &self.reporter
+    }
+
+    fn ensure_loaded<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn proxy<'a>(
+        &'a self,
+        bus_name: &'a str,
+        object_path: &'a str,
+    ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
+        Box::pin(async move {
+            if let Some(failure) = self.proxy_failure {
+                return Err(failure);
+            }
+            self.connection
+                .proxy(bus_name, object_path, bus_name)
+                .map_err(|_| ProxyFailure::Contract)
+        })
+    }
+}
+
 fn resolver(enabled: bool) -> (Arc<Recording>, Loaderless) {
     let sink = Arc::new(Recording::default());
     let access = Loaderless {
@@ -67,6 +106,18 @@ fn resolver(enabled: bool) -> (Arc<Recording>, Loaderless) {
         reporter: FailureReporter::new(sink.clone()),
     };
     (sink, access)
+}
+
+#[tokio::test]
+async fn lifecycle_defaults_keep_loaderless_access_source_compatible() {
+    let (_, access) = resolver(true);
+    assert_eq!(
+        access
+            .reinitialize(RECORD.id, serde_json::Value::Null)
+            .await,
+        Err(ReconfigureFailure::Unsupported)
+    );
+    access.mark_faulted(RECORD.id);
 }
 
 fn method_failed(name: &str) -> Error {
@@ -99,6 +150,11 @@ fn bus_errors_classify_to_closed_outcomes() {
             Reason::IncompatibleContract,
         ),
         (
+            Error::Json(serde_json::from_str::<serde_json::Value>("{").unwrap_err()),
+            ModuleCallError::IncompatibleContract,
+            Reason::IncompatibleContract,
+        ),
+        (
             method_failed(Error::NOT_ATTESTED),
             ModuleCallError::TransportFailed,
             Reason::TransportFailed,
@@ -117,6 +173,25 @@ fn bus_errors_classify_to_closed_outcomes() {
     for (error, outcome, reason) in cases {
         assert_eq!(classify(&error), (outcome, reason), "{error:?}");
     }
+}
+
+#[test]
+fn unavailable_proxy_failures_are_deduplicated_as_terminal_module_state() {
+    let sink = Arc::new(Recording::default());
+    let reporter = FailureReporter::new(sink.clone());
+    let error = Error::ModuleUnavailable {
+        module: RECORD.id.to_owned(),
+        state: "faulted".to_owned(),
+        detail: "module is faulted".to_owned(),
+    };
+    assert_eq!(
+        report_proxy_failure(&reporter, &RECORD, &error),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::ModuleUnavailable)]
+    );
 }
 
 #[test]
@@ -218,7 +293,8 @@ impl crate::Interface for JsonFixture {
 async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refusals() {
     let (sink, resolver) = resolver(true);
     let bus = crate::transport::memory::MemoryBus::new();
-    crate::broker::Broker::new().spawn(bus.clone());
+    let broker = crate::broker::Broker::new();
+    let _broker_task = broker.clone().spawn(bus.clone());
     let service = crate::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
@@ -243,6 +319,42 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
     let object = client.object_client(RECORD.id, "/child").await.unwrap();
     let reply: String = object.call("Json", ()).await.unwrap();
     assert_eq!(reply, "{\"answer\":42}");
+
+    let direct_sink = Arc::new(Recording::default());
+    let direct = ModuleClient::new(ReadyAccess {
+        connection: caller.clone(),
+        reporter: FailureReporter::new(direct_sink.clone()),
+        proxy_failure: None,
+    });
+    let direct_object = direct.object_client(RECORD.id, "/child").await.unwrap();
+    let reply: String = direct_object.call("Json", ()).await.unwrap();
+    assert_eq!(reply, "{\"answer\":42}");
+
+    for (failure, expected, reason) in [
+        (
+            ProxyFailure::Transport,
+            ModuleCallError::TransportFailed,
+            Reason::TransportFailed,
+        ),
+        (
+            ProxyFailure::Contract,
+            ModuleCallError::IncompatibleContract,
+            Reason::IncompatibleContract,
+        ),
+    ] {
+        let reporter = Arc::new(Recording::default());
+        let failing = ModuleClient::new(ReadyAccess {
+            connection: caller.clone(),
+            reporter: FailureReporter::new(reporter.clone()),
+            proxy_failure: Some(failure),
+        });
+        let result: Result<String, _> = failing.call(RECORD.id, "Json", ()).await;
+        assert_eq!(result, Err(expected));
+        assert_eq!(
+            reporter.0.lock().unwrap().as_slice(),
+            &[(RECORD.id.to_string(), reason)]
+        );
+    }
     assert!(
         client
             .object_client(RECORD.id, "invalid path")
@@ -263,6 +375,19 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
             .iter()
             .all(|(_, reason)| *reason == Reason::TransportFailed)
     );
+
+    broker.attest_module(
+        &service.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::BusName::new(RECORD.bus_name).unwrap(),
+            sha256: "a".repeat(64),
+        },
+    );
+    let reply: serde_json::Value = client
+        .call_confidential_json(RECORD.id, "Json", ())
+        .await
+        .unwrap();
+    assert_eq!(reply, serde_json::json!({ "answer": 42 }));
 }
 
 #[tokio::test]
