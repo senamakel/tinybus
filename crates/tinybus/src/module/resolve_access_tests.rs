@@ -1,11 +1,7 @@
 use super::*;
-use crate::module::abi::{
-    TB_BAD_ARGUMENT, TB_OK, TbAbiDescriptor, TbHostVtable, TbModuleVtable,
-};
+use crate::module::abi::{TB_BAD_ARGUMENT, TB_OK, TbAbiDescriptor, TbHostVtable, TbModuleVtable};
 use crate::module::failure::{FailureReport, FailureSink};
-use crate::module::manifest::{
-    MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy,
-};
+use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
 use crate::module::resolution::{self, Claim, Resolution, ResolutionState};
 use crate::module::runtime::{ModuleRuntime, RuntimeNames};
 use crate::module::{LinkedModule, ReleaseRecord, ResolverInputs};
@@ -38,7 +34,7 @@ fn runtime() -> &'static ModuleRuntime {
 }
 
 fn resolver(runtime_ready: bool) -> Resolver {
-    let runtime: RuntimeProvider = if runtime_ready {
+    let runtime: crate::module::RuntimeProvider = if runtime_ready {
         Arc::new(|| Box::pin(async { Ok(runtime()) }))
     } else {
         Arc::new(|| Box::pin(async { Err(crate::Error::transport("runtime unavailable")) }))
@@ -95,10 +91,7 @@ unsafe extern "C" fn reinitialize(_: *mut c_void, _: *const u8, _: usize) -> i32
     TB_OK
 }
 
-unsafe extern "C" fn initialize(
-    host: *const TbHostVtable,
-    out: *mut TbModuleVtable,
-) -> i32 {
+unsafe extern "C" fn initialize(host: *const TbHostVtable, out: *mut TbModuleVtable) -> i32 {
     if host.is_null() || out.is_null() {
         return TB_BAD_ARGUMENT;
     }
@@ -164,6 +157,12 @@ async fn resolver_access_forwards_runtime_proxy_lifecycle_and_fault_operations()
         .reinitialize(ID, serde_json::json!({ "route": "replacement" }))
         .await
         .unwrap();
+    assert_eq!(
+        access
+            .reinitialize("missingnotloaded", serde_json::Value::Null)
+            .await,
+        Err(ReconfigureFailure::Failed)
+    );
 
     let faulted_id = "resolveraccessfaulted";
     let Claim::Run { sender, .. } = resolution::global().claim(faulted_id) else {
@@ -186,9 +185,26 @@ async fn runtime_failures_map_to_proxy_transport_and_reconfigure_unavailable() {
         ProxyFailure::Transport
     );
     assert_eq!(
-        access
-            .reinitialize(ID, serde_json::Value::Null)
-            .await,
+        access.reinitialize(ID, serde_json::Value::Null).await,
         Err(ReconfigureFailure::Unavailable)
+    );
+}
+
+#[test]
+fn resolver_access_reconfigure_failure_uses_only_closed_error_state() {
+    assert_eq!(
+        reconfigure_failure(&crate::Error::ModuleUnavailable {
+            module: ID.to_owned(),
+            state: "faulted".to_owned(),
+            detail: "terminal".to_owned(),
+        }),
+        ReconfigureFailure::Unavailable
+    );
+    assert_eq!(
+        reconfigure_failure(&crate::Error::MethodFailed {
+            name: "ai.tinyhumans.tinybus.Error.Other".to_owned(),
+            message: "module initializing".to_owned(),
+        }),
+        ReconfigureFailure::Failed
     );
 }
