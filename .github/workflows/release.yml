@@ -58,12 +58,14 @@ jobs:
               exit 2
             }
           fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          echo "release_mode=$RELEASE_MODE" >> "$GITHUB_OUTPUT"
-          if [[ "$RELEASE_MODE" == reviewed-epic ]]; then
-            echo "reviewed_pr=$REVIEWED_PR" >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "release_mode=$RELEASE_MODE"
+            if [[ "$RELEASE_MODE" == reviewed-epic ]]; then
+              echo "reviewed_pr=$REVIEWED_PR"
+            fi
+          } >> "$GITHUB_OUTPUT"
   sdk-release:
     needs: resolve
     if: needs.resolve.outputs.release_mode == 'main'
