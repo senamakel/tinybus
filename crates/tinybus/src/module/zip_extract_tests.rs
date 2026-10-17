@@ -20,6 +20,14 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
         "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
         "parent_case_collision.zip" => include_bytes!("fixtures/parent_case_collision.zip"),
         "file_directory_collision.zip" => include_bytes!("fixtures/file_directory_collision.zip"),
+        "canonical_parent_collision.zip" => {
+            include_bytes!("fixtures/canonical_parent_collision.zip")
+        }
+        "canonical_leaf_collision.zip" => {
+            include_bytes!("fixtures/canonical_leaf_collision.zip")
+        }
+        "casefold_collision.zip" => include_bytes!("fixtures/casefold_collision.zip"),
+        "unicode_paths.zip" => include_bytes!("fixtures/unicode_paths.zip"),
         "compat_zip64_local.zip" => include_bytes!("fixtures/compat_zip64_local.zip"),
         "encrypted.zip" => include_bytes!("fixtures/encrypted.zip"),
         "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
@@ -215,6 +223,30 @@ fn implicit_directory_case_collisions_and_file_directory_conflicts_are_refused()
         let (_root, _destination, result) = extract_fixture(fixture);
         assert!(result.is_err(), "accepted fixture {fixture}");
     }
+}
+
+#[test]
+fn canonically_equivalent_unicode_components_are_refused_portably() {
+    for fixture in ["canonical_parent_collision.zip", "canonical_leaf_collision.zip"] {
+        let (_root, destination, result) = extract_fixture(fixture);
+        assert!(result.is_err(), "accepted canonical alias fixture {fixture}");
+        assert!(fs::read_dir(destination).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn full_unicode_casefold_aliases_are_refused_portably() {
+    let (_root, destination, result) = extract_fixture("casefold_collision.zip");
+    assert!(result.is_err());
+    assert!(fs::read_dir(destination).unwrap().next().is_none());
+}
+
+#[test]
+fn distinct_unicode_paths_keep_their_archive_spelling() {
+    let (_root, destination, result) = extract_fixture("unicode_paths.zip");
+    result.unwrap();
+    assert_eq!(fs::read(destination.join("café/module.so")).unwrap(), b"accented");
+    assert_eq!(fs::read(destination.join("数据/module.so")).unwrap(), b"cjk");
 }
 
 #[test]
