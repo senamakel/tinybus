@@ -3,7 +3,7 @@
 use std::io::{self, Read, Write};
 
 use crate::error::Result;
-use crate::module::github::refused;
+use crate::module::refused;
 
 pub(super) fn copy_bounded(
     input: &mut impl Read,

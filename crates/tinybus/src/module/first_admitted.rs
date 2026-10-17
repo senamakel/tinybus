@@ -88,11 +88,15 @@ pub fn load_first_admitted(
                     release_url: plan.release_url,
                     asset_name: asset.archive,
                     expected_sha256: Some(asset.sha256),
+                    expected_library_sha256: asset.library_sha256,
                     cache_dir: &cache_dir,
                     allow_download: false,
                 };
                 host.load_github_release_cached(&release, module_config.clone())
             } else {
+                // The marker records the signed archive, but notarization may
+                // rewrite its library. The bundle's sealed, rehashed local
+                // allowlist is the trust source for the final bytes.
                 host.load_bundled_marked(
                     &cache_dir,
                     asset.archive,
@@ -140,6 +144,7 @@ pub fn load_first_admitted(
             release_url: plan.release_url,
             asset_name: asset.archive,
             expected_sha256: Some(asset.sha256),
+            expected_library_sha256: asset.library_sha256,
             cache_dir: &cache_dir,
             allow_download: plan.allow_download,
         };

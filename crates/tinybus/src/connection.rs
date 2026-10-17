@@ -485,9 +485,18 @@ impl Connection {
 
     /// Which peer, if any, owns `name`.
     pub async fn name_owner(&self, name: impl AsRef<str>) -> Result<Option<BusName>> {
+        self.name_owner_with_timeout(name, DEFAULT_TIMEOUT).await
+    }
+
+    /// Which peer owns `name`, with a caller-supplied deadline.
+    pub(crate) async fn name_owner_with_timeout(
+        &self,
+        name: impl AsRef<str>,
+        timeout: Duration,
+    ) -> Result<Option<BusName>> {
         let name = BusName::new(name.as_ref())?;
         let value = self
-            .call_bus("GetNameOwner", serde_json::json!([name]))
+            .call_bus_with_timeout("GetNameOwner", serde_json::json!([name]), timeout)
             .await?;
         Ok(serde_json::from_value(value)?)
     }
@@ -503,8 +512,17 @@ impl Connection {
     /// `None` means the bus will refuse a confidential message to that name —
     /// nothing owns it, or the operator never allowlisted an artifact for it.
     pub async fn attestation(&self, name: BusName) -> Result<Option<crate::attest::Attestation>> {
+        self.attestation_with_timeout(name, DEFAULT_TIMEOUT).await
+    }
+
+    /// What the broker verified about `name`, with a caller-supplied deadline.
+    pub(crate) async fn attestation_with_timeout(
+        &self,
+        name: BusName,
+        timeout: Duration,
+    ) -> Result<Option<crate::attest::Attestation>> {
         let value = self
-            .call_bus("GetAttestation", serde_json::json!([name]))
+            .call_bus_with_timeout("GetAttestation", serde_json::json!([name]), timeout)
             .await?;
         Ok(serde_json::from_value(value)?)
     }

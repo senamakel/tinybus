@@ -17,7 +17,7 @@ use rawzip::{CompressionMethod, ZipArchive, ZipArchiveEntryWayfinder};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::Result;
-use crate::module::github::refused;
+use crate::module::refused;
 use crate::module::zip_deflate::{StrictDeflate, copy_bounded};
 use crate::module::zip_descriptor::validate_data_descriptor;
 
@@ -139,6 +139,43 @@ struct EntryPlan {
 /// The caller owns `destination` and must discard it if this function fails.
 pub(super) fn extract(archive_path: &Path, destination: &Path) -> Result<()> {
     extract_with_limits(archive_path, destination, DEFAULT_LIMITS)
+}
+
+/// Safely extract a ZIP archive and hash its sole shared module library.
+#[cfg(feature = "cli")]
+pub(super) fn library_sha256(archive_path: &Path) -> Result<String> {
+    let directory = tempfile::tempdir()
+        .map_err(|_| refused("checksum ZIP extraction directory is unavailable"))?;
+    extract(archive_path, directory.path())?;
+    let mut pending = vec![directory.path().to_path_buf()];
+    let mut library = None;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)
+            .map_err(|_| refused("checksum ZIP extraction could not be read"))?
+        {
+            let entry = entry.map_err(|_| refused("checksum ZIP extraction is invalid"))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|_| refused("checksum ZIP extraction is invalid"))?;
+            if file_type.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| matches!(extension, "so" | "dylib" | "dll"))
+                && library.replace(path).is_some()
+            {
+                return Err(refused(
+                    "checksum ZIP contains more than one module library",
+                ));
+            }
+        }
+    }
+    let library = library.ok_or_else(|| refused("checksum ZIP contains no module library"))?;
+    crate::module::sha256_file(library)
 }
 
 fn extract_with_limits(
@@ -462,6 +499,6 @@ fn is_windows_device_name(component: &str) -> bool {
         })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "modules"))]
 #[path = "zip_extract_tests.rs"]
 mod tests;

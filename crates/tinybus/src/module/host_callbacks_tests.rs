@@ -52,6 +52,7 @@ fn directed_signals_target_only_the_live_bound_module_and_declared_member() {
         crate::attest::Attestation {
             name: "org.example.Module".parse().unwrap(),
             sha256: "a".repeat(64),
+            library_sha256: None,
         },
     );
     let capability = state(module_peer.clone(), binding_peer.clone());
@@ -128,6 +129,7 @@ fn kernel_fixture() -> (Router, Arc<CallbackState>, u64, u64) {
         crate::attest::Attestation {
             name: "org.example.Module".parse().unwrap(),
             sha256: "a".repeat(64),
+            library_sha256: None,
         },
     );
     let state = state(source, destination);
@@ -170,6 +172,7 @@ fn a_host_alias_and_a_second_verified_module_inherit_no_authority() {
         crate::attest::Attestation {
             name: "org.example.Other".parse().unwrap(),
             sha256: "b".repeat(64),
+            library_sha256: None,
         },
     );
     let mut message = call(&state);
@@ -214,6 +217,7 @@ fn unverified_sources_cannot_be_enrolled_and_scopes_are_bounded() {
         crate::attest::Attestation {
             name: "org.example.Module".parse().unwrap(),
             sha256: "a".repeat(64),
+            library_sha256: None,
         },
     );
     router.add_host_callbacks(state.clone()).unwrap();
@@ -226,6 +230,7 @@ fn unverified_sources_cannot_be_enrolled_and_scopes_are_bounded() {
             crate::attest::Attestation {
                 name: "org.example.Module".parse().unwrap(),
                 sha256: "a".repeat(64),
+                library_sha256: None,
             },
         );
         router
@@ -239,6 +244,7 @@ fn unverified_sources_cannot_be_enrolled_and_scopes_are_bounded() {
         crate::attest::Attestation {
             name: "org.example.Module".parse().unwrap(),
             sha256: "a".repeat(64),
+            library_sha256: None,
         },
     );
     let extra = super::tests::state(source, destination);
@@ -569,6 +575,7 @@ async fn rollback_after_attach_releases_the_actual_initialization_observer() {
             lazy_load: false,
             descriptor_info: None,
             pinned_sha256: None,
+            pinned_library_sha256: None,
         },
     )
     .unwrap();

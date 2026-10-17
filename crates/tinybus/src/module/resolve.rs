@@ -344,6 +344,29 @@ impl Resolver {
             .map_err(LoadError::into_message)
     }
 
+    /// Resolve, initialize and wait for a module without sending a business
+    /// message. Strict attested calls use this host-owned barrier before
+    /// querying the broker for a recipient proof.
+    pub async fn prepare_attested(&self, id: &str) -> Result<(), String> {
+        self.ensure_loaded(id).await?;
+        let record = self
+            .find(id)
+            .ok_or_else(|| "module is unavailable".to_string())?;
+        let runtime = self
+            .runtime()
+            .await
+            .map_err(|_| "module bus is unavailable".to_string())?;
+        // Keep native initialization on the process-lifetime module runtime.
+        // A caller's deadline may cancel its wait, but must not cancel the
+        // initializer or strand the module between `INITIALIZING` and `READY`.
+        let host = runtime.host();
+        runtime
+            .spawn(async move { host.ensure_ready(record.bus_name).await })
+            .await
+            .map_err(|_| "module readiness task did not finish".to_string())?
+            .map_err(|_| "module did not reach READY".to_string())
+    }
+
     /// [`Self::ensure_loaded`] with a bound on how long this caller waits.
     ///
     /// The bound is on the *wait*, never on the resolution: a caller that gives
@@ -739,3 +762,11 @@ impl Resolver {
 #[cfg(test)]
 #[path = "resolve_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "resolve_test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
+#[path = "resolve_attested_tests.rs"]
+mod attested_tests;

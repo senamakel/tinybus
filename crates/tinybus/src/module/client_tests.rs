@@ -111,6 +111,7 @@ fn resolver(enabled: bool) -> (Arc<Recording>, Loaderless) {
 #[tokio::test]
 async fn lifecycle_defaults_keep_loaderless_access_source_compatible() {
     let (_, access) = resolver(true);
+    assert!(access.prepare_attested(RECORD.id).await.is_err());
     assert_eq!(
         access
             .reinitialize(RECORD.id, serde_json::Value::Null)
@@ -173,6 +174,12 @@ fn bus_errors_classify_to_closed_outcomes() {
     for (error, outcome, reason) in cases {
         assert_eq!(classify(&error), (outcome, reason), "{error:?}");
     }
+}
+
+#[test]
+fn wire_kind_is_the_closed_classification_not_the_wire_error_name() {
+    let error = method_failed("com.example.PrivateFailure");
+    assert_eq!(wire_kind(&error), ModuleCallError::ModuleFault);
 }
 
 #[test]
@@ -268,7 +275,89 @@ async fn a_fixture_proxy_is_classified_and_reported_when_the_call_fails() {
     assert!(client.fixture_proxy().is_some());
     let result: Result<String, _> = client.call(RECORD.id, "Member", ()).await;
     assert!(result.is_err());
-    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::ModuleFault)]
+    );
+}
+
+const REMOTE_DETAIL: &str = "fixture-only credential-like value: not-a-real-credential-token-7391";
+
+struct DetailedFailure;
+
+#[async_trait::async_trait]
+impl crate::Interface for DetailedFailure {
+    fn name(&self) -> crate::InterfaceName {
+        crate::InterfaceName::new(RECORD.bus_name).unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec![crate::MemberName::new("Fail").unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Err(Error::MethodFailed {
+            name: "com.example.PrivateFailure".to_string(),
+            message: REMOTE_DETAIL.to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn detailed_call_preserves_remote_failure_without_rendering_it() {
+    let sink = Arc::new(Recording::default());
+    let transport = crate::transport::memory::MemoryBus::new();
+    let _broker = crate::broker::Broker::new().spawn(transport.clone());
+    let service = crate::Connection::connect(transport.connect().await.unwrap())
+        .await
+        .unwrap();
+    service.request_name(RECORD.bus_name).await.unwrap();
+    service
+        .serve_at(
+            crate::ObjectPath::new(RECORD.object_path).unwrap(),
+            DetailedFailure,
+        )
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(transport.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = caller
+        .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+        .unwrap();
+    let client = ModuleClient::new(ReadyAccess {
+        connection: caller,
+        reporter: FailureReporter::new(sink.clone()),
+        proxy_failure: None,
+    })
+    .with_fixture(proxy);
+
+    let failure = client
+        .call_detailed::<String>(RECORD.id, "Fail", ())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, ModuleCallError::ModuleFault);
+    assert_eq!(failure.wire_name, "com.example.PrivateFailure");
+    assert_eq!(failure.message, REMOTE_DETAIL);
+    for rendered in [format!("{failure:?}"), failure.to_string()] {
+        assert!(!rendered.contains("com.example.PrivateFailure"));
+        assert!(!rendered.contains(REMOTE_DETAIL));
+    }
+
+    let sanitized = client
+        .call::<String>(RECORD.id, "Fail", ())
+        .await
+        .unwrap_err();
+    assert_eq!(sanitized, ModuleCallError::ModuleFault);
+    assert!(!format!("{sanitized:?}").contains(REMOTE_DETAIL));
+    assert!(!sanitized.to_string().contains(REMOTE_DETAIL));
+    let reports = sink.0.lock().unwrap();
+    assert_eq!(reports.len(), 2);
+    assert!(!format!("{reports:?}").contains(REMOTE_DETAIL));
 }
 
 struct JsonFixture;
@@ -387,6 +476,7 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
             crate::attest::Attestation {
                 name: crate::BusName::new(RECORD.bus_name).unwrap(),
                 sha256: "a".repeat(64),
+                library_sha256: None,
             },
         );
         let reply: serde_json::Value = client
@@ -417,3 +507,6 @@ async fn unavailable_loads_and_explicit_reports_use_only_registered_identity() {
             .all(|(module, _)| module == RECORD.id)
     );
 }
+
+#[path = "client_attested_tests.rs"]
+mod attested_tests;

@@ -50,6 +50,13 @@ pub trait ModuleAccess: Send + Sync {
     /// A message fit for a user or a model when the module cannot be loaded.
     fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>>;
 
+    /// Perform host-owned readiness work before a strict recipient-attestation
+    /// query. The default refuses because generic accessors cannot prove that
+    /// a lazy native initializer has run without sending a business call.
+    fn prepare_attested<'a>(&'a self, _id: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("strict recipient preparation is unsupported".to_string()) })
+    }
+
     /// A proxy for `object_path` on the serving module at `bus_name`.
     ///
     /// # Errors
@@ -122,6 +129,75 @@ impl std::fmt::Display for ModuleCallError {
 
 impl std::error::Error for ModuleCallError {}
 
+/// A detailed call failure with remote prose kept out of its renderings.
+///
+/// The fields are untrusted peer-provided data available to a product adapter
+/// that has its own display policy. A remote message may contain arguments or
+/// credentials. `Debug`, `Display`, and the failure reporter never include
+/// these fields; callers should not log or display them without their own
+/// redaction policy.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ModuleCallFailure {
+    /// The closed, sanitized module outcome.
+    pub kind: ModuleCallError,
+    /// The untrusted dotted name returned by a remote method failure, or a
+    /// fixed local name for failures that did not come from a remote method.
+    /// Treat remote values as sensitive and do not log them directly.
+    pub wire_name: String,
+    /// The exact untrusted remote method message, or a fixed local message.
+    /// It may contain arguments or credentials; do not log or display it
+    /// without applying a product-specific redaction policy.
+    pub message: String,
+}
+
+impl ModuleCallFailure {
+    fn local(kind: ModuleCallError) -> Self {
+        let wire_name = match kind {
+            ModuleCallError::Unavailable => "ai.tinyhumans.tinybus.Error.ModuleUnavailable",
+            ModuleCallError::IncompatibleContract => {
+                "ai.tinyhumans.tinybus.Error.IncompatibleVersion"
+            }
+            ModuleCallError::TransportFailed => "ai.tinyhumans.tinybus.Error.Transport",
+            ModuleCallError::ModuleFault => "ai.tinyhumans.tinybus.Error.Failed",
+        };
+        Self {
+            kind,
+            wire_name: wire_name.to_string(),
+            message: "module call failed".to_string(),
+        }
+    }
+
+    fn from_error(error: &Error, kind: ModuleCallError) -> Self {
+        match error {
+            Error::MethodFailed { name, message } => Self {
+                kind,
+                wire_name: name.clone(),
+                message: message.clone(),
+            },
+            _ => Self::local(kind),
+        }
+    }
+}
+
+impl std::fmt::Debug for ModuleCallFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ModuleCallFailure")
+            .field("kind", &self.kind)
+            .field("wire_name", &"<redacted>")
+            .field("message", &"<redacted>")
+            .finish()
+    }
+}
+
+impl std::fmt::Display for ModuleCallFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{kind}", kind = self.kind)
+    }
+}
+
+impl std::error::Error for ModuleCallFailure {}
+
 /// Calls contract members on registry modules, loading them lazily.
 #[derive(Clone)]
 pub struct ModuleClient {
@@ -183,6 +259,23 @@ impl ModuleClient {
         self.invoke(module, member, args, false).await
     }
 
+    /// Execute a contract member and retain a remote method's wire failure.
+    ///
+    /// Remote details are available only in the returned fields. Its `Debug`
+    /// and `Display` renderings, and the terminal report, remain sanitized.
+    ///
+    /// # Errors
+    ///
+    /// A detailed [`ModuleCallFailure`].
+    pub async fn call_detailed<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        self.invoke_detailed(module, member, args, false).await
+    }
+
     /// Execute a confidential member after TinyBus recipient attestation.
     ///
     /// A failure to attest the pinned artifact fails the call; ordinary delivery
@@ -198,6 +291,109 @@ impl ModuleClient {
         args: impl Serialize,
     ) -> Result<R, ModuleCallError> {
         self.invoke(module, member, args, true).await
+    }
+
+    /// Execute a confidential member only when the host registry pins both the
+    /// release archive and extracted library and the same unique peer proves
+    /// that exact pair. Lazy readiness is established without a business call,
+    /// before this method queries the broker or serializes `args`.
+    ///
+    /// # Errors
+    ///
+    /// A sanitized [`ModuleCallError`]. Missing or mismatched proofs fail
+    /// closed and are never retried through ordinary delivery.
+    pub async fn call_attested<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallError> {
+        let record = self.record(module)?;
+        let candidates = crate::module::platform::host_candidates();
+        // The resolver tries compatible release assets in host-candidate order
+        // and may fall back after an admission failure. Keep each archive and
+        // library pin paired from the trusted registry so the loaded fallback
+        // can prove itself without allowing digest mixing across assets.
+        let compatible_assets: Vec<_> = record
+            .assets
+            .iter()
+            .filter(|asset| candidates.iter().any(|host| host == asset.host_key))
+            .filter(|asset| {
+                valid_sha256(asset.sha256) && asset.library_sha256.is_some_and(valid_sha256)
+            })
+            .collect();
+        if compatible_assets.is_empty() {
+            report(&*self.access, record, Reason::ModuleUnavailable);
+            return Err(ModuleCallError::Unavailable);
+        }
+        let preparation = self.access.prepare_attested(record.id);
+        let prepared = if let Some(timeout) = self.timeout {
+            tokio::time::timeout(timeout, preparation)
+                .await
+                .is_ok_and(|result| result.is_ok())
+        } else {
+            preparation.await.is_ok()
+        };
+        if self.fixture.is_some() || !prepared {
+            report(&*self.access, record, Reason::ModuleUnavailable);
+            return Err(ModuleCallError::Unavailable);
+        }
+
+        let name_proxy = self.load_proxy(record, record.object_path).await?;
+        let metadata_timeout = self.timeout.unwrap_or(crate::connection::DEFAULT_TIMEOUT);
+        let owner = match name_proxy
+            .connection()
+            .name_owner_with_timeout(record.bus_name, metadata_timeout)
+            .await
+        {
+            Ok(Some(owner)) if owner.is_unique() => owner,
+            Ok(_) => {
+                report(&*self.access, record, Reason::ModuleUnavailable);
+                return Err(ModuleCallError::Unavailable);
+            }
+            Err(error) => {
+                return Err(report_proxy_failure(self.access.reporter(), record, &error));
+            }
+        };
+        let unique_proxy = name_proxy
+            .connection()
+            .proxy(owner.as_str(), record.object_path, record.bus_name)
+            .map_err(|_| {
+                report(&*self.access, record, Reason::IncompatibleContract);
+                ModuleCallError::IncompatibleContract
+            })?;
+        let attestation = match unique_proxy
+            .connection()
+            .attestation_with_timeout(owner.clone(), metadata_timeout)
+            .await
+        {
+            Ok(Some(attestation)) => attestation,
+            Ok(None) => {
+                report(&*self.access, record, Reason::ModuleUnavailable);
+                return Err(ModuleCallError::Unavailable);
+            }
+            Err(error) => {
+                return Err(report_proxy_failure(self.access.reporter(), record, &error));
+            }
+        };
+        let expected_name = crate::name::BusName::new(record.bus_name)
+            .expect("a release registry carries a validated bus name");
+        if attestation.name != expected_name
+            || !compatible_assets.iter().any(|asset| {
+                attestation.sha256.eq_ignore_ascii_case(asset.sha256)
+                    && attestation.library_sha256.as_deref().is_some_and(|digest| {
+                        digest.eq_ignore_ascii_case(
+                            asset.library_sha256.expect("filtered library pin"),
+                        )
+                    })
+            })
+        {
+            report(&*self.access, record, Reason::ModuleUnavailable);
+            return Err(ModuleCallError::Unavailable);
+        }
+
+        let unique_proxy = self.with_deadline(unique_proxy);
+        invoke_proxy(&*self.access, record, &unique_proxy, member, args, true).await
     }
 
     /// Call a member that returns a JSON-encoded string and deserialise that
@@ -353,6 +549,25 @@ impl ModuleClient {
         invoke_proxy(&*self.access, record, &proxy, member, args, confidential).await
     }
 
+    async fn invoke_detailed<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+        confidential: bool,
+    ) -> Result<R, ModuleCallFailure> {
+        let record = self.record(module).map_err(ModuleCallFailure::local)?;
+        let proxy = if let Some(fixture) = &self.fixture {
+            fixture.clone()
+        } else {
+            self.load_proxy(record, record.object_path)
+                .await
+                .map_err(ModuleCallFailure::local)?
+        };
+        let proxy = self.with_deadline(proxy);
+        invoke_proxy_detailed(&*self.access, record, &proxy, member, args, confidential).await
+    }
+
     fn decode_json<R: DeserializeOwned>(
         &self,
         module: &str,
@@ -412,12 +627,25 @@ async fn invoke_proxy<R: DeserializeOwned>(
     args: impl Serialize,
     confidential: bool,
 ) -> Result<R, ModuleCallError> {
+    invoke_proxy_detailed(access, record, proxy, member, args, confidential)
+        .await
+        .map_err(|failure| failure.kind)
+}
+
+async fn invoke_proxy_detailed<R: DeserializeOwned>(
+    access: &dyn ModuleAccess,
+    record: &'static ReleaseRecord,
+    proxy: &Proxy,
+    member: &str,
+    args: impl Serialize,
+    confidential: bool,
+) -> Result<R, ModuleCallFailure> {
     let result = if confidential {
         proxy.call_confidential(member, args).await
     } else {
         proxy.call(member, args).await
     };
-    result.map_err(|error| report_proxy_failure(access.reporter(), record, &error))
+    result.map_err(|error| report_proxy_failure_detailed(access.reporter(), record, &error))
 }
 
 /// Report a bus failure without exposing its payload. Product adapters may
@@ -427,13 +655,21 @@ pub fn report_proxy_failure(
     record: &ReleaseRecord,
     error: &Error,
 ) -> ModuleCallError {
+    report_proxy_failure_detailed(reporter, record, error).kind
+}
+
+fn report_proxy_failure_detailed(
+    reporter: &FailureReporter,
+    record: &ReleaseRecord,
+    error: &Error,
+) -> ModuleCallFailure {
     let (outcome, reason) = classify(error);
     if reason == Reason::ModuleUnavailable {
         reporter.report(record.id, record.version, reason);
     } else {
         reporter.report_invocation(record.id, record.version, reason);
     }
-    outcome
+    ModuleCallFailure::from_error(error, outcome)
 }
 
 fn report(access: &dyn ModuleAccess, record: &ReleaseRecord, reason: Reason) {
@@ -491,6 +727,16 @@ pub fn classify(error: &Error) -> (ModuleCallError, Reason) {
         Error::MethodFailed { .. } => (ModuleCallError::ModuleFault, Reason::ModuleFault),
         _ => (ModuleCallError::TransportFailed, Reason::TransportFailed),
     }
+}
+
+/// Normalize any bus error to the closed module-call classification.
+#[must_use]
+pub fn wire_kind(error: &Error) -> ModuleCallError {
+    classify(error).0
+}
+
+fn valid_sha256(digest: &str) -> bool {
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

@@ -550,7 +550,7 @@ async fn a_lazy_manifest_registers_an_unmapped_library_and_the_first_call_loads_
         let discovered = read_lazy_manifest(&artifact).unwrap().unwrap();
         // No pin: this stands in for a directory scan, which vouches for an
         // artifact with the `modules.toml` beside it or not at all.
-        host.register_lazy(&artifact, discovered, serde_json::json!({}), None)
+        host.register_lazy(&artifact, discovered, serde_json::json!({}), None, None)
             .unwrap()
     };
     assert_eq!(info.state, ModuleState::Resolved);
@@ -579,15 +579,19 @@ async fn a_lazy_manifest_registers_an_unmapped_library_and_the_first_call_loads_
 /// real library, as above, so admission runs without mapping anything.
 #[cfg(not(windows))]
 #[tokio::test]
-async fn a_bundle_marker_equal_to_the_pin_admits_the_extraction_without_its_archive() {
+async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_pin_differs() {
     use crate::module::{ReleaseAsset, ReleasePlan, artifact_dir, load_first_admitted};
 
     let bundled = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let user_cache = tempfile::tempdir().unwrap();
+    // Code signing can rewrite the bundled library after the release archive
+    // was hashed. The sealed local allowlist carries the final library digest.
+    let release_library_sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
     let asset = ReleaseAsset {
         host_key: "macos-15-arm64",
         archive: "clock-macos-15-arm64.tar.gz",
         sha256: "abababababababababababababababababababababababababababababababab",
+        library_sha256: Some(release_library_sha256),
     };
     let dir = artifact_dir(bundled.path(), "clock", "0.1.0", asset.host_key).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
@@ -646,11 +650,14 @@ async fn a_bundle_marker_equal_to_the_pin_admits_the_extraction_without_its_arch
         .await
         .unwrap()
         .expect("the allowlisted extraction is attested");
+    let signed_library_sha256 = crate::module::sha256_file(&artifact).unwrap();
+    assert_eq!(attestation.sha256, signed_library_sha256);
     assert_eq!(
-        attestation.sha256,
-        crate::module::sha256_file(&artifact).unwrap()
+        attestation.library_sha256.as_deref(),
+        Some(signed_library_sha256.as_str())
     );
     assert_ne!(attestation.sha256, asset.sha256);
+    assert_ne!(attestation.library_sha256.as_deref(), asset.library_sha256);
     broker_task.abort();
 }
 
@@ -665,6 +672,7 @@ async fn a_bundle_marker_without_an_allowlist_is_refused_rather_than_loaded_unha
         host_key: "macos-15-arm64",
         archive: "clock-macos-15-arm64.tar.gz",
         sha256: "abababababababababababababababababababababababababababababababab",
+        library_sha256: None,
     };
     let dir = artifact_dir(bundled.path(), "clock", "0.1.0", asset.host_key).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
@@ -2311,7 +2319,7 @@ async fn a_module_from_a_pinned_release_becomes_an_attested_recipient_without_an
     broker.spawn(bus.clone());
     let host = ModuleHost::new(broker.clone());
     let info = host
-        .load_file_pinned(&staged, serde_json::json!({}), Some(pinned.clone()))
+        .load_file_pinned(&staged, serde_json::json!({}), Some(pinned.clone()), None)
         .unwrap();
 
     let client = Connection::connect(bus.connect().await.unwrap())
@@ -2437,7 +2445,8 @@ async fn authenticates_native_context(variable: &str) {
         proxy.attestation().await.unwrap(),
         Some(crate::attest::Attestation {
             name: info.manifest.bus_name,
-            sha256: hash
+            sha256: hash.clone(),
+            library_sha256: Some(hash),
         })
     );
     let sender: crate::BusName = proxy.call_confidential("Inspect", ()).await.unwrap();
@@ -2477,6 +2486,7 @@ async fn fixed_unique_module_calls_are_refused_in_terminal_states_before_detach(
         crate::attest::Attestation {
             name: manifest().bus_name,
             sha256: "a".repeat(64),
+            library_sha256: None,
         },
     );
     let client = Connection::connect(bus.connect().await.unwrap())
@@ -3170,6 +3180,7 @@ fn attach_controlled_native(
             lazy_load: false,
             descriptor_info: None,
             pinned_sha256: None,
+            pinned_library_sha256: None,
         },
     )
 }

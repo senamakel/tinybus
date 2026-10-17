@@ -42,6 +42,7 @@ fn an_unsupported_actual_manifest_is_refused_before_setup() {
         descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
         manifest: super::tests::manifest(),
         init: counted_setup,
+        library_sha256: None,
     };
     assert!(
         host.activate_required(
@@ -115,6 +116,7 @@ fn the_matching_loaded_artifact_reaches_its_original_initializer() {
         descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
         manifest: matching_manifest(),
         init: counted_setup,
+        library_sha256: None,
     };
     let error = host
         .activate_required(
