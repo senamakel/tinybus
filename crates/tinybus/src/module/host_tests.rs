@@ -2880,6 +2880,115 @@ async fn eager_native_setup_callbacks_are_bound_before_ready_and_failures_rollba
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBUS_TEST_HOST_CALLBACK_MODULE to point at the built cdylib"]
+async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
+    let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
+    let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+    let (_dir, artifact) = staged_module(&artifact, &hash);
+    let modules = ModuleHost::new(Broker::new());
+    let binding = modules
+        .prepare_host_callbacks(vec![crate::module::HostCallbackEndpoint {
+            path: "/callback".parse().unwrap(),
+            interface: "org.example.Callback".parse().unwrap(),
+            members: vec!["Observe".parse().unwrap()],
+        }])
+        .await
+        .unwrap();
+    let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+    binding
+        .serve_at(
+            "/callback".parse().unwrap(),
+            EagerSetupSenderLookup {
+                lookup: modules.sender_lookup(),
+                observed: std::sync::Mutex::new(Some(observed_tx)),
+            },
+        )
+        .await
+        .unwrap();
+
+    let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    *modules
+        .inner
+        .before_loaded_publish
+        .lock()
+        .expect("loaded publication barrier lock") = Some(LoadedPublishBarrier {
+        reached: reached_tx,
+        release: release_rx,
+    });
+    let config = serde_json::json!({ "host": binding.unique_name(), "fail": false });
+    let loading_modules = modules.clone();
+    let loading_binding = binding.clone();
+    let loading = tokio::spawn(async move {
+        loading_modules
+            .load_file_with_host_callbacks(artifact, config, &loading_binding)
+            .await
+    });
+
+    tokio::task::spawn_blocking(move || {
+        reached_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("attach did not reach the pre-publication barrier");
+    })
+    .await
+    .unwrap();
+    let observed = tokio::time::timeout(Duration::from_secs(3), observed_rx)
+        .await
+        .expect("eager setup did not call the authenticated host callback")
+        .expect("host callback dropped its observation");
+    release_tx
+        .send(())
+        .expect("release the attachment after observing callback identity");
+    loading.await.unwrap().expect("eager module loads");
+
+    assert_eq!(
+        observed, None,
+        "regression setup must expose the missing publication"
+    );
+}
+
+struct EagerSetupSenderLookup {
+    lookup: crate::module::ModuleSenderLookup,
+    observed:
+        std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Option<crate::module::ModuleId>>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::Interface for EagerSetupSenderLookup {
+    fn name(&self) -> crate::InterfaceName {
+        "org.example.Callback".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Observe".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Err(Error::failed("callback requires authenticated dispatch"))
+    }
+
+    async fn call_with_context(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+        context: &crate::CallContext,
+    ) -> crate::Result<serde_json::Value> {
+        let sender = context
+            .authenticated_sender()
+            .ok_or_else(|| Error::failed("callback sender is unauthenticated"))?;
+        let module = self.lookup.module_for_sender(sender);
+        if let Some(observed) = self.observed.lock().unwrap().take() {
+            let _ = observed.send(module);
+        }
+        Ok(serde_json::json!(sender))
+    }
+}
+
 struct BoundNativeCallback {
     calls: Arc<AtomicUsize>,
     guard: crate::module::HostCallbackGuard,
