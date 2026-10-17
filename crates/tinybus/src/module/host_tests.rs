@@ -2956,6 +2956,105 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
     broker_task.abort();
 }
 
+struct PanickingStagedStartSubscriber {
+    host: Arc<ModuleHostInner>,
+    peer: Arc<StdMutex<Option<crate::BusName>>>,
+}
+
+impl tracing::Subscriber for PanickingStagedStartSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::DEBUG
+            && event.metadata().target().ends_with("broker")
+        {
+            let peer = self
+                .host
+                .loaded
+                .lock()
+                .unwrap()
+                .last()
+                .expect("staged module row is published before broker start")
+                .unique_name
+                .clone();
+            *self.peer.lock().unwrap() = Some(peer);
+            panic!("test subscriber panics while staged dispatch starts");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+#[tokio::test]
+async fn a_staged_start_unwind_removes_its_exact_published_peer() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let host = ModuleHost::new(broker);
+    let observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let peer = Arc::new(StdMutex::new(None));
+    let mut manifest = named_manifest("staged-start-panic", "StagedStartPanic");
+    manifest.lazy_init = true;
+
+    let result = tracing::subscriber::with_default(
+        PanickingStagedStartSubscriber {
+            host: host.inner.clone(),
+            peer: peer.clone(),
+        },
+        || {
+            host.attach_linked_with_config(
+                LinkedModule {
+                    descriptor: TbAbiDescriptor::current("staged-start-panic", "0.1.0"),
+                    manifest,
+                    init: lazy_echo_init,
+                    init_with_setup: None,
+                },
+                serde_json::json!({}),
+            )
+        },
+    );
+    assert!(
+        result.is_err(),
+        "a failed dispatch start must refuse attachment"
+    );
+    let unique = peer
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("peer observed at panic");
+    assert!(
+        host.list().is_empty(),
+        "failed start removes the published row"
+    );
+    assert!(
+        host.module_for_sender(&unique).is_none(),
+        "failed start revokes lookup authority for the exact peer"
+    );
+    assert_eq!(
+        observer
+            .name_owner("ai.tinyhumans.module.StagedStartPanic")
+            .await
+            .unwrap(),
+        None,
+        "failed start detaches its reserved bus name"
+    );
+    broker_task.abort();
+}
+
 struct EagerSetupSenderLookup {
     lookup: crate::module::ModuleSenderLookup,
     observed:
