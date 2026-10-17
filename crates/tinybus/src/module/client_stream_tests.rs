@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::broker::Broker;
+use crate::module::failure::{FailureReport, FailureSink};
 use crate::transport::memory::MemoryBus;
 use crate::{Connection, Error, Interface, InterfaceName, MemberName, ObjectPath, StreamRef};
 use async_trait::async_trait;
