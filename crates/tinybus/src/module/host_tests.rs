@@ -2886,17 +2886,15 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
     let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
     let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
     let (_dir, artifact) = staged_module(&artifact, &hash);
-    let modules = ModuleHost::new(Broker::new());
-    let binding = modules
-        .prepare_host_callbacks(vec![crate::module::HostCallbackEndpoint {
-            path: "/callback".parse().unwrap(),
-            interface: "org.example.Callback".parse().unwrap(),
-            members: vec!["Observe".parse().unwrap()],
-        }])
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let modules = ModuleHost::new(broker);
+    let callback = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
     let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
-    binding
+    callback
         .serve_at(
             "/callback".parse().unwrap(),
             EagerSetupSenderLookup {
@@ -2917,22 +2915,16 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
         reached: reached_tx,
         release: release_rx,
     });
-    let config = serde_json::json!({ "host": binding.unique_name(), "fail": false });
+    let config = serde_json::json!({
+        "host": callback.unique_name(),
+        "fail": false,
+        "confidential": false
+    });
     let loading_modules = ModuleHost {
         inner: modules.inner.clone(),
     };
-    let loading_binding = binding;
     let loading = tokio::task::spawn_blocking(move || {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(loading_modules.load_file_with_host_callbacks(
-                artifact,
-                config,
-                &loading_binding,
-            ))
+        loading_modules.load_file_with_config(artifact, config)
     });
 
     tokio::task::spawn_blocking(move || {
@@ -2955,6 +2947,7 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
         observed, None,
         "regression setup must expose the missing publication"
     );
+    broker_task.abort();
 }
 
 struct EagerSetupSenderLookup {
