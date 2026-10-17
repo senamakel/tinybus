@@ -2923,7 +2923,7 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
     let loading_modules = ModuleHost {
         inner: modules.inner.clone(),
     };
-    let loading = tokio::task::spawn_blocking(move || {
+    let mut loading = tokio::task::spawn_blocking(move || {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -2932,14 +2932,19 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
             .block_on(async { loading_modules.load_file_with_config(artifact, config) })
     });
 
-    tokio::task::spawn_blocking(move || {
+    let reached = tokio::task::spawn_blocking(move || {
         reached_rx
             .recv_timeout(Duration::from_secs(30))
             .expect("attach did not reach the pre-publication barrier");
-    })
-    .await
-    .unwrap();
-    let observation = tokio::time::timeout(Duration::from_secs(30), observed_rx).await;
+    });
+    tokio::select! {
+        result = &mut loading => panic!("load completed before reaching the publication barrier: {result:?}"),
+        result = reached => result.expect("publication barrier observer panicked"),
+    }
+    let observation = tokio::select! {
+        result = &mut loading => panic!("load completed before its eager callback was observed: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(30), observed_rx) => result,
+    };
     release_tx
         .send(())
         .expect("release the attachment after observing callback identity");
