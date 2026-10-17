@@ -1,9 +1,11 @@
 //! Bounded ZIP extraction for module release archives.
 //!
 //! `rawzip` parses ZIP structure but intentionally leaves extraction policy to
-//! its callers. This adapter accepts only normalized portable paths, STORE and
-//! DEFLATE entries, and writes regular files into the host-owned staging
-//! directory without applying archive permissions or creating links.
+//! its callers. This adapter accepts portable paths, STORE and DEFLATE entries,
+//! and writes regular files into the host-owned staging directory without
+//! applying archive permissions or creating links. Unicode normalization and
+//! full case folding are used only for alias detection; output keeps archive
+//! spelling.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -84,6 +86,8 @@ impl PathNode {
                 .to_str()
                 .ok_or_else(|| refused("release archive contains an unsafe path"))?;
             let folded = collision_key_component(spelling)?;
+            // Bound the derived trie key alongside original path metadata so
+            // case-fold expansion cannot grow archive-controlled bookkeeping.
             *path_metadata_bytes = path_metadata_bytes
                 .checked_add(folded.len())
                 .ok_or_else(|| refused("release archive path metadata exceeds its limit"))?;
@@ -108,6 +112,8 @@ impl PathNode {
 }
 
 fn collision_key_component(component: &str) -> Result<String> {
+    // Normalize both sides of full folding so canonical aliases share a key;
+    // the returned string is never used as the extracted filesystem spelling.
     let normalized: String = component.nfc().collect();
     let folded = CaseMapper::new().fold_string(&normalized);
     let key: String = folded.nfc().collect();

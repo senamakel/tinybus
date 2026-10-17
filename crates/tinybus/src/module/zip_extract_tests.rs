@@ -330,10 +330,10 @@ fn distinct_unicode_paths_keep_their_archive_spelling() {
 }
 
 #[test]
-fn expanded_collision_keys_count_toward_the_path_metadata_limit() {
+fn casefold_key_expansion_counts_toward_the_path_metadata_limit() {
     let mut trie = PathNode::default();
     let mut metadata_bytes = 0;
-    let result = trie.insert(Path::new("ß"), false, &mut metadata_bytes, 1);
+    let result = trie.insert(Path::new("İ"), false, &mut metadata_bytes, 2);
     assert!(result.is_err());
     assert!(trie.children.is_empty());
 }
