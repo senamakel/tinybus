@@ -1,0 +1,374 @@
+use super::*;
+
+// These tests are a source draft against the approved RuntimeLease API shape.
+// They are intentionally not compiled while U5 is unpublished and the API
+// implementation has not been authorized.
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use tokio::sync::{mpsc, oneshot};
+
+const CALLBACK_NAME: &str = "ai.tinyhumans.tinybus.tests.RuntimeLease";
+const CALLBACK_PATH: &str = "/ai/tinyhumans/tinybus/tests/RuntimeLease";
+
+struct Reservation;
+struct Object;
+
+#[derive(Debug)]
+struct DriverError(&'static str);
+
+enum DriverCall {
+    Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
+    Object(oneshot::Sender<Result<Object, DriverError>>),
+    Start(oneshot::Sender<Result<(), DriverError>>),
+    Stop(oneshot::Sender<Result<(), DriverError>>),
+    Validated,
+}
+
+#[derive(Clone)]
+struct ControlledDriver {
+    calls: mpsc::UnboundedSender<DriverCall>,
+    failed: Arc<AtomicBool>,
+    validation_error: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl RuntimeLeaseDriver for ControlledDriver {
+    type Reservation = Reservation;
+    type Object = Object;
+    type Error = DriverError;
+
+    async fn reserve(&self) -> Result<Self::Reservation, Self::Error> {
+        let (reply, result) = oneshot::channel();
+        self.calls.send(DriverCall::Reserve(reply)).unwrap();
+        result.await.unwrap()
+    }
+
+    fn validate(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
+        self.calls.send(DriverCall::Validated).unwrap();
+        if self.validation_error.load(Ordering::Acquire) {
+            Err(DriverError("private validation detail"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn callback_address(
+        &self,
+        _: &Self::Reservation,
+        _: &Self::Object,
+    ) -> Result<(crate::BusName, crate::ObjectPath), Self::Error> {
+        Ok((
+            CALLBACK_NAME.parse().unwrap(),
+            CALLBACK_PATH.parse().unwrap(),
+        ))
+    }
+
+    async fn object(&self, _: &Self::Reservation) -> Result<Self::Object, Self::Error> {
+        let (reply, result) = oneshot::channel();
+        self.calls.send(DriverCall::Object(reply)).unwrap();
+        result.await.unwrap()
+    }
+
+    async fn start(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
+        let (reply, result) = oneshot::channel();
+        self.calls.send(DriverCall::Start(reply)).unwrap();
+        result.await.unwrap()
+    }
+
+    async fn stop(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
+        let (reply, result) = oneshot::channel();
+        self.calls.send(DriverCall::Stop(reply)).unwrap();
+        result.await.unwrap()
+    }
+
+    fn failed(&self, _: &Self::Reservation) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Clone)]
+struct Callback(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::Interface for Callback {
+    fn name(&self) -> crate::InterfaceName {
+        "ai.tinyhumans.tinybus.tests.RuntimeLease".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Touch".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(serde_json::json!(self.0.fetch_add(1, Ordering::AcqRel) + 1))
+    }
+}
+
+struct Harness {
+    runtime: crate::module::ModuleRuntime,
+    driver: ControlledDriver,
+    calls: mpsc::UnboundedReceiver<DriverCall>,
+    callback_calls: Arc<AtomicUsize>,
+}
+
+impl Harness {
+    fn new() -> Self {
+        let runtime =
+            crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None)
+                .unwrap();
+        let (calls, receiver) = mpsc::unbounded_channel();
+        Self {
+            runtime,
+            driver: ControlledDriver {
+                calls,
+                failed: Arc::new(AtomicBool::new(false)),
+                validation_error: Arc::new(AtomicBool::new(false)),
+            },
+            calls: receiver,
+            callback_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn open(
+        &self,
+    ) -> impl std::future::Future<
+        Output = Result<RuntimeLease<Object, DriverError>, LeaseError<DriverError>>,
+    > + Send
+    + 'static {
+        let driver = self.driver.clone();
+        let calls = self.callback_calls.clone();
+        let policy = RetryPolicy::new(
+            std::time::Duration::from_millis(20),
+            vec![std::time::Duration::ZERO, std::time::Duration::ZERO],
+        )
+        .unwrap();
+        self.runtime.lease(
+            driver,
+            move |_: &Reservation, _: &Object| Ok(Callback(calls)),
+            policy,
+            |_| {},
+        )
+    }
+
+    async fn opened(&mut self) -> RuntimeLease<Object, DriverError> {
+        let opening = tokio::spawn(self.open());
+        match self.calls.recv().await.unwrap() {
+            DriverCall::Reserve(reply) => {
+                reply.send(Ok(Reservation)).unwrap();
+            }
+            _ => panic!("reserve must be the first driver operation"),
+        }
+        assert!(matches!(
+            self.calls.recv().await,
+            Some(DriverCall::Validated)
+        ));
+        match self.calls.recv().await.unwrap() {
+            DriverCall::Object(reply) => reply.send(Ok(Object)).unwrap(),
+            _ => panic!("object creation follows validation"),
+        }
+        match self.calls.recv().await.unwrap() {
+            DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+            _ => panic!("start follows callback registration"),
+        }
+        opening.await.unwrap().unwrap()
+    }
+
+    async fn callback(&self) -> crate::Result<serde_json::Value> {
+        self.runtime
+            .proxy(CALLBACK_NAME, CALLBACK_PATH)
+            .unwrap()
+            .call("Touch", ())
+            .await
+    }
+}
+
+#[tokio::test]
+async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
+    let mut harness = Harness::new();
+    let opening = tokio::spawn(harness.open());
+    let reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply,
+        _ => panic!("reserve must begin the activation transaction"),
+    };
+    opening.abort();
+    reply.send(Ok(Reservation)).unwrap();
+
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(reply) => reply.send(Ok(Object)).unwrap(),
+        _ => panic!("object creation follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("start follows callback registration"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("a lease whose result was abandoned is rolled back"),
+    }
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn validation_failure_after_reserve_still_stops_and_never_starts() {
+    let mut harness = Harness::new();
+    harness
+        .driver
+        .validation_error
+        .store(true, Ordering::Release);
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply.send(Ok(Reservation)).unwrap(),
+        _ => panic!("reserve must be first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("validation error is rolled back before object/export/start"),
+    }
+    let Err(error) = opening.await.unwrap() else {
+        panic!("invalid reservation must fail activation");
+    };
+    assert!(!format!("{error:?}").contains("private validation detail"));
+    assert!(!error.to_string().contains("private validation detail"));
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "failed validation has no later stage"
+    );
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+
+    let closing = tokio::spawn(async move { lease.close().await });
+    let stop_reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(reply) => reply,
+        _ => panic!("close starts one STOP"),
+    };
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(2));
+    stop_reply.send(Ok(())).unwrap();
+    assert!(closing.await.unwrap().is_ok());
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn exhausted_stop_parks_the_callback_until_an_acknowledgement() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    let closing = tokio::spawn(async move { lease.close().await });
+
+    for _ in 0..3 {
+        match harness.calls.recv().await.unwrap() {
+            DriverCall::Stop(reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
+            _ => panic!("bounded retry calls STOP only"),
+        }
+    }
+    assert!(closing.await.unwrap().is_err());
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "exhaustion does not busy-loop"
+    );
+}
+
+#[tokio::test]
+async fn a_timed_out_stop_attempt_is_bounded_and_does_not_overlap_its_retry() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    let closing = tokio::spawn(async move { lease.close().await });
+    let first_reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(reply) => reply,
+        _ => panic!("close starts one STOP worker"),
+    };
+
+    // This deadline observes the configured per-attempt timeout; it is not a
+    // synchronization sleep. Holding the reply also proves retries serialize.
+    let second_reply =
+        match tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
+            .await
+            .expect("the first attempt must time out")
+            .unwrap()
+        {
+            DriverCall::Stop(reply) => reply,
+            _ => panic!("timeout retry issues only STOP"),
+        };
+    assert!(
+        first_reply.send(Ok(())).is_err(),
+        "a timed-out attempt is finished"
+    );
+    second_reply
+        .send(Err(DriverError("private stop detail")))
+        .unwrap();
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
+        _ => panic!("retry sequence remains serialized"),
+    }
+    assert!(closing.await.unwrap().is_err());
+    assert!(harness.calls.try_recv().is_err(), "retry budget is finite");
+    assert!(
+        harness.callback().await.is_ok(),
+        "timeout is not STOP acknowledgement"
+    );
+}
+
+#[tokio::test]
+async fn cloned_close_waiters_and_last_user_drop_share_one_stop_worker() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    let first = lease.clone();
+    let second = lease.clone();
+    let first_waiter = tokio::spawn(async move { first.close().await });
+    let stop_reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(reply) => reply,
+        _ => panic!("first close starts the worker"),
+    };
+    let second_waiter = tokio::spawn(async move { second.close().await });
+    drop(lease);
+    first_waiter.abort();
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "joining close and Drop do not duplicate STOP"
+    );
+    stop_reply.send(Ok(())).unwrap();
+    assert!(second_waiter.await.unwrap().is_ok());
+    assert!(harness.calls.try_recv().is_err());
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn logical_failure_stops_retrying_without_claiming_acknowledgement() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    harness.driver.failed.store(true, Ordering::Release);
+    let closing = tokio::spawn(async move { lease.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
+        _ => panic!("close sends the first STOP before evaluating retry exit"),
+    }
+    assert!(closing.await.unwrap().is_err());
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "failed module has no subsequent retry"
+    );
+    assert!(
+        harness.callback().await.is_ok(),
+        "logical failure is not STOP ACK"
+    );
+}

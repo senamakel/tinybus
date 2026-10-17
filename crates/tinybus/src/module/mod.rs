@@ -14,6 +14,8 @@ mod first_admitted;
 #[cfg(feature = "modules")]
 mod github;
 mod hash;
+#[cfg(feature = "modules")]
+pub mod lease;
 pub mod manifest;
 pub mod platform;
 #[cfg(feature = "modules")]
