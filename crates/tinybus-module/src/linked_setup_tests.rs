@@ -4,7 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tinybus::broker::Broker;
-use tinybus::module::{LinkedModule, ModuleHost, ModuleState};
+use tinybus::module::{
+    LinkedModule, ModuleHost, ModuleId, ModuleRuntime, ModuleSenderLookup, ModuleState,
+    RuntimeNames, RuntimeSetup,
+};
 use tinybus::transport::memory::MemoryBus;
 use tinybus::{Connection, Interface};
 
@@ -177,6 +180,71 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
         assert!(connection.unique_name().is_some());
     }
     broker_task.abort();
+}
+
+#[tokio::test]
+async fn runtime_setup_can_export_a_weak_sender_lookup_for_linked_setup() {
+    fn assert_owned_thread_safe<T: Clone + Send + Sync + 'static>() {}
+    assert_owned_thread_safe::<ModuleSenderLookup>();
+
+    let stored_lookup = Arc::new(Mutex::new(None));
+    let capture_lookup = stored_lookup.clone();
+    let setup: RuntimeSetup = Box::new(move |_connection, host| {
+        Box::pin(async move {
+            *capture_lookup.lock().unwrap() = Some(host.sender_lookup());
+            Ok(())
+        })
+    });
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), Some(setup)).unwrap();
+    let lookup = stored_lookup
+        .lock()
+        .unwrap()
+        .take()
+        .expect("runtime setup should export an owned sender lookup");
+
+    let id = "linked_runtime_sender_lookup";
+    let bus_name = format!("ai.tinyhumans.test.{id}").parse().unwrap();
+    let lookup_during_setup = lookup.clone();
+    let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+    let info = runtime
+        .host()
+        .attach_linked_with_setup(
+            linked_export(id),
+            serde_json::json!({}),
+            move |connection| async move {
+                let peer = connection.unique_name().expect("authenticated module peer");
+                assert_eq!(
+                    lookup_during_setup
+                        .module_for_sender(&peer)
+                        .as_ref()
+                        .map(ModuleId::as_str),
+                    Some(id)
+                );
+                assert!(lookup_during_setup.module_for_sender(&bus_name).is_none());
+                let unrelated: tinybus::BusName = ":1.999999".parse().unwrap();
+                assert!(lookup_during_setup
+                    .module_for_sender(&unrelated)
+                    .is_none());
+                peer_tx.send(peer).expect("test receiver is alive");
+                connection
+                    .serve_at("/linked/runtime-lookup".parse().unwrap(), SetupValue("ready"))
+                    .await?;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(info.state, ModuleState::Ready);
+
+    let peer = peer_rx.await.unwrap();
+    assert_eq!(
+        lookup
+            .module_for_sender(&peer)
+            .as_ref()
+            .map(ModuleId::as_str),
+        Some(id),
+        "the setup-owned handle must survive RuntimeSetup returning"
+    );
 }
 
 #[tokio::test]
