@@ -131,7 +131,6 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
     )
     .await;
 
-    drop(second);
     let remaining_proxy = runtime
         .connection()
         .proxy(

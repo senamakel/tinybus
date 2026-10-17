@@ -13,6 +13,7 @@ mod callback_lifecycle_tests;
 static INIT_RAN: AtomicBool = AtomicBool::new(false);
 static LAZY_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FAILED_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static LINKED_DEFAULT_SETUP_RAN: AtomicBool = AtomicBool::new(false);
 static FAKE_MODULE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static REINIT_CONFIG: OnceLock<StdMutex<Vec<u8>>> = OnceLock::new();
 static BLOCKING_REINIT_RECEIVER: OnceLock<StdMutex<Option<std::sync::mpsc::Receiver<()>>>> =
@@ -169,6 +170,22 @@ unsafe extern "C" fn init_that_must_not_run(
     TB_OK
 }
 
+unsafe extern "C" fn linked_default_setup_init(
+    host: *const crate::module::abi::TbHostVtable,
+    out: *mut TbModuleVtable,
+) -> i32 {
+    LINKED_DEFAULT_SETUP_RAN.store(true, Ordering::Release);
+    unsafe { lazy_echo_init(host, out) }
+}
+
+unsafe fn linked_init_with_setup(
+    host: *const crate::module::abi::TbHostVtable,
+    out: *mut TbModuleVtable,
+    setup: crate::module::LinkedSetup,
+) -> i32 {
+    unsafe { tinybus_module::start_linked_module(host, out, 1, true, setup) }
+}
+
 pub(super) fn manifest() -> ModuleManifest {
     named_manifest("clock", "Clock")
 }
@@ -226,6 +243,7 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
                 descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
                 manifest: module_manifest,
                 init: lazy_echo_init,
+                init_with_setup: None,
             },
             serde_json::json!({}),
         )
@@ -288,6 +306,8 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
 
 #[tokio::test]
 async fn concurrent_linked_setup_keeps_each_export_bound_to_its_own_host_connection() {
+    let _serial = FAKE_MODULE_TEST_LOCK.lock().await;
+    LINKED_DEFAULT_SETUP_RAN.store(false, Ordering::Release);
     let bus = MemoryBus::new();
     let broker = Broker::new();
     let broker_task = broker.spawn(bus.clone());
@@ -303,7 +323,8 @@ async fn concurrent_linked_setup_keeps_each_export_bound_to_its_own_host_connect
         LinkedModule {
             descriptor: TbAbiDescriptor::current("linked-a", "0.1.0"),
             manifest: manifest_a,
-            init: lazy_echo_init,
+            init: linked_default_setup_init,
+            init_with_setup: Some(linked_init_with_setup),
         },
         serde_json::json!({"setup": "a"}),
         move |connection| async move {
@@ -326,7 +347,8 @@ async fn concurrent_linked_setup_keeps_each_export_bound_to_its_own_host_connect
         LinkedModule {
             descriptor: TbAbiDescriptor::current("linked-b", "0.1.0"),
             manifest: manifest_b,
-            init: lazy_echo_init,
+            init: linked_default_setup_init,
+            init_with_setup: Some(linked_init_with_setup),
         },
         serde_json::json!({"setup": "b"}),
         move |connection| async move {
@@ -343,8 +365,9 @@ async fn concurrent_linked_setup_keeps_each_export_bound_to_its_own_host_connect
     );
 
     let (a, b) = tokio::join!(attach_a, attach_b);
-    assert_eq!(a.unwrap().state, ModuleState::Resolved);
-    assert_eq!(b.unwrap().state, ModuleState::Resolved);
+    assert_eq!(a.unwrap().state, ModuleState::Ready);
+    assert_eq!(b.unwrap().state, ModuleState::Ready);
+    assert!(!LINKED_DEFAULT_SETUP_RAN.load(Ordering::Acquire));
     let setups = std::mem::take(&mut *setups.lock().unwrap());
     assert_eq!(setups.len(), 2);
     assert_ne!(setups[0].0, setups[1].0);
@@ -378,6 +401,7 @@ fn linked_module_with_an_unmet_required_interface_is_refused_before_init() {
                 descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
                 manifest: module_manifest,
                 init: init_that_must_not_run,
+                init_with_setup: None,
             },
             serde_json::json!({}),
         )
