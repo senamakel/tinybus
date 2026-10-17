@@ -515,8 +515,7 @@ async fn attested_calls_reject_a_post_sign_library_digest_not_in_the_release_pin
     let record = strict_record_with_assets(vec![release_asset]);
     let post_sign_library = "c".repeat(64);
 
-    let observed =
-        call_with_attestation(record, release_asset.sha256, &post_sign_library).await;
+    let observed = call_with_attestation(record, release_asset.sha256, &post_sign_library).await;
     assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
     assert_eq!(observed.serialized_arguments, 0);
     assert_eq!(observed.receiver_calls, 0);
@@ -533,8 +532,7 @@ async fn attested_calls_refuse_post_sign_bytes_before_sending_confidential_argum
     let record = strict_record_with_assets(vec![release_asset]);
     let post_sign_library = "c".repeat(64);
 
-    let observed =
-        call_with_attestation(record, release_asset.sha256, &post_sign_library).await;
+    let observed = call_with_attestation(record, release_asset.sha256, &post_sign_library).await;
     assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
     assert_eq!(observed.serialized_arguments, 0);
     assert_eq!(observed.receiver_calls, 0);
@@ -645,3 +643,6 @@ async fn a_confidential_call_stays_on_the_attested_unique_peer_after_name_handov
     assert!(calls_b.lock().unwrap().is_empty());
     broker_task.abort();
 }
+
+#[path = "client_attested_timeout_tests.rs"]
+mod timeout_tests;

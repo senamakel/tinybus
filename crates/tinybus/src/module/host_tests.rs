@@ -586,8 +586,7 @@ async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_p
     let user_cache = tempfile::tempdir().unwrap();
     // Code signing can rewrite the bundled library after the release archive
     // was hashed. The sealed local allowlist carries the final library digest.
-    let release_library_sha256 =
-        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+    let release_library_sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
     let asset = ReleaseAsset {
         host_key: "macos-15-arm64",
         archive: "clock-macos-15-arm64.tar.gz",
@@ -658,10 +657,7 @@ async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_p
         Some(signed_library_sha256.as_str())
     );
     assert_ne!(attestation.sha256, asset.sha256);
-    assert_ne!(
-        attestation.library_sha256.as_deref(),
-        asset.library_sha256
-    );
+    assert_ne!(attestation.library_sha256.as_deref(), asset.library_sha256);
     broker_task.abort();
 }
 

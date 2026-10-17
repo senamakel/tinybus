@@ -1,5 +1,5 @@
-use super::*;
 use super::test_support::{fixture, shared_runtime};
+use super::*;
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]

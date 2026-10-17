@@ -281,8 +281,7 @@ async fn a_fixture_proxy_is_classified_and_reported_when_the_call_fails() {
     );
 }
 
-const REMOTE_DETAIL: &str =
-    "fixture-only credential-like value: not-a-real-credential-token-7391";
+const REMOTE_DETAIL: &str = "fixture-only credential-like value: not-a-real-credential-token-7391";
 
 struct DetailedFailure;
 
