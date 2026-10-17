@@ -540,9 +540,9 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
 
     // Poll the reinitializer while the physical initializer is still parked.
     // This proves it took the scheduled-initializer path before publication.
+    let reinitializing_transport = transport.clone();
     let mut reinitializing = Box::pin(
-        transport
-            .clone()
+        reinitializing_transport
             .reinitialize(crate::Secret::new(br#"{"route":"replacement"}"#.to_vec())),
     );
     std::future::poll_fn(|cx| match reinitializing.as_mut().poll(cx) {
