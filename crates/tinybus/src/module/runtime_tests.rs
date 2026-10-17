@@ -438,6 +438,63 @@ async fn a_name_claim_race_preserves_the_peer_that_wins_before_registration() {
 }
 
 #[tokio::test]
+async fn a_same_connection_name_claim_that_wins_before_registration_is_preserved() {
+    let runtime = Arc::new(ModuleRuntime::start(&RuntimeNames::default(), None).unwrap());
+    let name: crate::BusName = "ai.tinyhumans.test.SamePeerNameRace".parse().unwrap();
+    let path: crate::ObjectPath = "/runtime/same_peer_name_race".parse().unwrap();
+    let barrier = HostObjectRegistrationBarrier {
+        entered: Arc::new(tokio::sync::Semaphore::new(0)),
+        release: Arc::new(tokio::sync::Semaphore::new(0)),
+    };
+    runtime.host_objects.lock().await.before_name_request = Some(barrier.clone());
+
+    let serving_runtime = runtime.clone();
+    let serving_name = name.clone();
+    let serving_path = path.clone();
+    let serving = tokio::spawn(async move {
+        serving_runtime
+            .serve_host_object(serving_name, serving_path, HostObjectValue("direct owner"))
+            .await
+    });
+    let entered = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        barrier.entered.acquire(),
+    )
+    .await
+    .expect("host registration did not reach the name-request race")
+    .unwrap();
+
+    runtime.connection().request_name(name.as_str()).await.unwrap();
+    let owner = runtime.connection().unique_name();
+    barrier.release.add_permits(1);
+    drop(entered);
+    let guard = serving.await.unwrap().expect("helper registers the interface");
+    runtime.host_objects.lock().await.before_name_request = None;
+
+    let proxy = runtime
+        .connection()
+        .proxy(
+            name.as_str(),
+            path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
+        .unwrap();
+    let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
+    assert_eq!(value, serde_json::json!("direct owner"));
+    drop(guard);
+
+    assert_eq!(
+        runtime.connection().name_owner(name.as_str()).await.unwrap(),
+        owner,
+        "dropping a helper guard must preserve an earlier same-peer claim"
+    );
+    let removed: crate::Result<serde_json::Value> = proxy.call("Value", ()).await;
+    assert!(removed.is_err(), "dropping the guard still removes its object");
+    runtime.connection().release_name(name.as_str()).await.unwrap();
+    wait_for_owner(runtime.connection(), name.as_str(), None).await;
+}
+
+#[tokio::test]
 async fn request_name_reply_failure_after_commit_rolls_back_the_new_claim() {
     let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
     let bus = crate::transport::memory::MemoryBus::new();
