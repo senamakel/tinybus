@@ -19,7 +19,7 @@ pub mod lease;
 #[cfg(feature = "modules")]
 pub use lease::{
     LeaseError, LeasePhase, LeaseReport, LeaseReportOutcome, RetryPolicy, RetryPolicyError,
-    RuntimeLease, RuntimeLeaseDriver,
+    RuntimeLease, RuntimeLeaseDriver, StopOutcome,
 };
 pub mod manifest;
 pub mod platform;

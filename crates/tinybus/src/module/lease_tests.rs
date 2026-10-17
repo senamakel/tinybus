@@ -334,7 +334,7 @@ async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
         _ => panic!("close starts one STOP"),
     };
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(2));
-    stop_reply.send(Ok(())).unwrap();
+    stop_reply.send(StopOutcome::Acknowledged).unwrap();
     assert!(closing.await.unwrap().is_ok());
     assert!(harness.callback().await.is_err());
 }
@@ -503,11 +503,8 @@ async fn logical_failure_stops_retrying_without_claiming_acknowledgement() {
     let lease = harness.opened().await;
     harness.driver.failed.store(true, Ordering::Release);
     let closing = tokio::spawn(async move { lease.close().await });
-    match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Unacknowledged(DriverError("private stop detail"))).unwrap(),
-        _ => panic!("close sends the first STOP before evaluating retry exit"),
-    }
     assert!(closing.await.unwrap().is_err());
+    assert!(harness.calls.try_recv().is_err(), "fault before first attempt sends no STOP");
     assert!(
         harness.calls.try_recv().is_err(),
         "failed module has no subsequent retry"
