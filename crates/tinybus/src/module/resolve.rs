@@ -28,9 +28,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Proxy;
 use crate::module::LinkedModule;
-use crate::module::client::{AccessFuture, ModuleAccess, ProxyFailure};
 use crate::module::failure::{FailureReporter, Reason};
 use crate::module::manifest::ModuleManifest;
 use crate::module::platform::host_candidates;
@@ -237,75 +235,8 @@ pub type ResolvedHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// Builds the [`LinkedModule`] compiled into the host for one module id. A plain
 /// `fn` so a registration carries no state.
 pub type LinkedFactory = fn() -> crate::Result<LinkedModule>;
-
-pub(super) fn reconfigure_failure(error: &crate::Error) -> super::client::ReconfigureFailure {
-    match error {
-        crate::Error::ModuleUnavailable { state, .. }
-            if state.eq_ignore_ascii_case("initializing") =>
-        {
-            super::client::ReconfigureFailure::Initializing
-        }
-        crate::Error::ModuleUnavailable { .. } => super::client::ReconfigureFailure::Unavailable,
-        crate::Error::MethodFailed { name, .. } if name == crate::Error::MODULE_UNAVAILABLE => {
-            super::client::ReconfigureFailure::Unavailable
-        }
-        _ => super::client::ReconfigureFailure::Failed,
-    }
-}
-
-impl ModuleAccess for Resolver {
-    fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
-        Resolver::find(self, id)
-    }
-
-    fn enabled(&self) -> bool {
-        Resolver::enabled(self)
-    }
-
-    fn reporter(&self) -> &FailureReporter {
-        Resolver::reporter(self)
-    }
-
-    fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
-        Box::pin(Resolver::ensure_loaded(self, id))
-    }
-
-    fn proxy<'a>(
-        &'a self,
-        bus_name: &'a str,
-        object_path: &'a str,
-    ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
-        Box::pin(async move {
-            let runtime = self.runtime().await.map_err(|_| ProxyFailure::Transport)?;
-            runtime
-                .proxy(bus_name, object_path)
-                .map_err(|_| ProxyFailure::Contract)
-        })
-    }
-
-    fn reinitialize<'a>(
-        &'a self,
-        id: &'a str,
-        config: serde_json::Value,
-    ) -> AccessFuture<'a, Result<(), super::client::ReconfigureFailure>> {
-        Box::pin(async move {
-            let runtime = self
-                .runtime()
-                .await
-                .map_err(|_| super::client::ReconfigureFailure::Unavailable)?;
-            runtime
-                .connection()
-                .reinitialize_module(id, config)
-                .await
-                .map(|_| ())
-                .map_err(|error| reconfigure_failure(&error))
-        })
-    }
-
-    fn mark_faulted(&self, id: &str) {
-        resolution::global().mark_faulted(id, "module reconfiguration failed".to_owned());
-    }
-}
+#[path = "resolve_access.rs"]
+pub(super) mod access;
 
 /// Plain inputs a host builds a [`Resolver`] from.
 pub struct ResolverInputs {

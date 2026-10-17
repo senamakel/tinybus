@@ -24,7 +24,7 @@ fn reconfiguration_classifies_only_closed_lifecycle_wire_names() {
         ),
         (
             crate::Error::MethodFailed {
-                name: crate::Error::MODULE_UNAVAILABLE.into(),
+                name: "ai.tinyhumans.tinybus.Error.Other".into(),
                 message: "module initializing".into(),
             },
             crate::module::ReconfigureFailure::Failed,
