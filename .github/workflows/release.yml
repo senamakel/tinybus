@@ -53,16 +53,17 @@ jobs:
               exit 2
             }
           else
-            [[ -z "$REVIEWED_PR" ]] || {
+            [[ -z "$REVIEWED_PR" || "$REVIEWED_PR" == 0 ]] || {
               echo "reviewed_pr is only valid in reviewed-epic mode" >&2
               exit 2
             }
+            REVIEWED_PR=""
           fi
           {
             echo "tag=$TAG"
             echo "version=${TAG#v}"
             echo "release_mode=$RELEASE_MODE"
-            # Keep fromJSON parseable when the main path leaves the PR number unset.
+            # Supply a JSON number when the main path has no reviewed PR input.
             echo "reviewed_pr=${REVIEWED_PR:-0}"
           } >> "$GITHUB_OUTPUT"
   sdk-release:
