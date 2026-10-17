@@ -111,7 +111,9 @@ unsafe extern "C" fn fixture_init(host: *const TbHostVtable, out: *mut TbModuleV
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
                     MEMBER_CONFIG_CALLS.fetch_add(1, Ordering::SeqCst);
-                    if config.get("hold_member").and_then(serde_json::Value::as_bool)
+                    if config
+                        .get("hold_member")
+                        .and_then(serde_json::Value::as_bool)
                         == Some(true)
                     {
                         BLOCKED_MEMBER
@@ -266,7 +268,8 @@ impl ModuleAccess for FixtureAccess {
             } else {
                 bus_name
             };
-            let proxy = self.connection
+            let proxy = self
+                .connection
                 .proxy(destination, object_path, bus_name)
                 .map_err(|_| ProxyFailure::Contract)?;
             Ok(self
@@ -398,6 +401,39 @@ async fn fixture() -> FixtureAccess {
         initializing_notifier: StdMutex::new(None),
         initializing_gate: StdMutex::new(None),
     }
+}
+
+async fn blocked_member_fixture(
+    timeout: Option<Duration>,
+) -> (
+    Arc<ReconfigurableModule>,
+    Connection,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::SyncSender<()>,
+    std::sync::mpsc::Receiver<()>,
+) {
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+    *BLOCKED_MEMBER
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("blocked member fixture lock") = Some(BlockedMember {
+        entered: entered_tx,
+        release: release_rx,
+        finished: finished_tx,
+    });
+    MEMBER_CONFIG_CALLS.store(0, Ordering::SeqCst);
+    let mut access = fixture().await;
+    ModuleAccess::ensure_loaded(&access, ID)
+        .await
+        .expect("linked fixture reaches serving before the controlled call");
+    access.member_proxy_timeout = timeout;
+    let connection = access.connection.clone();
+    let module = Arc::new(
+        ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure")),
+    );
+    (module, connection, entered_rx, release_tx, finished_rx)
 }
 
 async fn lazy_fixture(
@@ -705,6 +741,103 @@ async fn member_strategy_applies_config_through_the_linked_fixture_bus() {
     let proxy = module.proxy(&config).await.unwrap();
     assert_eq!(read_config(&proxy).await, config);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn canceled_member_reconfigure_fences_late_completion_and_cannot_be_reopened() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let (module, observer, entered, release, finished) = blocked_member_fixture(None).await;
+    let first_config = serde_json::json!({ "route": "first", "hold_member": true });
+    let first_module = module.clone();
+    let first = tokio::spawn(async move { first_module.proxy(&first_config).await });
+    tokio::task::spawn_blocking(move || entered.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(MEMBER_CONFIG_CALLS.load(Ordering::SeqCst), 1);
+
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    let second_config = serde_json::json!({ "route": "second" });
+    assert_eq!(
+        module.proxy(&second_config).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(MEMBER_CONFIG_CALLS.load(Ordering::SeqCst), 1);
+
+    module.invalidate();
+    module.record_loaded_with(&second_config).unwrap();
+    assert_eq!(
+        module.proxy(&second_config).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(MEMBER_CONFIG_CALLS.load(Ordering::SeqCst), 1);
+
+    release.send(()).unwrap();
+    tokio::task::spawn_blocking(move || finished.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let raw_proxy = observer.proxy(BUS, PATH, BUS).unwrap();
+    assert_eq!(
+        raw_proxy
+            .call::<serde_json::Value>("ReadConfig", ())
+            .await
+            .unwrap(),
+        serde_json::json!({ "route": "first", "hold_member": true })
+    );
+    assert_eq!(
+        module.proxy(&second_config).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(MEMBER_CONFIG_CALLS.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn timed_out_member_reconfigure_fences_late_completion() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let (module, observer, entered, release, finished) =
+        blocked_member_fixture(Some(Duration::from_millis(20))).await;
+    let first_config = serde_json::json!({ "route": "timed-out", "hold_member": true });
+    let first_module = module.clone();
+    let first = tokio::spawn(async move { first_module.proxy(&first_config).await });
+    tokio::task::spawn_blocking(move || entered.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::advance(Duration::from_millis(20)).await;
+    assert_eq!(
+        first.await.unwrap().unwrap_err(),
+        ModuleCallError::ModuleFault
+    );
+    assert_eq!(MEMBER_CONFIG_CALLS.load(Ordering::SeqCst), 1);
+
+    let second_config = serde_json::json!({ "route": "after-timeout" });
+    assert_eq!(
+        module.proxy(&second_config).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(MEMBER_CONFIG_CALLS.load(Ordering::SeqCst), 1);
+
+    release.send(()).unwrap();
+    tokio::task::spawn_blocking(move || finished.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::resume();
+    let raw_proxy = observer.proxy(BUS, PATH, BUS).unwrap();
+    assert_eq!(
+        raw_proxy
+            .call::<serde_json::Value>("ReadConfig", ())
+            .await
+            .unwrap(),
+        serde_json::json!({ "route": "timed-out", "hold_member": true })
+    );
+    assert_eq!(
+        module.proxy(&second_config).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(MEMBER_CONFIG_CALLS.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
