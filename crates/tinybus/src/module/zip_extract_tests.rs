@@ -19,6 +19,9 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
             "archive_collision.zip" => include_bytes!("fixtures/archive_collision.zip"),
             "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
             "compat_zip64_local.zip" => include_bytes!("fixtures/compat_zip64_local.zip"),
+            "encrypted.zip" => include_bytes!("fixtures/encrypted.zip"),
+            "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
+            "overlap.zip" => include_bytes!("fixtures/overlap.zip"),
             _ => panic!("unknown test fixture"),
         };
     fs::write(&archive, bytes).unwrap();
@@ -63,6 +66,20 @@ fn extracts_a_small_archive_with_zip64_local_size_fields() {
         fs::read(destination.join("module.so")).unwrap(),
         b"zip64-local-module"
     );
+}
+
+#[test]
+fn rejects_encryption_and_unsupported_methods() {
+    for fixture in ["encrypted.zip", "unsupported_method.zip"] {
+        let (_root, _destination, result) = extract_fixture(fixture);
+        assert!(result.is_err(), "accepted fixture {fixture}");
+    }
+}
+
+#[test]
+fn rejects_overlapping_compressed_entry_ranges() {
+    let (_root, _destination, result) = extract_fixture("overlap.zip");
+    assert!(result.is_err());
 }
 
 #[test]
@@ -181,6 +198,19 @@ fn corrupt_central_crc_is_refused_without_promoting_partial_output() {
 }
 
 #[test]
+fn crc_zero_is_still_verified_for_an_empty_file() {
+    let root = tempfile::tempdir().unwrap();
+    let archive = root.path().join("fixture.zip");
+    let destination = root.path().join("staging");
+    fs::create_dir(&destination).unwrap();
+    let mut bytes = include_bytes!("fixtures/compat_store.zip").to_vec();
+    set_member_crc(&mut bytes, "empty", 1);
+    fs::write(&archive, bytes).unwrap();
+
+    assert!(extract(&archive, &destination).is_err());
+}
+
+#[test]
 fn corrupt_crc_never_promotes_partial_cache_staging() {
     let mut bytes = include_bytes!("fixtures/compat_store.zip").to_vec();
     let central = bytes
@@ -223,4 +253,31 @@ fn an_incomplete_deflate_stream_is_not_accepted_as_eof() {
     let mut decoder = StrictDeflate::new(compressed.as_slice(), compressed.len() as u64);
     let mut output = Vec::new();
     assert!(decoder.read_to_end(&mut output).is_err());
+}
+
+fn set_member_crc(bytes: &mut [u8], name: &str, crc: u32) {
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..].windows(4).position(|sig| sig == b"PK\x03\x04") {
+        let local = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[local + 26], bytes[local + 27]]) as usize;
+        let name_start = local + 30;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[local + 14..local + 18].copy_from_slice(&crc.to_le_bytes());
+            break;
+        }
+        offset = name_start + name_len;
+    }
+
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..].windows(4).position(|sig| sig == b"PK\x01\x02") {
+        let central = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[central + 28], bytes[central + 29]]) as usize;
+        let name_start = central + 46;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[central + 16..central + 20].copy_from_slice(&crc.to_le_bytes());
+            return;
+        }
+        offset = name_start + name_len;
+    }
+    panic!("fixture entry not found: {name}");
 }
