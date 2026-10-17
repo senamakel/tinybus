@@ -244,8 +244,7 @@ impl Interface for ReplacementUpload {
     }
 
     async fn call(&self, _member: &MemberName, _args: Value) -> Result<Value> {
-        self.calls
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Value::Null)
     }
 }
@@ -258,7 +257,9 @@ async fn a_stream_method_stays_with_the_owner_that_opened_its_stream_after_name_
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
 
-    let owner = Connection::connect(bus.connect().await.unwrap()).await.unwrap();
+    let owner = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
     owner.request_name(NAME).await.unwrap();
     let (received_tx, mut received_rx) = tokio::sync::mpsc::unbounded_channel();
     owner
@@ -275,8 +276,7 @@ async fn a_stream_method_stays_with_the_owner_that_opened_its_stream_after_name_
     let replacement = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let replacement_calls =
-        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let replacement_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     replacement
         .serve_at(
             ObjectPath::new(PATH).unwrap(),
@@ -295,7 +295,9 @@ async fn a_stream_method_stays_with_the_owner_that_opened_its_stream_after_name_
         blocked: blocked_tx,
         resume: resume.clone(),
     };
-    let client = Connection::connect(Box::new(client_transport)).await.unwrap();
+    let client = Connection::connect(Box::new(client_transport))
+        .await
+        .unwrap();
     let upload = tokio::spawn(async move {
         client
             .call_with_stream::<usize>(
@@ -324,7 +326,10 @@ async fn a_stream_method_stays_with_the_owner_that_opened_its_stream_after_name_
         .await
         .expect("the streamed method completed after name handover")
         .unwrap();
-    assert_eq!(result.unwrap(), b"stream opened by the original owner".len());
+    assert_eq!(
+        result.unwrap(),
+        b"stream opened by the original owner".len()
+    );
     assert_eq!(
         replacement_calls.load(std::sync::atomic::Ordering::SeqCst),
         0,
