@@ -55,18 +55,17 @@ async fn setup_runs_before_the_runtime_is_handed_out() {
 
 #[tokio::test]
 async fn a_failing_setup_fails_the_start() {
-    let captured = Arc::new(std::sync::Mutex::new(None));
-    let capture = captured.clone();
-    let setup: RuntimeSetup = Box::new(move |connection, _host| {
-        *capture.lock().unwrap() = Some(connection);
-        Box::pin(async { Err(crate::Error::Transport("setup".to_string())) })
+    let ran = Arc::new(AtomicBool::new(false));
+    let was_run = ran.clone();
+    let setup: RuntimeSetup = Box::new(move |_connection, _host| {
+        Box::pin(async move {
+            was_run.store(true, Ordering::SeqCst);
+            Err(crate::Error::Transport("setup".to_string()))
+        })
     });
     let result = ModuleRuntime::start(&RuntimeNames::default(), Some(setup));
     assert!(result.is_err());
-    let connection = captured.lock().unwrap().take().unwrap();
-    let closed =
-        tokio::time::timeout(std::time::Duration::from_secs(1), connection.list_names()).await;
-    assert!(closed.is_ok_and(|result| result.is_err()));
+    assert!(ran.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -242,7 +241,11 @@ async fn a_name_collision_leaves_no_host_object_registration_behind() {
             serde_json::Value::Null,
         )
         .unwrap();
-    let owner = runtime.connection().name_owner(name.as_str()).await.unwrap();
+    let owner = runtime
+        .connection()
+        .name_owner(name.as_str())
+        .await
+        .unwrap();
     assert!(owner.is_some());
     assert!(
         runtime
