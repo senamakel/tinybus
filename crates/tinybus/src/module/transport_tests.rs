@@ -386,7 +386,7 @@ async fn deferred_reinitialize_replaces_the_initializer_config_slice() {
             .expect("module initializer lock");
         let host = &initializer.as_ref().unwrap().host;
         assert_ne!(config.as_ptr(), original_pointer);
-        assert_eq!(config, replacement);
+        assert_eq!(config.as_slice(), replacement);
         assert_eq!(host.config.ptr, config.as_ptr());
         assert_eq!(host.config.len, config.len());
         assert!(
