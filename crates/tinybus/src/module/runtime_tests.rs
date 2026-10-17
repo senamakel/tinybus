@@ -95,6 +95,19 @@ async fn wait_for_owner(connection: &Connection, name: &str, expected: Option<cr
     panic!("bus name owner did not reach the expected state");
 }
 
+async fn wait_for_host_name_lease_cleanup(runtime: &ModuleRuntime, name: &crate::BusName) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if !runtime.host_objects.lock().await.names.contains_key(name) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("host object guard cleanup did not finish");
+}
+
 #[tokio::test]
 async fn setup_runs_before_the_runtime_is_handed_out() {
     let ran = Arc::new(AtomicBool::new(false));
@@ -482,6 +495,7 @@ async fn a_same_connection_name_claim_that_wins_before_registration_is_preserved
     let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
     assert_eq!(value, serde_json::json!("direct owner"));
     drop(guard);
+    wait_for_host_name_lease_cleanup(&runtime, &name).await;
 
     assert_eq!(
         runtime.connection().name_owner(name.as_str()).await.unwrap(),
