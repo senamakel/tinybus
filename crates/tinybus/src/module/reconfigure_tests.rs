@@ -888,6 +888,32 @@ async fn resolver_load_failure_is_reported_once_with_its_resolution_reason() {
 }
 
 #[tokio::test]
+async fn member_second_load_failure_preserves_resolution_report_reason() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let sink = Arc::new(RecordingSink::default());
+    let mut access = fixture_with_sink(sink.clone()).await;
+    access.fail_ensure_loaded_at = Some(2);
+    let module =
+        ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure"));
+
+    assert_eq!(
+        module
+            .proxy(&serde_json::json!({ "route": "second-load" }))
+            .await
+            .unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(
+            ID.to_owned(),
+            RECORD.version.to_owned(),
+            Reason::ResolutionFailed
+        )]
+    );
+}
+
+#[tokio::test]
 async fn member_strategy_applies_config_through_the_linked_fixture_bus() {
     let _test_guard = FIXTURE_LOCK.lock().await;
     let access = fixture().await;
