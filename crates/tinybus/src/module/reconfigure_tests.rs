@@ -24,6 +24,14 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
     assets: &[],
 };
+static FAILED_RESOLVER_RECORD: ReleaseRecord = ReleaseRecord {
+    id: "reconfigure-report-resolution-failure",
+    bus_name: "ai.tinyhumans.test.ReconfigureReportResolutionFailure",
+    object_path: "/ai/tinyhumans/test/ReconfigureReportResolutionFailure",
+    version: "0.0.0",
+    release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
+    assets: &[],
+};
 
 #[derive(Default)]
 struct RecordingSink(StdMutex<Vec<(String, String, Reason)>>);
@@ -824,6 +832,44 @@ async fn proxy_failure_after_configuration_reports_transport_failure() {
     assert_eq!(
         sink.0.lock().unwrap().as_slice(),
         &[(ID.to_owned(), "0.0.0".to_owned(), Reason::TransportFailed)]
+    );
+}
+
+#[tokio::test]
+async fn resolver_load_failure_is_reported_once_with_its_resolution_reason() {
+    let sink = Arc::new(RecordingSink::default());
+    let reporter = Arc::new(FailureReporter::new(sink.clone()));
+    let resolver = crate::module::Resolver::new(crate::module::ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources: std::collections::HashMap::new(),
+        linked: std::collections::HashMap::new(),
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: vec![&FAILED_RESOLVER_RECORD],
+        terminal_marker: String::new(),
+        runtime: Arc::new(|| {
+            Box::pin(async { Err(crate::Error::transport("runtime not configured")) })
+        }),
+        module_config: Arc::new(|_| serde_json::Value::Null),
+        reporter,
+    });
+    let module = ReconfigurableModule::new(resolver, FAILED_RESOLVER_RECORD.id);
+
+    assert_eq!(
+        module.proxy(&serde_json::Value::Null).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(
+            FAILED_RESOLVER_RECORD.id.to_owned(),
+            FAILED_RESOLVER_RECORD.version.to_owned(),
+            Reason::ResolutionFailed,
+        )]
     );
 }
 
