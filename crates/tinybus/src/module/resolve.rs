@@ -267,6 +267,35 @@ impl ModuleAccess for Resolver {
                 .map_err(|_| ProxyFailure::Contract)
         })
     }
+
+    fn reinitialize<'a>(
+        &'a self,
+        id: &'a str,
+        config: serde_json::Value,
+    ) -> AccessFuture<'a, Result<(), super::client::ReconfigureFailure>> {
+        Box::pin(async move {
+            let runtime = self
+                .runtime()
+                .await
+                .map_err(|_| super::client::ReconfigureFailure::Unavailable)?;
+            match runtime.connection().reinitialize_module(id, config).await {
+                Ok(_) => Ok(()),
+                Err(crate::Error::ModuleUnavailable { state, .. })
+                    if state.eq_ignore_ascii_case("initializing") =>
+                {
+                    Err(super::client::ReconfigureFailure::Initializing)
+                }
+                Err(crate::Error::ModuleUnavailable { .. }) => {
+                    Err(super::client::ReconfigureFailure::Unavailable)
+                }
+                Err(_) => Err(super::client::ReconfigureFailure::Failed),
+            }
+        })
+    }
+
+    fn mark_faulted(&self, id: &str, reason: String) {
+        resolution::global().mark_faulted(id, reason);
+    }
 }
 
 /// Plain inputs a host builds a [`Resolver`] from.

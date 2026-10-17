@@ -60,6 +60,36 @@ pub trait ModuleAccess: Send + Sync {
         bus_name: &'a str,
         object_path: &'a str,
     ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>>;
+
+    /// Reinitialize a loaded module through its owning lifecycle host.
+    ///
+    /// Implementations without lifecycle support may keep the default, which
+    /// reports [`ReconfigureFailure::Unsupported`].
+    fn reinitialize<'a>(
+        &'a self,
+        _id: &'a str,
+        _config: serde_json::Value,
+    ) -> AccessFuture<'a, Result<(), ReconfigureFailure>> {
+        Box::pin(async { Err(ReconfigureFailure::Unsupported) })
+    }
+
+    /// Record that reinitialization left a module unusable. Resolver-backed
+    /// access makes this terminal for the current process; other accessors may
+    /// leave it as a no-op.
+    fn mark_faulted(&self, _id: &str, _reason: String) {}
+}
+
+/// Sanitized lifecycle result used by configuration reconciliation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReconfigureFailure {
+    /// The module is still completing initialization and may become ready.
+    Initializing,
+    /// The module is unavailable in a terminal or unsupported state.
+    Unavailable,
+    /// The lifecycle operation failed for another reason.
+    Failed,
+    /// This access implementation does not expose module lifecycle control.
+    Unsupported,
 }
 
 /// A sanitised terminal module outcome. Arguments and remote error text are
