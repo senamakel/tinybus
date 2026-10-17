@@ -1,3 +1,0 @@
-cargo::rerun-if-env-changed=TARGET
-cargo::rustc-env=TINYBUS_TARGET=aarch64-apple-darwin
-cargo::rustc-env=TINYBUS_RUSTC_VERSION=1.99.0
