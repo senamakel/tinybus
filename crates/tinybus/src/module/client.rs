@@ -728,6 +728,24 @@ impl ModuleClient {
             ModuleCallError::ModuleFault
         })
     }
+
+    /// Sanitized counterpart to [`Self::call_with_stream_detailed`].
+    pub async fn call_with_stream<R, F, A>(
+        &self,
+        module: &str,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallError>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        self.call_with_stream_detailed(module, member, args, bytes)
+            .await
+            .map_err(|failure| failure.kind)
+    }
 }
 
 /// A validated proxy for a module-owned object path.

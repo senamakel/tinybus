@@ -110,6 +110,7 @@ impl crate::ports::Transport for ObservedTransport {
 enum Behavior {
     Consume(tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
     Invalid,
+    Unavailable,
     Stall {
         entered: tokio::sync::mpsc::UnboundedSender<()>,
         resume: Arc<tokio::sync::Notify>,
@@ -119,6 +120,7 @@ enum Behavior {
 struct StreamService {
     connection: Connection,
     behavior: Behavior,
+    calls: Arc<AtomicUsize>,
 }
 
 #[async_trait]
@@ -128,12 +130,13 @@ impl Interface for StreamService {
     }
 
     fn members(&self) -> Vec<MemberName> {
-        ["Upload", "InvalidInput", "Stall"]
+        ["Upload", "InvalidInput", "Unavailable", "Stall"]
             .map(|name| MemberName::new(name).unwrap())
             .to_vec()
     }
 
     async fn call(&self, member: &MemberName, args: Value) -> crate::Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         match (&self.behavior, member.as_str()) {
             (Behavior::Consume(received), "Upload") => {
                 let (stream,): (StreamRef,) = serde_json::from_value(args)?;
@@ -144,6 +147,10 @@ impl Interface for StreamService {
             (Behavior::Invalid, "InvalidInput") => Err(Error::MethodFailed {
                 name: "ai.tinyhumans.tinydocs.Error.InvalidInput".to_string(),
                 message: "secret document detail".to_string(),
+            }),
+            (Behavior::Unavailable, "Unavailable") => Err(Error::MethodFailed {
+                name: Error::MODULE_UNAVAILABLE.to_string(),
+                message: "secret unavailable detail".to_string(),
             }),
             (Behavior::Stall { entered, resume }, "Stall") => {
                 entered.send(()).unwrap();
@@ -159,6 +166,7 @@ struct Fixture {
     client: ModuleClient,
     connection: Connection,
     opens: Arc<AtomicUsize>,
+    calls: Arc<AtomicUsize>,
     aborts: tokio::sync::mpsc::UnboundedReceiver<()>,
     reports: Arc<Reports>,
 }
@@ -177,6 +185,7 @@ async fn fixture(behavior: Behavior) -> Fixture {
             StreamService {
                 connection: service.clone(),
                 behavior: behavior.clone(),
+                calls: calls.clone(),
             },
         )
         .await
@@ -187,12 +196,14 @@ async fn fixture(behavior: Behavior) -> Fixture {
             StreamService {
                 connection: service.clone(),
                 behavior,
+                calls: calls.clone(),
             },
         )
         .await
         .unwrap();
 
     let opens = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
     let (aborts_tx, aborts) = tokio::sync::mpsc::unbounded_channel();
     let observed = ObservedTransport {
         inner: bus.connect().await.unwrap(),
@@ -214,6 +225,7 @@ async fn fixture(behavior: Behavior) -> Fixture {
         client: ModuleClient::new(access).with_fixture(proxy),
         connection,
         opens,
+        calls,
         aborts,
         reports,
     }
@@ -351,8 +363,8 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
 
 #[tokio::test]
 async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_renderings() {
-    let fixture = fixture(Behavior::Invalid).await;
-    let failure = fixture
+    let invalid_fixture = fixture(Behavior::Invalid).await;
+    let failure = invalid_fixture
         .client
         .call_with_stream_detailed::<Value, _, _>(
             RECORD.id,
@@ -373,7 +385,7 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
         assert!(!rendered.contains("secret document detail"));
     }
 
-    let object = fixture
+    let object = invalid_fixture
         .client
         .object_client(RECORD.id, "/child")
         .await
@@ -384,10 +396,32 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
         .unwrap_err();
     assert_eq!(object_failure.wire_name, failure.wire_name);
     assert_eq!(object_failure.message, failure.message);
-    let reports = fixture.reports.0.lock().unwrap();
+    let unavailable_fixture = fixture(Behavior::Unavailable).await;
+    let unavailable_object = unavailable_fixture
+        .client
+        .object_client(RECORD.id, "/child")
+        .await
+        .unwrap();
+    let unavailable = unavailable_object
+        .call_detailed::<Value>("Unavailable", ())
+        .await
+        .unwrap_err();
+    assert_eq!(unavailable.kind, ModuleCallError::Unavailable);
+    assert_eq!(unavailable.wire_name, Error::MODULE_UNAVAILABLE);
+    assert_eq!(unavailable.message, "secret unavailable detail");
+
+    let sanitized = object.call::<Value>("InvalidInput", ()).await.unwrap_err();
+    assert_eq!(sanitized, ModuleCallError::ModuleFault);
+    assert!(!format!("{sanitized:?}").contains("secret document detail"));
+    assert!(!sanitized.to_string().contains("secret document detail"));
+    let reports = invalid_fixture.reports.0.lock().unwrap();
     assert_eq!(
         reports.as_slice(),
-        &[Reason::ModuleFault, Reason::ModuleFault]
+        &[
+            Reason::ModuleFault,
+            Reason::ModuleFault,
+            Reason::ModuleFault,
+        ]
     );
 }
 
