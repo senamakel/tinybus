@@ -138,7 +138,7 @@ fn incomplete_module_vtables_are_rejected_and_shutdown_reports_closed() {
 
 #[tokio::test]
 async fn an_older_vtable_loads_but_reports_reinitialization_as_unsupported() {
-    let (transport, _) = ModuleTransport::new("older".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("older".to_string(), Vec::new());
     let mut older = TbModuleVtable {
         module_ctx: std::ptr::dangling_mut(),
         deliver,
@@ -148,6 +148,7 @@ async fn an_older_vtable_loads_but_reports_reinitialization_as_unsupported() {
     };
     older.size = TB_MODULE_VTABLE_BASE_SIZE;
     transport.initialize(older).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
     let error = transport
         .reinitialize(crate::Secret::new(
             serde_json::to_vec(&serde_json::json!({ "secret": "never printed" })).unwrap(),
@@ -189,10 +190,11 @@ async fn reinitialization_maps_callback_failures_without_exposing_configuration(
             .contains("not initialized")
     );
 
-    let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("configured".to_string(), Vec::new());
     let mut module = TbModuleVtable::default();
     unsafe { initialize_ok(std::ptr::null(), &mut module) };
     transport.initialize(module).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
     for (code, expected) in [
         (TB_BAD_ARGUMENT, "configuration is invalid"),
         (TB_CLOSED, "reinitialization failed"),
@@ -228,10 +230,11 @@ async fn a_running_reinitialization_excludes_another_reinitialization_and_shutdo
     REINITIALIZE_BLOCKED.store(true, Ordering::Release);
     REINITIALIZE_ENTERED.store(false, Ordering::Release);
     SHUTDOWN_CALLS.store(0, Ordering::Release);
-    let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("configured".to_string(), Vec::new());
     let mut module = TbModuleVtable::default();
     unsafe { initialize_ok(std::ptr::null(), &mut module) };
     transport.initialize(module).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
 
     let first_transport = transport.clone();
     let first = tokio::spawn(async move {
@@ -461,6 +464,7 @@ async fn canceling_reconfiguration_waiting_for_started_lazy_init_keeps_initializ
     initializing.await.unwrap().unwrap();
     assert!(!transport.is_faulted());
     assert!(!REINITIALIZE_ENTERED.load(Ordering::Acquire));
+    unsafe { (host.ready)(host.host_ctx) };
 
     transport
         .reinitialize(crate::Secret::new(br#"{"route":"after-init"}"#.to_vec()))
