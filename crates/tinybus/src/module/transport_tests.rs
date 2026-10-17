@@ -492,7 +492,7 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
             let setup_started = setup_started.clone();
             let release_setup = release_setup.clone();
             let setup_count = setup_count.clone();
-            move |_: crate::Connection, _: serde_json::Value| {
+            move |_, _: serde_json::Value| {
                 let first_setup = setup_count.fetch_add(1, Ordering::AcqRel) == 0;
                 let started = first_setup.then(|| setup_started.lock().unwrap().take().unwrap());
                 let release = first_setup.then(|| release_setup.lock().unwrap().take().unwrap());
