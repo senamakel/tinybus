@@ -3350,9 +3350,8 @@ fn an_explicit_search_path_config_preserves_env_first_order_without_product_defa
     let env_var = "TINYBUS_TEST_MODULE_SEARCH_PATHS";
     unsafe { std::env::set_var(env_var, &env_dir) };
 
-    let host = ModuleHost::new(Broker::new()).with_search_path_config(
-        SearchPathConfig::new(env_var, "tinydemo/modules"),
-    );
+    let host = ModuleHost::new(Broker::new())
+        .with_search_path_config(SearchPathConfig::new(env_var, "tinydemo/modules"));
     let paths = host.search_paths();
     unsafe { std::env::remove_var(env_var) };
 
@@ -3384,9 +3383,8 @@ fn load_search_paths_except_skips_an_artifact_before_opening_it() {
     std::fs::write(directory.join(file_name), b"not a shared library").unwrap();
     let env_var = "TINYBUS_TEST_SKIP_SEARCH_PATH";
     unsafe { std::env::set_var(env_var, &directory) };
-    let host = ModuleHost::new(Broker::new()).with_search_path_config(
-        SearchPathConfig::new(env_var, "tinybus-test/modules"),
-    );
+    let host = ModuleHost::new(Broker::new())
+        .with_search_path_config(SearchPathConfig::new(env_var, "tinybus-test/modules"));
 
     let outcomes = host.load_search_paths_except(&["skip-before-open".to_string()]);
     unsafe { std::env::remove_var(env_var) };

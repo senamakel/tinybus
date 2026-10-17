@@ -713,8 +713,18 @@ fn linked_registry_replaces_factories_and_returns_the_last_registration() {
 
     registry.register("registry-test", first_factory);
     assert!(registry.is_registered("registry-test"));
-    assert!(registry.get("registry-test").unwrap()().unwrap_err().to_string().contains("first factory"));
+    assert!(
+        registry.get("registry-test").unwrap()()
+            .unwrap_err()
+            .to_string()
+            .contains("first factory")
+    );
 
     registry.register("registry-test", replacement_factory);
-    assert!(registry.get("registry-test").unwrap()().unwrap_err().to_string().contains("replacement factory"));
+    assert!(
+        registry.get("registry-test").unwrap()()
+            .unwrap_err()
+            .to_string()
+            .contains("replacement factory")
+    );
 }
