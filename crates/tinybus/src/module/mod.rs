@@ -13,6 +13,8 @@ pub mod failure;
 mod first_admitted;
 #[cfg(feature = "modules")]
 mod github;
+#[cfg(feature = "modules")]
+mod zip_extract;
 mod hash;
 pub mod manifest;
 pub mod platform;
