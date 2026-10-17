@@ -726,20 +726,12 @@ fn linked_registry_replaces_factories_and_returns_the_last_registration() {
 
     registry.register("registry-test", first_factory);
     assert!(registry.is_registered("registry-test"));
-    assert!(
-        registry.get("registry-test").unwrap()()
-            .unwrap_err()
-            .to_string()
-            .contains("first factory")
-    );
+    let first = (registry.get("registry-test").unwrap())();
+    assert!(matches!(first, Err(error) if error.to_string().contains("first factory")));
 
     registry.register("registry-test", replacement_factory);
-    assert!(
-        registry.get("registry-test").unwrap()()
-            .unwrap_err()
-            .to_string()
-            .contains("replacement factory")
-    );
+    let replacement = (registry.get("registry-test").unwrap())();
+    assert!(matches!(replacement, Err(error) if error.to_string().contains("replacement factory")));
 }
 
 struct ResolverSearchSink;
@@ -755,7 +747,7 @@ async fn resolver_inputs_configure_the_runtime_host_search_paths() {
     std::fs::create_dir(&search_dir).unwrap();
     let env_var = "TINYBUS_TEST_RESOLVER_SEARCH_PATH";
     unsafe { std::env::set_var(env_var, &search_dir) };
-    let runtime = Box::leak(Box::new(
+    let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
         crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap(),
     ));
     let resolver = Resolver::new(ResolverInputs {
