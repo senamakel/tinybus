@@ -86,6 +86,70 @@ pub trait ModuleAccess: Send + Sync {
     fn mark_faulted(&self, _id: &str) {}
 }
 
+/// Module access for hosts that compile the registry but omit the dynamic
+/// loader. Known modules remain discoverable and report the closed
+/// `loader_disabled` reason when requested; unknown identifiers are not copied
+/// into diagnostics.
+pub struct UnloadedAccess {
+    records: Vec<&'static ReleaseRecord>,
+    enabled: bool,
+    reporter: Arc<FailureReporter>,
+}
+
+impl UnloadedAccess {
+    /// Create access over the host's compiled module records without a loader.
+    #[must_use]
+    pub fn new(
+        records: Vec<&'static ReleaseRecord>,
+        enabled: bool,
+        reporter: Arc<FailureReporter>,
+    ) -> Self {
+        Self {
+            records,
+            enabled,
+            reporter,
+        }
+    }
+}
+
+impl ModuleAccess for UnloadedAccess {
+    fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
+        self.records.iter().copied().find(|record| record.id == id)
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn reporter(&self) -> &FailureReporter {
+        &self.reporter
+    }
+
+    fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            if let Some(record) = self.find(id) {
+                tracing::debug!(module = record.id, "module unavailable: loader is disabled");
+                self.reporter
+                    .report(record.id, record.version, Reason::LoaderDisabled);
+                Err(format!(
+                    "module '{}' is unavailable: this build has no module loader",
+                    record.id
+                ))
+            } else {
+                Err("module is unavailable: this build has no module loader".to_string())
+            }
+        })
+    }
+
+    fn proxy<'a>(
+        &'a self,
+        _bus_name: &'a str,
+        _object_path: &'a str,
+    ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
+        Box::pin(async { Err(ProxyFailure::Transport) })
+    }
+}
+
 /// Sanitized lifecycle result used by configuration reconciliation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReconfigureFailure {

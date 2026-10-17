@@ -48,8 +48,8 @@ mod windows_acl;
 pub use cache::{artifact_dir, is_safe_path_component, prune_stale_versions};
 pub use client::{
     AccessFuture, ModuleAccess, ModuleCallError, ModuleCallFailure, ModuleClient,
-    ModuleObjectClient, ProxyFailure, ReconfigureFailure, classify, report_proxy_failure,
-    wire_kind,
+    ModuleObjectClient, ProxyFailure, ReconfigureFailure, UnloadedAccess, classify,
+    report_proxy_failure, wire_kind,
 };
 pub use failure::{FailureReport, FailureReporter, FailureSink, Reason};
 #[cfg(feature = "modules")]
@@ -62,14 +62,15 @@ pub use host::callbacks::{
     HostCallbackSignal,
 };
 #[cfg(feature = "modules")]
-pub use host::{ModuleHost, ModuleInfo, ModuleState};
+pub use host::{ModuleHost, ModuleInfo, ModuleState, SearchPathConfig};
 #[cfg(feature = "modules")]
 pub use reconfigure::{ConfigFingerprint, ReconfigurableModule, Reconfigure, ReconfigureGuard};
 pub use release::{ReleaseAsset, ReleaseRecord};
 #[cfg(feature = "modules")]
 pub use resolve::{
-    Availability, LinkedFactory, LoadError, ModuleConfigProvider, ModuleGate, ModuleSource,
-    ResolvedHook, Resolver, ResolverInputs, RuntimeFuture, RuntimeProvider,
+    Availability, LinkedFactory, LinkedRegistry, LoadError, ModuleConfigProvider, ModuleGate,
+    ModuleSource, ResolvedHook, Resolver, ResolverInputs, RuntimeFuture, RuntimeProvider,
+    resolve_bundled_dir, set_bundled_releases_dir,
 };
 #[cfg(feature = "modules")]
 pub use runtime::{ModuleRuntime, RuntimeNames, RuntimeSetup};

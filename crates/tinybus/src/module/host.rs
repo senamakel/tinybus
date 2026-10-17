@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -238,6 +238,29 @@ struct ModuleHostInner {
     // resolve sibling files for the lifetime of its mapped library.
     artifacts: Mutex<Vec<tempfile::TempDir>>,
     warned: AtomicBool,
+    search_path_config: RwLock<Option<SearchPathConfig>>,
+}
+
+/// Product configuration for directories that `ModuleHost` scans for modules.
+/// TinyBus has no product-specific default; hosts opt in by naming the
+/// environment variable and application directory they own.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SearchPathConfig {
+    /// Environment variable containing path-list entries searched first.
+    pub env_var: String,
+    /// App-specific suffix beneath each platform data directory.
+    pub app_dir: PathBuf,
+}
+
+impl SearchPathConfig {
+    /// Configure module search paths for a host.
+    #[must_use]
+    pub fn new(env_var: impl Into<String>, app_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            env_var: env_var.into(),
+            app_dir: app_dir.into(),
+        }
+    }
 }
 
 /// Clears a module's host-side lifecycle reservation when its operation ends.
@@ -341,10 +364,31 @@ impl ModuleHost {
             configs: Mutex::new(HashMap::new()),
             artifacts: Mutex::new(Vec::new()),
             warned: AtomicBool::new(false),
+            search_path_config: RwLock::new(None),
         });
         let control: Arc<dyn ModuleControl> = inner.clone();
         broker.set_module_control(Arc::downgrade(&control));
         Self { inner }
+    }
+
+    /// Builder form of [`Self::set_search_path_config`].
+    #[must_use]
+    pub fn with_search_path_config(self, config: SearchPathConfig) -> Self {
+        self.set_search_path_config(Some(config));
+        self
+    }
+
+    /// Set or clear this host's module search paths.
+    pub fn set_search_path_config(&self, config: Option<SearchPathConfig>) {
+        *self
+            .inner
+            .search_path_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
+
+    pub(crate) fn configure_search_path_config(&self, config: Option<SearchPathConfig>) {
+        self.set_search_path_config(config);
     }
 
     /// Refuse modules built by a different rustc release.
@@ -1011,25 +1055,35 @@ impl ModuleHost {
         Ok(outcomes)
     }
 
-    /// Search paths in precedence order for the current platform.
-    pub fn search_paths() -> Vec<PathBuf> {
-        let mut paths = std::env::var_os("OPENHUMAN_MODULE_PATH")
+    /// Search paths in precedence order for this host. An unconfigured host
+    /// has no implicit search paths.
+    pub fn search_paths(&self) -> Vec<PathBuf> {
+        let config = self
+            .inner
+            .search_path_config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Some(config) = config else {
+            return Vec::new();
+        };
+        let mut paths = std::env::var_os(&config.env_var)
             .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
             .unwrap_or_default();
         #[cfg(target_os = "linux")]
         {
             if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
-                paths.push(PathBuf::from(path).join("openhuman/modules"));
+                paths.push(PathBuf::from(path).join(&config.app_dir));
             } else if let Some(path) = std::env::var_os("HOME") {
-                paths.push(PathBuf::from(path).join(".local/share/openhuman/modules"));
+                paths.push(PathBuf::from(path).join(".local/share").join(&config.app_dir));
             }
-            paths.push(PathBuf::from("/usr/lib/openhuman/modules"));
+            paths.push(PathBuf::from("/usr/lib").join(&config.app_dir));
         }
         #[cfg(target_os = "macos")]
-        paths.push(PathBuf::from("/usr/local/lib/openhuman/modules"));
+        paths.push(PathBuf::from("/usr/local/lib").join(&config.app_dir));
         #[cfg(windows)]
         if let Some(path) = std::env::var_os("LOCALAPPDATA") {
-            paths.push(PathBuf::from(path).join("openhuman/modules"));
+            paths.push(PathBuf::from(path).join(&config.app_dir));
         }
         paths
     }
@@ -1037,7 +1091,7 @@ impl ModuleHost {
     /// Load every existing directory in [`ModuleHost::search_paths`] order.
     pub fn load_search_paths(&self) -> Vec<Result<ModuleInfo>> {
         let mut outcomes = Vec::new();
-        for path in Self::search_paths()
+        for path in self.search_paths()
             .into_iter()
             .filter(|path| path.is_dir())
         {
@@ -1057,7 +1111,7 @@ impl ModuleHost {
     /// [`Self::load_dir`] loads them.
     pub fn load_search_paths_except(&self, skip: &[String]) -> Vec<Result<ModuleInfo>> {
         let mut outcomes = Vec::new();
-        for directory in Self::search_paths()
+        for directory in self.search_paths()
             .into_iter()
             .filter(|path| path.is_dir())
         {
@@ -1821,7 +1875,7 @@ impl ModuleControl for ModuleHostInner {
                 .expect("module directory lock")
                 .clone();
             if configured.is_empty() {
-                ModuleHost::search_paths()
+                ModuleHost { inner: Arc::clone(&self) }.search_paths()
                     .into_iter()
                     .filter(|path| path.is_dir())
                     .collect()
