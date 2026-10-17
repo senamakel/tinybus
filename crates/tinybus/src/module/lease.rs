@@ -611,7 +611,7 @@ async fn cleanup_worker<D, E>(
                     }
                     StopOutcome::RetryableFailure(error) => {
                         state.send_replace(CloseState::Running);
-                        Err(error)
+                        StopOutcome::RetryableFailure(error)
                     }
                     StopOutcome::Unacknowledged(error) => {
                         report(
