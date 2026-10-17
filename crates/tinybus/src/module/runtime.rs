@@ -260,7 +260,7 @@ impl ModuleRuntime {
         let own_unique = state.connection.unique_name();
         let already_registered = state.names.contains_key(&name);
         let release_when_empty = match owner {
-            Some(owner) if Some(owner) == own_unique => state
+            Some(owner) if own_unique.as_ref() == Some(&owner) => state
                 .names
                 .get(&name)
                 .is_some_and(|lease| lease.release_when_empty),

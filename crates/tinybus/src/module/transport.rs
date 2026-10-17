@@ -440,7 +440,7 @@ impl ModuleTransport {
         self.context.admission_closed.load(Ordering::Acquire)
     }
 
-    fn is_stopped(&self) -> bool {
+    pub(crate) fn is_stopped(&self) -> bool {
         self.context.stopped.load(Ordering::Acquire)
     }
 
@@ -725,7 +725,9 @@ impl ModuleTransport {
             .expect("physical state lock")
             .init = InitState::Entered;
         self.context.init_started.store(true, Ordering::Release);
-        let result = initialize(host).and_then(|module| self.initialize(module));
+        let result = initialize(host)
+            .map_err(Error::transport)
+            .and_then(|module| self.initialize(module));
         self.clear_config();
         {
             let mut state = self.context.physical.lock().expect("physical state lock");
