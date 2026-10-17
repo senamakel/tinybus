@@ -520,41 +520,43 @@ fn library_sha256_in_archive(path: &Path) -> Result<Option<String>> {
         return Ok(None);
     };
     let mut bounded_reader = reader.take(MAX_CHECKSUM_ARCHIVE_EXPANDED_BYTES + 1);
-    let mut archive = tar::Archive::new(&mut bounded_reader);
-    let mut digest = None;
-    for entry in archive
-        .entries()
-        .map_err(|_| Error::failed("checksum archive could not be read"))?
-    {
-        let mut entry = entry.map_err(|_| Error::failed("checksum archive entry is invalid"))?;
-        let is_library = {
-            let path = entry
-                .path()
-                .map_err(|_| Error::failed("checksum archive entry path is invalid"))?;
-            matches!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some("so" | "dylib" | "dll")
-            )
-        };
-        if !is_library {
-            continue;
+    let digest = {
+        let mut archive = tar::Archive::new(&mut bounded_reader);
+        let mut digest = None;
+        for entry in archive
+            .entries()
+            .map_err(|_| Error::failed("checksum archive could not be read"))?
+        {
+            let mut entry = entry.map_err(|_| Error::failed("checksum archive entry is invalid"))?;
+            let is_library = {
+                let path = entry
+                    .path()
+                    .map_err(|_| Error::failed("checksum archive entry path is invalid"))?;
+                matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("so" | "dylib" | "dll")
+                )
+            };
+            if !is_library {
+                continue;
+            }
+            if digest.is_some() {
+                return Err(Error::failed(
+                    "checksum archive contains more than one module library",
+                ));
+            }
+            let size = entry
+                .header()
+                .size()
+                .map_err(|_| Error::failed("checksum archive module header is invalid"))?;
+            digest = Some(sha256_reader(
+                &mut entry,
+                size,
+                MAX_CHECKSUM_MODULE_BYTES,
+            )?);
         }
-        if digest.is_some() {
-            return Err(Error::failed(
-                "checksum archive contains more than one module library",
-            ));
-        }
-        let size = entry
-            .header()
-            .size()
-            .map_err(|_| Error::failed("checksum archive module header is invalid"))?;
-        digest = Some(sha256_reader(
-            &mut entry,
-            size,
-            MAX_CHECKSUM_MODULE_BYTES,
-        )?);
-    }
-    drop(archive);
+        digest
+    };
     if bounded_reader.limit() == 0 {
         return Err(Error::failed("checksum archive exceeds its expanded-size limit"));
     }
