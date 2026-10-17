@@ -1013,7 +1013,19 @@ where
 /// Existing `setup = function` and `setup_factory` callbacks retain their behavior.
 #[macro_export]
 macro_rules! module_export {
-    (@linked worker_threads = $threads:expr) => {
+    (@linked $($declaration:tt)*) => {
+        $crate::module_export!(@linked_find_threads [] $($declaration)*);
+    };
+    (@linked_find_threads [$($prefix:tt)*] worker_threads = $threads:expr, $($rest:tt)*) => {
+        $crate::module_export!(@linked_impl $threads);
+    };
+    (@linked_find_threads [$($prefix:tt)*] worker_threads = $threads:expr $(,)?) => {
+        $crate::module_export!(@linked_impl $threads);
+    };
+    (@linked_find_threads [$($prefix:tt)*] $head:tt $($rest:tt)*) => {
+        $crate::module_export!(@linked_find_threads [$($prefix)* $head] $($rest)*);
+    };
+    (@linked_impl $threads:expr) => {
         /// Entry points and parsed manifest for a host that links this module.
         ///
         /// # Errors
@@ -1220,7 +1232,7 @@ macro_rules! module_export_static {
             start = $crate::start_linked_terminal_reconfigurable_module_with_factory,
             setup = $factory, config = $config, $($rest)*
         }
-        $crate::module_export! { @linked worker_threads = $threads }
+        $crate::module_export! { @linked $($rest)* }
     };
     (setup_factory = $factory:path, config = $config:ty, $($rest:tt)*) => {
         $crate::module_export! {
@@ -1230,7 +1242,7 @@ macro_rules! module_export_static {
             config = $config,
             $($rest)*
         }
-        $crate::module_export! { @linked worker_threads = $threads }
+        $crate::module_export! { @linked $($rest)* }
     };
     (setup = $setup:path, config = $config:ty, $($rest:tt)*) => {
         $crate::module_export! {
@@ -1240,7 +1252,7 @@ macro_rules! module_export_static {
             config = $config,
             $($rest)*
         }
-        $crate::module_export! { @linked worker_threads = $threads }
+        $crate::module_export! { @linked $($rest)* }
     };
     (setup = $setup:path, $($rest:tt)*) => {
         $crate::module_export! {
@@ -1249,7 +1261,7 @@ macro_rules! module_export_static {
             setup = $setup,
             $($rest)*
         }
-        $crate::module_export! { @linked worker_threads = $threads }
+        $crate::module_export! { @linked $($rest)* }
     };
 }
 
