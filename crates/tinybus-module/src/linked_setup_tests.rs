@@ -266,6 +266,7 @@ async fn canceling_pending_linked_setup_denies_late_ready_and_releases_the_name(
         .await
         .expect("late setup callback did not settle");
     assert!(matches!(settled, Ok(true) | Err(_)));
+    assert!(host.module_for_sender(&peer).is_none());
     wait_for_owner(&observer, bus_name.as_str(), None).await;
     assert!(
         observer
@@ -337,6 +338,7 @@ async fn timed_out_linked_setup_denies_late_ready_and_releases_the_name() {
         .await
         .expect("late setup callback did not settle");
     assert!(matches!(settled, Ok(true) | Err(_)));
+    assert!(host.module_for_sender(&peer).is_none());
     wait_for_owner(&observer, bus_name.as_str(), None).await;
     assert!(
         observer
