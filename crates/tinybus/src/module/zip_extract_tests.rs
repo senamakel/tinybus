@@ -5,9 +5,7 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
     let archive = root.path().join("fixture.zip");
     let destination = root.path().join("staging");
     fs::create_dir(&destination).unwrap();
-    fs::write(
-        &archive,
-        match name {
+    let bytes: &[u8] = match name {
             "compat_store.zip" => include_bytes!("fixtures/compat_store.zip"),
             "compat_deflate_descriptor.zip" => {
                 include_bytes!("fixtures/compat_deflate_descriptor.zip")
@@ -18,10 +16,10 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
             "unix_link_mode.zip" => include_bytes!("fixtures/unix_link_mode.zip"),
             "suid_mode.zip" => include_bytes!("fixtures/suid_mode.zip"),
             "duplicate.zip" => include_bytes!("fixtures/duplicate.zip"),
+            "archive_collision.zip" => include_bytes!("fixtures/archive_collision.zip"),
             _ => panic!("unknown test fixture"),
-        },
-    )
-    .unwrap();
+        };
+    fs::write(&archive, bytes).unwrap();
     let result = extract(&archive, &destination);
     (root, destination, result)
 }
@@ -101,17 +99,16 @@ fn link_and_special_mode_metadata_never_create_links_or_privileges() {
 }
 
 #[test]
-fn a_host_created_archive_path_cannot_be_overwritten() {
+fn an_archive_entry_cannot_overwrite_the_host_created_archive() {
     let root = tempfile::tempdir().unwrap();
     let destination = root.path().join("staging");
     fs::create_dir(&destination).unwrap();
     let archive = destination.join("fixture.zip");
-    fs::write(&archive, include_bytes!("fixtures/compat_store.zip")).unwrap();
+    fs::write(&archive, include_bytes!("fixtures/archive_collision.zip")).unwrap();
+    let original = fs::read(&archive).unwrap();
 
-    // Replacing an entry path in the fixture's central/local headers is tested
-    // separately; this pins the create_new filesystem primitive directly.
-    let output = OpenOptions::new().write(true).create_new(true).open(&archive);
-    assert!(output.is_err());
+    assert!(extract(&archive, &destination).is_err());
+    assert_eq!(fs::read(&archive).unwrap(), original);
 }
 
 #[test]
