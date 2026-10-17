@@ -176,6 +176,12 @@ fn bus_errors_classify_to_closed_outcomes() {
 }
 
 #[test]
+fn wire_kind_is_the_closed_classification_not_the_wire_error_name() {
+    let error = method_failed("com.example.PrivateFailure");
+    assert_eq!(wire_kind(&error), ModuleCallError::ModuleFault);
+}
+
+#[test]
 fn unavailable_proxy_failures_are_deduplicated_as_terminal_module_state() {
     let sink = Arc::new(Recording::default());
     let reporter = FailureReporter::new(sink.clone());
