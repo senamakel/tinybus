@@ -590,25 +590,6 @@ async fn cleanup_worker<D, E>(
                 // A local deadline cannot cancel remote work. Keep the original operation alive;
                 // only its eventual result can acknowledge cleanup or permit a later retry.
                 match stop.await {
-                    Ok(()) => {
-                        report(
-                            &reporter,
-                            LeaseReport {
-                                phase: LeasePhase::Stop,
-                                attempt: Some(attempt),
-                                outcome: LeaseReportOutcome::Acknowledged,
-                            },
-                        );
-                        if let Some(guard) = callback_guard
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .take()
-                        {
-                            guard.remove().await;
-                        }
-                        state.send_replace(CloseState::Acknowledged);
-                        return;
-                    }
                     StopOutcome::Acknowledged => {
                         report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
                         if let Some(guard) = callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
