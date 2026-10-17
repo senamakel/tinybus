@@ -160,7 +160,6 @@ struct Activation {
     /// executable digest. `None` for raw attachments and ordinary local files.
     pinned_sha256: Option<String>,
     pinned_library_sha256: Option<String>,
-    linked_setup: Option<(LinkedModuleInitWithSetup, LinkedSetup)>,
 }
 
 impl PendingModule {
@@ -1292,12 +1291,47 @@ impl ModuleHost {
             error
         })?;
         let (transport, host_vtable) = ModuleTransport::new(admitted.name.clone(), config);
-        if artifact.manifest.lazy_init {
-            admitted.state = ModuleState::Resolved;
-            transport.defer_initialize(artifact.init, host_vtable);
-        } else {
-            admitted.state = ModuleState::Initializing;
-            if let Err(failure) = transport.eager_initialize(artifact.init, host_vtable) {
+        match linked_setup {
+            Some((init, setup)) if artifact.manifest.lazy_init => {
+                admitted.state = ModuleState::Resolved;
+                transport.defer_initializer(host_vtable, move |host| {
+                    let mut module = TbModuleVtable::default();
+                    let code = unsafe { init(&host, &mut module, setup) };
+                    if code == TB_OK {
+                        Ok(module)
+                    } else {
+                        Err("linked module initialization failed".to_string())
+                    }
+                });
+            }
+            Some((init, setup)) => {
+                admitted.state = ModuleState::Initializing;
+                if let Err(failure) = transport.eager_initialize_with(host_vtable, move |host| {
+                    let mut module = TbModuleVtable::default();
+                    let code = unsafe { init(&host, &mut module, setup) };
+                    if code == TB_OK {
+                        Ok(module)
+                    } else {
+                        Err("linked module initialization failed".to_string())
+                    }
+                }) {
+                    let reason = if failure.to_string().contains("vtable") {
+                        "module returned an invalid vtable"
+                    } else {
+                        "module initialization failed"
+                    };
+                    let error = Error::module_refused(path, reason);
+                    self.record_manifest_rejection(&error, manifest, RefusalClass::Failed);
+                    return Err(error);
+                }
+            }
+            None if artifact.manifest.lazy_init => {
+                admitted.state = ModuleState::Resolved;
+                transport.defer_initialize(artifact.init, host_vtable);
+            }
+            None => {
+                admitted.state = ModuleState::Initializing;
+                if let Err(failure) = transport.eager_initialize(artifact.init, host_vtable) {
                 let reason = if failure.to_string().contains("vtable") {
                     "module returned an invalid vtable"
                 } else {
@@ -1306,6 +1340,7 @@ impl ModuleHost {
                 let error = Error::module_refused(path, reason);
                 self.record_manifest_rejection(&error, manifest, RefusalClass::Failed);
                 return Err(error);
+                }
             }
         }
 
