@@ -181,8 +181,8 @@ impl ModuleAccess for FixtureAccess {
             {
                 return Err(ReconfigureFailure::Initializing);
             }
-            self.host
-                .reinitialize(id, config)
+            self.connection
+                .reinitialize_module(id, config)
                 .await
                 .map(|_| ())
                 .map_err(|_| ReconfigureFailure::Failed)
