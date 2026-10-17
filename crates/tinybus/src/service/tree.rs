@@ -24,6 +24,7 @@ pub struct ObjectTree {
 }
 
 struct ObjectRegistration {
+    #[cfg_attr(not(feature = "modules"), allow(dead_code))]
     id: u64,
     interface: Arc<dyn Interface>,
 }
@@ -62,6 +63,7 @@ impl ObjectTree {
     }
 
     /// Remove one interface only if it is still the same registration.
+    #[cfg(feature = "modules")]
     pub(crate) fn remove_if_owned(
         &mut self,
         path: &ObjectPath,

@@ -205,6 +205,7 @@ struct Inner {
 ///
 /// Used by owner guards: a guard removes its interface only if no later
 /// registration has replaced it at the same path and interface.
+#[cfg(feature = "modules")]
 pub(crate) struct ObjectRegistration {
     path: ObjectPath,
     interface: InterfaceName,
@@ -458,11 +459,24 @@ impl Connection {
 
     /// Export `interface` at `path`.
     pub async fn serve_at(&self, path: ObjectPath, interface: impl Interface) -> Result<()> {
-        self.serve_at_owned(path, interface).await.map(drop)
+        #[cfg(feature = "modules")]
+        {
+            self.serve_at_owned(path, interface).await.map(drop)
+        }
+        #[cfg(not(feature = "modules"))]
+        {
+            self.inner
+                .objects
+                .write()
+                .await
+                .insert(path, Arc::new(interface));
+            Ok(())
+        }
     }
 
     /// Export one interface and retain the exact registration identity for an
     /// owner guard. Public `serve_at` replacements invalidate older identities.
+    #[cfg(feature = "modules")]
     pub(crate) async fn serve_at_owned(
         &self,
         path: ObjectPath,
@@ -484,6 +498,7 @@ impl Connection {
     }
 
     /// Remove an exported interface only while this registration still owns it.
+    #[cfg(feature = "modules")]
     pub(crate) async fn unserve_if_owned(&self, registration: &ObjectRegistration) -> bool {
         self.inner.objects.write().await.remove_if_owned(
             &registration.path,

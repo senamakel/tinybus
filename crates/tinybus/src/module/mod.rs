@@ -86,6 +86,7 @@ pub use runtime::{
 pub struct ModuleId(String);
 
 impl ModuleId {
+    #[cfg(feature = "modules")]
     pub(crate) fn new(value: String) -> Self {
         Self(value)
     }
