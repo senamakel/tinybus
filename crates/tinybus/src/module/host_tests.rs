@@ -2924,7 +2924,12 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
         inner: modules.inner.clone(),
     };
     let loading = tokio::task::spawn_blocking(move || {
-        loading_modules.load_file_with_config(artifact, config)
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async { loading_modules.load_file_with_config(artifact, config) })
     });
 
     tokio::task::spawn_blocking(move || {

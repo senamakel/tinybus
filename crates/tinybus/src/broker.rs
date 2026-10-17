@@ -78,10 +78,9 @@ impl StagedModulePeer {
         let id = self.id.take().expect("staged peer is live");
         let transport = self.transport.take().expect("staged transport");
         let inbox = self.inbox.take().expect("staged inbox");
-        if let Some(module) = crate::transport::downcast::<
-            crate::module::transport::ModuleTransport,
-        >(transport.as_ref())
-        {
+        if let Some(module) = crate::transport::downcast::<crate::module::transport::ModuleTransport>(
+            transport.as_ref(),
+        ) {
             module.admit_broker();
         }
         tracing::debug!(peer = %self.unique, transport = %transport.describe(), "module peer attached");
@@ -100,6 +99,15 @@ impl Drop for StagedModulePeer {
     fn drop(&mut self) {
         if self.id.is_some() {
             self.broker.detach_unique(&self.unique);
+            if let Some(transport) = self.transport.as_deref() {
+                if let Some(module) = crate::transport::downcast::<
+                    crate::module::transport::ModuleTransport,
+                >(transport)
+                {
+                    module.commit_terminal(true);
+                    module.request_terminal(true);
+                }
+            }
         }
     }
 }
@@ -248,10 +256,7 @@ impl Broker {
     /// Reserve a module peer without starting dispatch. The module host must
     /// validate and publish its exact identity before starting this peer.
     #[cfg(feature = "modules")]
-    pub(crate) fn attach_module_staged(
-        &self,
-        transport: Arc<dyn Transport>,
-    ) -> StagedModulePeer {
+    pub(crate) fn attach_module_staged(&self, transport: Arc<dyn Transport>) -> StagedModulePeer {
         let (outbox, inbox) = mpsc::channel(PEER_QUEUE_CAPACITY);
         let (id, unique) = self
             .router
