@@ -1625,12 +1625,15 @@ impl ModuleHost {
             tracing::warn!(module = %sanitize_untrusted(&manifest.module.name), "module rustc differs from host");
         }
 
-        let name = sanitized_field(&descriptor.module_name)
-            .ok_or_else(|| refuse("descriptor identity is invalid"))?;
+        let descriptor_name = std::str::from_utf8(field_bytes(&descriptor.module_name))
+            .map_err(|_| refuse("descriptor identity is invalid"))?;
+        if !canonical_module_id(&manifest.module.name) || descriptor_name != manifest.module.name {
+            return Err(refuse("manifest identity does not match descriptor"));
+        }
+        let name = sanitize_untrusted(descriptor_name);
         let version = sanitized_field(&descriptor.module_version)
             .ok_or_else(|| refuse("descriptor identity is invalid"))?;
         if manifest.schema != MANIFEST_SCHEMA
-            || manifest.module.name != name
             || sanitize_untrusted(&manifest.module.version.to_string()) != version
             || manifest.module.name.len() > 64
             || manifest.module.version.to_string().len() > 32
@@ -2216,8 +2219,7 @@ fn provisional_info(path: &Path, manifest: &ModuleManifest) -> Result<ModuleInfo
     let version = sanitize_untrusted(&manifest.module.version.to_string());
     if !manifest.lazy_init
         || manifest.schema != MANIFEST_SCHEMA
-        || name.is_empty()
-        || name != manifest.module.name
+        || !canonical_module_id(&manifest.module.name)
         || version != manifest.module.version.to_string()
         || manifest.module.name.len() > 64
         || manifest.module.version.to_string().len() > 32
@@ -2245,14 +2247,27 @@ fn loaded_identity(
     descriptor: &TbAbiDescriptor,
     manifest: &ModuleManifest,
 ) -> Option<(String, String)> {
-    let name = sanitized_field(&descriptor.module_name)?;
+    let descriptor_name = std::str::from_utf8(field_bytes(&descriptor.module_name)).ok()?;
+    let name = sanitize_untrusted(descriptor_name);
     let version = sanitized_field(&descriptor.module_version)?;
     (manifest.schema == MANIFEST_SCHEMA
-        && manifest.module.name == name
+        && canonical_module_id(&manifest.module.name)
+        && descriptor_name == manifest.module.name
         && sanitize_untrusted(&manifest.module.version.to_string()) == version
         && manifest.module.name.len() <= 64
         && manifest.module.version.to_string().len() <= 32)
         .then_some((name, version))
+}
+
+/// Module identifiers are package names, not log-safe display labels. Keep the
+/// full validated identifier for authorization while allowing the summary name
+/// to remain capped by `sanitize_untrusted`.
+fn canonical_module_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-'))
 }
 
 fn rejection_info(error: &Error) -> ModuleInfo {

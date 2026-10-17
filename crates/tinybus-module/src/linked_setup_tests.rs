@@ -120,7 +120,7 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
     let setup_b = setups.clone();
     let host_b = host.clone();
     let second = host.attach_linked_with_setup(
-        linked_export("linked-abcdefghijklmnopqrstuvwxy"),
+        linked_export("linked-abcdefghijklmnopqrstuvwxyz0123456789"),
         serde_json::json!({}),
         move |connection| async move {
             let peer = connection.unique_name().expect("connected module peer");
@@ -129,13 +129,13 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
                     .module_for_sender(&peer)
                     .as_ref()
                     .map(tinybus::module::ModuleId::as_str),
-                Some("linked-abcdefghijklmnopqrstuvwxy")
+                Some("linked-abcdefghijklmnopqrstuvwxyz0123456789")
             );
             connection
                 .serve_at("/linked/setup".parse().unwrap(), SetupValue("b"))
                 .await?;
             setup_b.lock().unwrap().push((
-                "linked-abcdefghijklmnopqrstuvwxy".to_string(),
+                "linked-abcdefghijklmnopqrstuvwxyz0123456789".to_string(),
                 "b",
                 peer.to_string(),
                 connection,
