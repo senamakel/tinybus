@@ -283,11 +283,17 @@ impl ReconfigurableModule {
             self.access.reporter().report_unknown_module();
             return error;
         };
-        let reason = match error {
-            ModuleCallError::Unavailable => super::failure::Reason::ModuleUnavailable,
-            ModuleCallError::IncompatibleContract => super::failure::Reason::IncompatibleContract,
-            ModuleCallError::TransportFailed => super::failure::Reason::TransportFailed,
-            ModuleCallError::ModuleFault => super::failure::Reason::ModuleFault,
+        let reason = if !self.access.enabled() {
+            super::failure::Reason::Disabled
+        } else {
+            match error {
+                ModuleCallError::Unavailable => super::failure::Reason::ModuleUnavailable,
+                ModuleCallError::IncompatibleContract => {
+                    super::failure::Reason::IncompatibleContract
+                }
+                ModuleCallError::TransportFailed => super::failure::Reason::TransportFailed,
+                ModuleCallError::ModuleFault => super::failure::Reason::ModuleFault,
+            }
         };
         if matches!(reason, super::failure::Reason::ModuleUnavailable) {
             self.access

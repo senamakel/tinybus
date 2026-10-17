@@ -255,7 +255,10 @@ impl ModuleClient {
                     object_path,
                     fixture.interface().as_str(),
                 )
-                .map_err(|_| ModuleCallError::IncompatibleContract)?;
+                .map_err(|_| {
+                    report(&*self.access, record, Reason::IncompatibleContract);
+                    ModuleCallError::IncompatibleContract
+                })?;
             return Ok(self.object(record, proxy));
         }
         let proxy = self.load_proxy(record, object_path).await?;

@@ -1,7 +1,7 @@
 use super::*;
 use crate::broker::Broker;
 use crate::module::abi::{TB_BAD_ARGUMENT, TB_OK, TbAbiDescriptor, TbHostVtable, TbModuleVtable};
-use crate::module::failure::{FailureReporter, FailureSink};
+use crate::module::failure::{FailureReport, FailureReporter, FailureSink, Reason};
 use crate::module::host::ModuleHost;
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
 use crate::module::{AccessFuture, ModuleState, ReleaseRecord};
@@ -24,6 +24,19 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
     assets: &[],
 };
+
+#[derive(Default)]
+struct RecordingSink(StdMutex<Vec<(String, String, Reason)>>);
+
+impl FailureSink for RecordingSink {
+    fn capture(&self, report: &FailureReport<'_>) {
+        self.0.lock().unwrap().push((
+            report.module.to_owned(),
+            report.version.to_owned(),
+            report.reason,
+        ));
+    }
+}
 static FIXTURE_LOCK: Mutex<()> = Mutex::const_new(());
 static INITIALIZER_STARTED: OnceLock<StdMutex<Option<std::sync::mpsc::SyncSender<()>>>> =
     OnceLock::new();
@@ -738,6 +751,80 @@ async fn a_failed_change_forgets_the_old_fingerprint_before_a_revert() {
     let reverted = module.proxy(&original).await.unwrap();
     assert_eq!(read_config(&reverted).await, original);
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn reconfiguration_failure_reports_only_registry_identity_and_closed_reason() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let sink = Arc::new(RecordingSink::default());
+    let mut access = fixture_with_sink(sink.clone()).await;
+    access.forced_reinitialize_failure = Some(ReconfigureFailure::Failed);
+    let module = ReconfigurableModule::new(access, ID);
+    let config = serde_json::json!({ "credential": "private-test-value" });
+
+    assert_eq!(
+        module.proxy(&config).await.unwrap_err(),
+        ModuleCallError::ModuleFault
+    );
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(ID.to_owned(), "0.0.0".to_owned(), Reason::ModuleFault)]
+    );
+}
+
+#[tokio::test]
+async fn missing_and_disabled_reconfiguration_report_closed_registry_reasons() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let missing_sink = Arc::new(RecordingSink::default());
+    let mut missing = fixture_with_sink(missing_sink.clone()).await;
+    missing.registered = false;
+    let missing = ReconfigurableModule::new(missing, ID);
+    assert_eq!(
+        missing.proxy(&serde_json::Value::Null).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(
+        missing_sink.0.lock().unwrap().as_slice(),
+        &[(
+            "unregistered".to_owned(),
+            "unknown".to_owned(),
+            Reason::UnknownModule
+        )]
+    );
+
+    let disabled_sink = Arc::new(RecordingSink::default());
+    let mut disabled = fixture_with_sink(disabled_sink.clone()).await;
+    disabled.enabled = false;
+    let disabled = ReconfigurableModule::new(disabled, ID);
+    assert_eq!(
+        disabled.proxy(&serde_json::Value::Null).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(
+        disabled_sink.0.lock().unwrap().as_slice(),
+        &[(ID.to_owned(), "0.0.0".to_owned(), Reason::Disabled)]
+    );
+}
+
+#[tokio::test]
+async fn proxy_failure_after_configuration_reports_transport_failure() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let sink = Arc::new(RecordingSink::default());
+    let mut access = fixture_with_sink(sink.clone()).await;
+    access.proxy_failure = Some(ProxyFailure::Transport);
+    let module = ReconfigurableModule::new(access, ID);
+
+    assert_eq!(
+        module
+            .proxy(&serde_json::json!({ "route": "transport-failure" }))
+            .await
+            .unwrap_err(),
+        ModuleCallError::TransportFailed
+    );
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(ID.to_owned(), "0.0.0".to_owned(), Reason::TransportFailed)]
+    );
 }
 
 #[tokio::test]

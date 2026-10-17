@@ -356,10 +356,14 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
         );
     }
     assert!(
-        client
+        direct
             .object_client(RECORD.id, "invalid path")
             .await
             .is_err()
+    );
+    assert_eq!(
+        direct_sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::IncompatibleContract)]
     );
     let reply: Result<String, _> = object.call_confidential("Json", ()).await;
     assert_eq!(reply, Err(ModuleCallError::TransportFailed));
