@@ -134,6 +134,12 @@ async fn client_waiting_on_metadata(
         .await
         .unwrap();
     service.request_name(record.bus_name).await.unwrap();
+    if member == "GetAttestation" {
+        assert_eq!(
+            caller.name_owner(record.bus_name).await.unwrap(),
+            service.unique_name()
+        );
+    }
 
     let sink = Arc::new(Recording::default());
     let access = PreparedAccess {
