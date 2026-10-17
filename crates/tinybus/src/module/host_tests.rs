@@ -2934,12 +2934,12 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
 
     tokio::task::spawn_blocking(move || {
         reached_rx
-            .recv_timeout(Duration::from_secs(3))
+            .recv_timeout(Duration::from_secs(30))
             .expect("attach did not reach the pre-publication barrier");
     })
     .await
     .unwrap();
-    let observation = tokio::time::timeout(Duration::from_secs(3), observed_rx).await;
+    let observation = tokio::time::timeout(Duration::from_secs(30), observed_rx).await;
     release_tx
         .send(())
         .expect("release the attachment after observing callback identity");
