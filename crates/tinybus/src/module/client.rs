@@ -389,6 +389,28 @@ impl ModuleClient {
             .map_err(|error| report_proxy_failure_detailed(self.access.reporter(), record, &error))
     }
 
+    /// Sanitized counterpart to [`Self::call_with_stream_detailed`].
+    ///
+    /// # Errors
+    ///
+    /// A sanitized [`ModuleCallError`].
+    pub async fn call_with_stream<R, F, A>(
+        &self,
+        module: &str,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallError>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        self.call_with_stream_detailed(module, member, args, bytes)
+            .await
+            .map_err(|failure| failure.kind)
+    }
+
     /// Execute a confidential member after TinyBus recipient attestation.
     ///
     /// A failure to attest the pinned artifact fails the call; ordinary delivery
@@ -727,24 +749,6 @@ impl ModuleClient {
             self.report_malformed_reply(module);
             ModuleCallError::ModuleFault
         })
-    }
-
-    /// Sanitized counterpart to [`Self::call_with_stream_detailed`].
-    pub async fn call_with_stream<R, F, A>(
-        &self,
-        module: &str,
-        member: &str,
-        args: F,
-        bytes: &[u8],
-    ) -> Result<R, ModuleCallError>
-    where
-        R: DeserializeOwned,
-        F: FnOnce(&crate::stream::StreamRef) -> A,
-        A: Serialize,
-    {
-        self.call_with_stream_detailed(module, member, args, bytes)
-            .await
-            .map_err(|failure| failure.kind)
     }
 }
 

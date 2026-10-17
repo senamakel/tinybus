@@ -1201,6 +1201,9 @@ impl Connection {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Shared transfer path for argument builders that can fail serialization.
+    /// If encoding fails after `Open`, returning drops the writer and triggers
+    /// its best-effort `Abort` before any business method is sent.
     pub(crate) async fn call_with_stream_serialized<R: DeserializeOwned, A: Serialize>(
         &self,
         destination: BusName,
