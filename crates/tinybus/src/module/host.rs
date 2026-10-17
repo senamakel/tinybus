@@ -694,6 +694,68 @@ impl ModuleHost {
         module: LinkedModule,
         config: serde_json::Value,
     ) -> Result<ModuleInfo> {
+        self.attach_linked(module, config, None)
+    }
+
+    /// Admit linked code and replace its export-time setup with state owned by
+    /// this one attachment.
+    ///
+    /// The generated static export supplies a Rust-only initializer hook; the
+    /// hook receives this callback in place of its default setup function. Its
+    /// module connection remains the admitted, broker-authenticated peer, and
+    /// the ordinary descriptor, dependency, executable-digest and readiness
+    /// paths still apply. Dynamic modules cannot use this API.
+    ///
+    /// # Errors
+    /// Returns an error if the export has no linked setup hook, normal admission
+    /// fails, setup fails, or the module does not become ready before its
+    /// initialization deadline.
+    pub async fn attach_linked_with_setup<F, Fut>(
+        &self,
+        module: LinkedModule,
+        config: serde_json::Value,
+        setup: F,
+    ) -> Result<ModuleInfo>
+    where
+        F: FnOnce(crate::Connection) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+    {
+        let init = module
+            .init_with_setup
+            .ok_or_else(|| Error::failed("linked export has no stateful setup entrypoint"))?;
+        let setup: LinkedSetup = Box::new(move |connection| Box::pin(setup(connection)));
+        let name = sanitize_untrusted(&module.manifest.module.name);
+        let info = self.attach_linked(module, config, Some((init, setup)))?;
+        let transport = self
+            .inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .find(|loaded| loaded.info.name == info.name)
+            .map(|loaded| loaded.transport.clone())
+            .ok_or_else(|| Error::failed("linked module did not retain its admitted transport"))?;
+        if tokio::time::timeout(Duration::from_secs(5), transport.wait_ready())
+            .await
+            .is_err()
+            || !transport.is_ready()
+        {
+            return Err(Error::module_refused(
+                Path::new(&format!("linked-{name}")),
+                "linked module setup did not become ready",
+            ));
+        }
+        Ok(transport
+            .module_info()
+            .unwrap_or(info))
+    }
+
+    fn attach_linked(
+        &self,
+        module: LinkedModule,
+        config: serde_json::Value,
+        linked_setup: Option<(LinkedModuleInitWithSetup, LinkedSetup)>,
+    ) -> Result<ModuleInfo> {
         static EXECUTABLE_DIGEST: OnceLock<String> = OnceLock::new();
         let digest = match EXECUTABLE_DIGEST.get() {
             Some(digest) => digest.clone(),
@@ -719,6 +781,7 @@ impl ModuleHost {
             },
             config,
             Some(digest),
+            linked_setup,
         )
     }
 
