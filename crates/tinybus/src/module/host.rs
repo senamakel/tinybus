@@ -1594,10 +1594,6 @@ impl ModuleHost {
             );
         }
 
-        let broker = self.inner.broker.clone();
-        let ready_transport = transport.clone();
-        let module_name = admitted.name.clone();
-        let previous_state = state_name(&admitted.state);
         let lazy_init = activation.lazy_init;
         let lazy_load = activation.lazy_load;
         let descriptor_info = activation.descriptor_info;
