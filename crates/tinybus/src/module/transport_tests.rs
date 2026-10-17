@@ -474,7 +474,7 @@ async fn canceling_reconfiguration_waiting_for_started_lazy_init_keeps_initializ
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
+async fn reinitialization_waits_for_host_ready_after_lazy_vtable_publication() {
     struct SetupState {
         ready: AtomicBool,
         calls: AtomicUsize,
@@ -502,7 +502,7 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
         TB_OK
     }
 
-    let (transport, host) = ModuleTransport::new("sdk-ready-race".into(), b"{}".to_vec());
+    let (transport, host) = ModuleTransport::new("host-ready-race".into(), b"{}".to_vec());
     let state = Arc::new(SetupState {
         ready: AtomicBool::new(false),
         calls: AtomicUsize::new(0),
@@ -618,7 +618,7 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
     );
     assert!(
         !native_callback_started_before_ready,
-        "the SDK callback returns TB_CLOSED until setup publishes its connection"
+        "the native callback returns TB_CLOSED until setup publishes its connection"
     );
     assert_eq!(callback_calls_before_ready, 0);
     first_call_result.unwrap();
