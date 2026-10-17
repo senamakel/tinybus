@@ -166,6 +166,11 @@ fn bus_errors_classify_to_closed_outcomes() {
             Reason::TransportFailed,
         ),
         (
+            method_failed("com.example.Protocol"),
+            ModuleCallError::ModuleFault,
+            Reason::ModuleFault,
+        ),
+        (
             method_failed("com.example.Whatever"),
             ModuleCallError::ModuleFault,
             Reason::ModuleFault,
