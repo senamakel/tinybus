@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+### Added
+
+- `ModuleClient::call_attested_detailed` retains remote method failure fields
+  for product adapters while keeping renderings and failure reports redacted.
+
 ## 0.2.0
 
 ### Breaking changes
