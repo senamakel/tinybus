@@ -741,3 +741,42 @@ fn linked_registry_replaces_factories_and_returns_the_last_registration() {
             .contains("replacement factory")
     );
 }
+
+#[tokio::test]
+async fn resolver_inputs_configure_the_runtime_host_search_paths() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let search_dir = root.path().join("resolver-search");
+    std::fs::create_dir(&search_dir).unwrap();
+    let env_var = "TINYBUS_TEST_RESOLVER_SEARCH_PATH";
+    unsafe { std::env::set_var(env_var, &search_dir) };
+    let runtime = Box::leak(Box::new(
+        crate::module::ModuleRuntime::start(
+            &crate::module::RuntimeNames::default(),
+            None,
+        )
+        .unwrap(),
+    ));
+    let resolver = Resolver::new(ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources: HashMap::new(),
+        linked: Arc::new(LinkedRegistry::new()),
+        search_paths: Some(SearchPathConfig::new(env_var, "test-host/modules")),
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: Vec::new(),
+        terminal_marker: String::new(),
+        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        module_config: Arc::new(|_| serde_json::Value::Null),
+        reporter: Arc::new(FailureReporter::new(Arc::new(Quiet))),
+    });
+
+    let resolved_runtime = resolver.runtime().await.unwrap();
+    let paths = resolved_runtime.host().search_paths();
+    unsafe { std::env::remove_var(env_var) };
+
+    assert_eq!(paths.first(), Some(&search_dir));
+}
