@@ -422,6 +422,64 @@ async fn interface_name_panic_rolls_back_a_new_host_object_name_claim() {
 }
 
 #[tokio::test]
+async fn failed_shared_registration_preserves_the_existing_host_object_guard() {
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let name: crate::BusName = "ai.tinyhumans.test.SharedHostObjectRegistration"
+        .parse()
+        .unwrap();
+    let retained_path: crate::ObjectPath = "/runtime/shared_retained".parse().unwrap();
+    let failed_path: crate::ObjectPath = "/runtime/shared_failed".parse().unwrap();
+    let owner = runtime.connection().unique_name();
+    let retained = runtime
+        .serve_host_object(
+            name.clone(),
+            retained_path.clone(),
+            HostObjectValue("retained"),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), failed_path.clone(), PanickingHostObjectName)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime
+            .connection()
+            .name_owner(name.as_str())
+            .await
+            .unwrap(),
+        owner,
+        "failed shared registration must preserve the existing name lease"
+    );
+    let retained_proxy = runtime
+        .connection()
+        .proxy(
+            name.as_str(),
+            retained_path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
+        .unwrap();
+    let value: serde_json::Value = retained_proxy.call("Value", ()).await.unwrap();
+    assert_eq!(value, serde_json::json!("retained"));
+
+    drop(retained);
+    wait_for_owner(runtime.connection(), name.as_str(), None).await;
+    let failed_proxy = runtime
+        .connection()
+        .proxy(
+            runtime.connection().unique_name().unwrap().as_str(),
+            failed_path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
+        .unwrap();
+    let leaked: crate::Result<serde_json::Value> = failed_proxy.call("Value", ()).await;
+    assert!(leaked.is_err());
+}
+
+#[tokio::test]
 async fn canceling_after_name_claim_rolls_back_on_the_module_runtime() {
     let runtime = Arc::new(ModuleRuntime::start(&RuntimeNames::default(), None).unwrap());
     let name: crate::BusName = "ai.tinyhumans.test.CancelAfterClaim".parse().unwrap();
