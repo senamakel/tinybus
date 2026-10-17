@@ -258,7 +258,6 @@ impl ModuleRuntime {
         let mut state = self.host_objects.lock().await;
         let owner = state.connection.name_owner(name.as_str()).await?;
         let own_unique = state.connection.unique_name();
-        let already_registered = state.names.contains_key(&name);
         let release_when_empty = match owner {
             Some(owner) if own_unique.as_ref() == Some(&owner) => state
                 .names
@@ -277,8 +276,12 @@ impl ModuleRuntime {
         let registration = match state.connection.serve_at_owned(path, interface).await {
             Ok(registration) => registration,
             Err(error) => {
-                if !already_registered && release_when_empty {
-                    let _ = state.connection.release_name(name.as_str()).await;
+                if release_when_empty {
+                    if let Some(lease) = state.names.get_mut(&name) {
+                        lease.release_when_empty = true;
+                    } else {
+                        let _ = state.connection.release_name(name.as_str()).await;
+                    }
                 }
                 return Err(error);
             }
