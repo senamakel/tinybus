@@ -421,7 +421,7 @@ async fn a_name_claim_race_preserves_the_peer_that_wins_before_registration() {
         Some(winning_owner),
         "failed host registration must not release the peer's name"
     );
-    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+    assert!(!runtime.host_objects.lock().await.names.contains_key(&name));
     let proxy = runtime
         .connection()
         .proxy(
@@ -465,7 +465,7 @@ async fn request_name_reply_failure_after_commit_rolls_back_the_new_claim() {
         None,
         "a failed RequestName reply after broker commit must roll back the claim"
     );
-    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+    assert!(!runtime.host_objects.lock().await.names.contains_key(&name));
 
     runtime.host_objects.lock().await.connection = runtime.connection.clone();
     broker_task.abort();
@@ -583,7 +583,7 @@ async fn failed_registration_preserves_a_name_owned_before_the_helper() {
         owner,
         "failed registration must retain the name claimed before the helper"
     );
-    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+    assert!(!runtime.host_objects.lock().await.names.contains_key(&name));
 
     runtime
         .connection()
@@ -608,7 +608,7 @@ async fn a_closed_runtime_connection_refuses_host_object_registration() {
             .await
             .is_err()
     );
-    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+    assert!(!runtime.host_objects.lock().await.names.contains_key(&name));
 }
 
 #[tokio::test]
