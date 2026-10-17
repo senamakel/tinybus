@@ -226,7 +226,7 @@ async fn runtime_setup_can_export_a_weak_sender_lookup_for_linked_setup() {
                 peer_tx.send(peer).expect("test receiver is alive");
                 connection
                     .serve_at(
-                        "/linked/runtime-lookup".parse().unwrap(),
+                        "/linked/runtime_lookup".parse().unwrap(),
                         SetupValue("ready"),
                     )
                     .await?;
