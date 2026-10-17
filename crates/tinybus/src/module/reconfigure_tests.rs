@@ -902,7 +902,7 @@ async fn resolver_load_failure_is_reported_once_with_its_resolution_reason() {
 
 #[tokio::test]
 async fn resolver_reconfigures_a_lazy_linked_module_before_its_first_call() {
-    let runtime = Box::leak(Box::new(
+    let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
         crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap(),
     ));
     let mut manifest = fixture_manifest();
