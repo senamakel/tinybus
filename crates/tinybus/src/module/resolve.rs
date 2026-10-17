@@ -762,3 +762,11 @@ impl Resolver {
 #[cfg(test)]
 #[path = "resolve_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "resolve_test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
+#[path = "resolve_attested_tests.rs"]
+mod attested_tests;

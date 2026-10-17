@@ -653,7 +653,10 @@ async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_p
         .expect("the allowlisted extraction is attested");
     let signed_library_sha256 = crate::module::sha256_file(&artifact).unwrap();
     assert_eq!(attestation.sha256, signed_library_sha256);
-    assert_eq!(attestation.library_sha256.as_deref(), Some(&signed_library_sha256));
+    assert_eq!(
+        attestation.library_sha256.as_deref(),
+        Some(signed_library_sha256.as_str())
+    );
     assert_ne!(attestation.sha256, asset.sha256);
     assert_ne!(
         attestation.library_sha256.as_deref(),
