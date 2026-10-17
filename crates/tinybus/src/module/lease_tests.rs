@@ -133,6 +133,8 @@ struct Harness {
     driver: ControlledDriver,
     calls: mpsc::UnboundedReceiver<DriverCall>,
     callback_calls: Arc<AtomicUsize>,
+    reports: mpsc::UnboundedReceiver<LeaseReport>,
+    report_sender: mpsc::UnboundedSender<LeaseReport>,
 }
 
 impl Harness {
@@ -141,6 +143,7 @@ impl Harness {
             crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None)
                 .unwrap();
         let (calls, receiver) = mpsc::unbounded_channel();
+        let (report_sender, reports) = mpsc::unbounded_channel();
         Self {
             runtime,
             driver: ControlledDriver {
@@ -151,6 +154,8 @@ impl Harness {
             },
             calls: receiver,
             callback_calls: Arc::new(AtomicUsize::new(0)),
+            reports,
+            report_sender,
         }
     }
 
@@ -162,6 +167,7 @@ impl Harness {
     + 'static {
         let driver = self.driver.clone();
         let calls = self.callback_calls.clone();
+        let reports = self.report_sender.clone();
         let policy = RetryPolicy::new(
             std::time::Duration::from_millis(20),
             vec![std::time::Duration::ZERO, std::time::Duration::ZERO],
@@ -176,7 +182,7 @@ impl Harness {
                 Ok(Callback(calls))
             },
             policy,
-            |_| {},
+            move |report| { let _ = reports.send(report); },
         )
     }
 
@@ -356,7 +362,7 @@ async fn exhausted_stop_parks_the_callback_until_an_acknowledgement() {
 }
 
 #[tokio::test]
-async fn a_timed_out_stop_attempt_is_bounded_and_does_not_overlap_its_retry() {
+async fn a_stop_deadline_keeps_the_remote_operation_owned_until_its_late_ack() {
     let mut harness = Harness::new();
     let lease = harness.opened().await;
     let closing = tokio::spawn(async move { lease.close().await });
@@ -365,34 +371,22 @@ async fn a_timed_out_stop_attempt_is_bounded_and_does_not_overlap_its_retry() {
         _ => panic!("close starts one STOP worker"),
     };
 
-    // This deadline observes the configured per-attempt timeout; it is not a
-    // synchronization sleep. Holding the reply also proves retries serialize.
-    let second_reply =
-        match tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
-            .await
-            .expect("the first attempt must time out")
-            .unwrap()
-        {
-            DriverCall::Stop(_, reply) => reply,
-            _ => panic!("timeout retry issues only STOP"),
-        };
-    assert!(
-        first_reply.send(Ok(())).is_err(),
-        "a timed-out attempt is finished"
-    );
-    second_reply
-        .send(Err(DriverError("private stop detail")))
-        .unwrap();
-    match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
-        _ => panic!("retry sequence remains serialized"),
+    loop {
+        if matches!(harness.reports.recv().await.unwrap().outcome, LeaseReportOutcome::TimedOut) {
+            break;
+        }
     }
-    assert!(closing.await.unwrap().is_err());
-    assert!(harness.calls.try_recv().is_err(), "retry budget is finite");
-    assert!(
-        harness.callback().await.is_ok(),
-        "timeout is not STOP acknowledgement"
-    );
+    assert!(harness.callback().await.is_ok(), "deadline is not STOP acknowledgement");
+    assert!(harness.calls.try_recv().is_err(), "unresolved STOP remains the only remote operation");
+    first_reply.send(Ok(())).unwrap();
+    assert!(closing.await.unwrap().is_err(), "close observes the deadline as unacknowledged");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if harness.callback().await.is_err() { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("late STOP acknowledgement withdraws the callback");
+    assert!(harness.calls.try_recv().is_err(), "late ACK causes no duplicate STOP");
 }
 
 #[tokio::test]
@@ -424,7 +418,7 @@ async fn timing_out_a_close_waiter_does_not_cancel_the_dedicated_stop_worker() {
     let mut harness = Harness::new();
     let lease = harness.opened().await;
     let waiter = tokio::spawn(async move {
-        tokio::time::timeout(std::time::Duration::from_millis(20), lease.close()).await
+        tokio::time::timeout(std::time::Duration::from_millis(1), lease.close()).await
     });
     let stop_reply = match harness.calls.recv().await.unwrap() {
         DriverCall::Stop(_, reply) => reply,

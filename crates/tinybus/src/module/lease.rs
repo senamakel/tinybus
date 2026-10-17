@@ -55,6 +55,18 @@ pub enum LeaseReportOutcome {
     Faulted,
     /// The finite retry sequence ended without acknowledgement.
     Exhausted,
+    /// The driver could not prove whether the operation settled.
+    Unacknowledged,
+}
+
+/// Result of a driver STOP operation, with retry safety stated explicitly.
+pub enum StopOutcome<E> {
+    /// Native STOP acknowledged completion.
+    Acknowledged,
+    /// The operation is known to have settled without acknowledgement and can safely be retried.
+    RetryableFailure(E),
+    /// The operation may still be active or its completion is unknown; it must not be retried.
+    Unacknowledged(E),
 }
 
 /// Content-free lifecycle metadata; it never includes a reservation, object, or driver error.
@@ -230,8 +242,13 @@ pub trait RuntimeLeaseDriver: Send + Sync + 'static {
     async fn object(&self, reservation: &Self::Reservation) -> Result<Self::Object, Self::Error>;
     /// Start work associated with this reservation.
     async fn start(&self, reservation: &Self::Reservation) -> Result<(), Self::Error>;
-    /// Stop work associated with this reservation. Success is the sole cleanup acknowledgement.
-    async fn stop(&self, reservation: &Self::Reservation) -> Result<(), Self::Error>;
+    /// Stop work associated with this reservation.
+    ///
+    /// `RetryableFailure` is valid only when the driver has authoritative evidence that this
+    /// operation settled and a later STOP cannot overlap it. Timeouts, lost replies, malformed
+    /// responses, and faulted peers must be `Unacknowledged` unless separate evidence proves
+    /// settlement. `Acknowledged` is the only outcome that permits callback withdrawal.
+    async fn stop(&self, reservation: &Self::Reservation) -> StopOutcome<Self::Error>;
     /// Whether this reservation has reached a terminal fault that forbids another STOP attempt.
     fn failed(&self, reservation: &Self::Reservation) -> bool;
 }
@@ -592,15 +609,28 @@ async fn cleanup_worker<D, E>(
                         state.send_replace(CloseState::Acknowledged);
                         return;
                     }
-                    Err(error) => {
+                    StopOutcome::Acknowledged => {
+                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
+                        if let Some(guard) = callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                            guard.remove().await;
+                        }
+                        state.send_replace(CloseState::Acknowledged);
+                        return;
+                    }
+                    StopOutcome::RetryableFailure(error) => {
                         state.send_replace(CloseState::Running);
                         Err(error)
+                    }
+                    StopOutcome::Unacknowledged(error) => {
+                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Unacknowledged });
+                        state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, Some(error)))));
+                        std::future::pending::<()>().await;
                     }
                 }
             }
         };
         match result {
-            Ok(()) => {
+            StopOutcome::Acknowledged => {
                 report(
                     &reporter,
                     LeaseReport {
@@ -619,7 +649,7 @@ async fn cleanup_worker<D, E>(
                 state.send_replace(CloseState::Acknowledged);
                 return;
             }
-            Err(error) => {
+            StopOutcome::RetryableFailure(error) => {
                 report(
                     &reporter,
                     LeaseReport {
@@ -637,6 +667,11 @@ async fn cleanup_worker<D, E>(
                     ))));
                     std::future::pending::<()>().await;
                 }
+            }
+            StopOutcome::Unacknowledged(error) => {
+                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Unacknowledged });
+                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, Some(error)))));
+                std::future::pending::<()>().await;
             }
         }
         if driver.failed(&reservation) {
