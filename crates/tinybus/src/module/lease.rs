@@ -418,24 +418,40 @@ async fn cleanup_worker<D, E>(
             state.send_replace(CloseState::Unacknowledged(error));
             std::future::pending::<()>().await;
         }
-        match tokio::time::timeout(policy.per_attempt_timeout, driver.stop(&reservation)).await {
-            Ok(Ok(())) => {
+        let mut stop = Box::pin(driver.stop(&reservation));
+        let result = match tokio::time::timeout(policy.per_attempt_timeout, &mut stop).await {
+            Ok(result) => result,
+            Err(_) => {
+                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::TimedOut });
+                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, None))));
+                // A local deadline cannot cancel remote work. Keep the original operation alive;
+                // only its eventual result can acknowledge cleanup or permit a later retry.
+                match stop.await {
+                    Ok(()) => {
+                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
+                        callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+                        state.send_replace(CloseState::Acknowledged);
+                        return;
+                    }
+                    Err(error) => {
+                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Failed });
+                        state.send_replace(CloseState::Running);
+                        Err(error)
+                    }
+                }
+            }
+        };
+        match result {
+            Ok(()) => {
                 report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
                 callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
                 state.send_replace(CloseState::Acknowledged);
                 return;
             }
-            Ok(Err(error)) => {
+            Err(error) => {
                 report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Failed });
                 if attempt == policy.retry_delays.len() + 1 {
                     state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, Some(error)))));
-                    std::future::pending::<()>().await;
-                }
-            }
-            Err(_) => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::TimedOut });
-                if attempt == policy.retry_delays.len() + 1 {
-                    state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, None))));
                     std::future::pending::<()>().await;
                 }
             }
