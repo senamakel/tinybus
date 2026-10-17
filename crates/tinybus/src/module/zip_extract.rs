@@ -419,7 +419,7 @@ fn checked_path(original: &str) -> Result<(PathBuf, String, bool)> {
         }
     }
 
-    let normalized = rawzip::path::ZipFilePath::from_str(original)
+    let normalized = rawzip::path::ZipFilePath::from_bytes(original.as_bytes())
         .try_normalize()
         .map_err(|_| refused("release archive contains an unsafe path"))?;
     if normalized.as_ref() != original {
