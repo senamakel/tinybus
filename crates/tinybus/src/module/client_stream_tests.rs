@@ -400,7 +400,7 @@ async fn method_failure_and_cancellation_abort_a_streamed_upload() {
         .call_with_stream_detailed::<Value, _, _>(
             RECORD.id,
             "InvalidInput",
-            |stream| (stream,),
+            |stream| serde_json::json!([stream]),
             &bytes,
         )
         .await
