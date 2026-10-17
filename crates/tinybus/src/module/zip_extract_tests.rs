@@ -230,7 +230,7 @@ fn link_and_special_mode_metadata_never_create_links_or_privileges() {
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & (libc::S_ISUID | libc::S_ISGID) as u32, 0);
+        assert_eq!(mode & 0o6000, 0, "setuid and setgid bits are not restored");
     }
 }
 
