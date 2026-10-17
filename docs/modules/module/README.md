@@ -196,9 +196,9 @@ Hosts that choose configuration from each caller can use
 reinitialize only when it changes. The coordinator stores a digest, not the
 configuration. Its default strategy uses lifecycle reinitialization; a
 `Reconfigure::Member("Configure")` strategy calls a module-owned member with
-the configuration as its sole argument. `retry_while_initializing` retries
-only a typed initializing result, within the configured attempt and delay
-bounds.
+the configuration as its sole argument over a confidential call, so the
+recipient must be attested. `retry_while_initializing` retries only a typed
+initializing result, within the configured attempt and delay bounds.
 
 `proxy(config)` serializes configuration transitions but releases its lock
 before the caller uses the returned proxy. When a bus call must run under the
