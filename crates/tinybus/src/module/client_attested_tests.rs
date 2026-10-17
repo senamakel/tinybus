@@ -147,11 +147,7 @@ impl ModuleAccess for ReadinessAccess {
     }
 }
 
-unsafe extern "C" fn never_ready_deliver(
-    _: *mut std::ffi::c_void,
-    _: *const u8,
-    _: usize,
-) -> i32 {
+unsafe extern "C" fn never_ready_deliver(_: *mut std::ffi::c_void, _: *const u8, _: usize) -> i32 {
     crate::module::abi::TB_OK
 }
 
@@ -159,11 +155,7 @@ unsafe extern "C" fn no_op_lifecycle(_: *mut std::ffi::c_void, _: u64) -> i32 {
     crate::module::abi::TB_OK
 }
 
-unsafe extern "C" fn no_op_reinitialize(
-    _: *mut std::ffi::c_void,
-    _: *const u8,
-    _: usize,
-) -> i32 {
+unsafe extern "C" fn no_op_reinitialize(_: *mut std::ffi::c_void, _: *const u8, _: usize) -> i32 {
     crate::module::abi::TB_OK
 }
 
@@ -293,7 +285,11 @@ async fn a_lazy_module_that_never_announces_ready_fails_before_serializing_argum
     let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let result: Result<String, _> = client
-        .call_attested(record.id, "Consume", SerializeCounter(serializations.clone()))
+        .call_attested(
+            record.id,
+            "Consume",
+            SerializeCounter(serializations.clone()),
+        )
         .await;
     assert_eq!(result, Err(ModuleCallError::Unavailable));
     assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -415,4 +411,3 @@ async fn a_confidential_call_stays_on_the_attested_unique_peer_after_name_handov
     assert!(calls_b.lock().unwrap().is_empty());
     broker_task.abort();
 }
-

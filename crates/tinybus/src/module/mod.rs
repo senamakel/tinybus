@@ -146,6 +146,7 @@ pub fn sha256_zip_module_library(path: impl AsRef<std::path::Path>) -> crate::Re
     zip_extract::library_sha256(path.as_ref())
 }
 
+#[cfg(any(feature = "modules", feature = "cli"))]
 pub(crate) fn refused(reason: impl Into<String>) -> crate::Error {
     crate::Error::module_refused(std::path::Path::new("github-release"), reason)
 }

@@ -419,7 +419,8 @@ impl ModuleHost {
     /// Returns a closed lifecycle error when the name is not a loaded module,
     /// initialization fails, or the module does not reach `READY`.
     pub async fn ensure_ready(&self, bus_name: &str) -> Result<()> {
-        self.ensure_ready_within(bus_name, Duration::from_secs(5)).await
+        self.ensure_ready_within(bus_name, Duration::from_secs(5))
+            .await
     }
 
     pub(crate) async fn ensure_ready_within(
