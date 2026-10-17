@@ -169,10 +169,7 @@ async fn fixture(behavior: Behavior) -> Fixture {
     let service = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    service
-        .request_name(RECORD.bus_name)
-        .await
-        .unwrap();
+    service.request_name(RECORD.bus_name).await.unwrap();
     service
         .serve_at(
             ObjectPath::new(RECORD.object_path).unwrap(),
@@ -250,22 +247,24 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
     let (received_tx, _received_rx) = tokio::sync::mpsc::unbounded_channel();
     let fixture = fixture(Behavior::Consume(received_tx)).await;
     let builder_calls = Arc::new(AtomicUsize::new(0));
-    assert!(fixture
-        .client
-        .call_with_stream_detailed::<Value, _, _>(
-            "unknown",
-            "Upload",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    (stream,)
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .client
+            .call_with_stream_detailed::<Value, _, _>(
+                "unknown",
+                "Upload",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        (stream,)
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
 
     let proxy = fixture.client.fixture_proxy().unwrap();
     let disabled = ModuleClient::new(StreamAccess {
@@ -275,21 +274,23 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
         ready: true,
     })
     .with_fixture(proxy.clone());
-    assert!(disabled
-        .call_with_stream_detailed::<Value, _, _>(
-            RECORD.id,
-            "Upload",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    (stream,)
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        disabled
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "Upload",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        (stream,)
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
 
     let unready = ModuleClient::new(StreamAccess {
         connection: fixture.connection.clone(),
@@ -297,38 +298,42 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
         enabled: true,
         ready: false,
     });
-    assert!(unready
-        .call_with_stream_detailed::<Value, _, _>(
-            RECORD.id,
-            "Upload",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    (stream,)
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        unready
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "Upload",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        (stream,)
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
 
-    assert!(fixture
-        .client
-        .call_with_stream_detailed::<Value, _, _>(
-            RECORD.id,
-            "invalid/member",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    (stream,)
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .client
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "invalid/member",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        (stream,)
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.opens.load(Ordering::SeqCst), 0);
 }
@@ -357,7 +362,11 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
         assert!(!rendered.contains("secret document detail"));
     }
 
-    let object = fixture.client.object_client(RECORD.id, "/child").await.unwrap();
+    let object = fixture
+        .client
+        .object_client(RECORD.id, "/child")
+        .await
+        .unwrap();
     let object_failure = object
         .call_detailed::<Value>("InvalidInput", ())
         .await
@@ -365,7 +374,10 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
     assert_eq!(object_failure.wire_name, failure.wire_name);
     assert_eq!(object_failure.message, failure.message);
     let reports = fixture.reports.0.lock().unwrap();
-    assert_eq!(reports.as_slice(), &[Reason::ModuleFault, Reason::ModuleFault]);
+    assert_eq!(
+        reports.as_slice(),
+        &[Reason::ModuleFault, Reason::ModuleFault]
+    );
 }
 
 #[tokio::test]
@@ -382,7 +394,10 @@ async fn method_failure_and_cancellation_abort_a_streamed_upload() {
         )
         .await
         .unwrap_err();
-    assert_eq!(failure.wire_name, "ai.tinyhumans.tinydocs.Error.InvalidInput");
+    assert_eq!(
+        failure.wire_name,
+        "ai.tinyhumans.tinydocs.Error.InvalidInput"
+    );
     tokio::time::timeout(Duration::from_secs(10), failed_fixture.aborts.recv())
         .await
         .expect("method failure dropped the unfinished stream writer")

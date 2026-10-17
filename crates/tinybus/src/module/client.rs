@@ -340,6 +340,55 @@ impl ModuleClient {
         self.invoke_detailed(module, member, args, false).await
     }
 
+    /// Execute a contract member while uploading its bulk payload as a stream.
+    ///
+    /// The argument builder receives the stream handle only after the module
+    /// is validated and ready. Its serialized arguments, method call and
+    /// payload use the single proxy selected for this invocation.
+    ///
+    /// # Errors
+    ///
+    /// A detailed [`ModuleCallFailure`]. Remote method details remain redacted
+    /// from `Debug`, `Display`, and terminal reports.
+    pub async fn call_with_stream_detailed<R, F, A>(
+        &self,
+        module: &str,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallFailure>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        let record = self.record(module).map_err(ModuleCallFailure::local)?;
+        let member = crate::MemberName::new(member).map_err(|error| {
+            report_proxy_failure_detailed(self.access.reporter(), record, &error)
+        })?;
+        let proxy = if let Some(fixture) = &self.fixture {
+            fixture.clone()
+        } else {
+            self.load_proxy(record, record.object_path)
+                .await
+                .map_err(ModuleCallFailure::local)?
+        };
+        let proxy = self.with_deadline(proxy);
+        proxy
+            .connection()
+            .call_with_stream_timeout(
+                proxy.destination().clone(),
+                proxy.path().clone(),
+                proxy.interface().clone(),
+                member,
+                args,
+                bytes,
+                proxy.timeout(),
+            )
+            .await
+            .map_err(|error| report_proxy_failure_detailed(self.access.reporter(), record, &error))
+    }
+
     /// Execute a confidential member after TinyBus recipient attestation.
     ///
     /// A failure to attest the pinned artifact fails the call; ordinary delivery
@@ -703,7 +752,25 @@ impl ModuleObjectClient {
         member: &str,
         args: impl Serialize,
     ) -> Result<R, ModuleCallError> {
-        invoke_proxy(&*self.access, self.record, &self.proxy, member, args, false).await
+        self.call_detailed(member, args)
+            .await
+            .map_err(|failure| failure.kind)
+    }
+
+    /// Call this object and preserve an untrusted remote failure's wire details.
+    ///
+    /// `Debug`, `Display`, and the reporter stay sanitized; the returned
+    /// `wire_name` and `message` fields require the caller's redaction policy.
+    ///
+    /// # Errors
+    ///
+    /// A detailed [`ModuleCallFailure`].
+    pub async fn call_detailed<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        invoke_proxy_detailed(&*self.access, self.record, &self.proxy, member, args, false).await
     }
 
     /// Call a confidential member of the object.
