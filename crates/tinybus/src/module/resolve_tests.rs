@@ -31,7 +31,7 @@ fn reconfiguration_classifies_only_closed_lifecycle_wire_names() {
         ),
     ];
     for (error, expected) in cases {
-        assert_eq!(reconfigure_failure(&error), expected);
+        assert_eq!(access::reconfigure_failure(&error), expected);
     }
 }
 

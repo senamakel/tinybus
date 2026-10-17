@@ -237,7 +237,7 @@ impl ReconfigurableModule {
             .call_confidential::<serde_json::Value>(member, (config,))
             .await
             .map(|_| ())
-            .map_err(|error| super::resolve::reconfigure_failure(&error))
+            .map_err(|error| super::resolve::access::reconfigure_failure(&error))
     }
 
     fn loaded_state(&self) -> std::sync::MutexGuard<'_, Option<ConfigFingerprint>> {

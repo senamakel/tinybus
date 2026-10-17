@@ -214,7 +214,7 @@ impl ModuleAccess for FixtureAccess {
                 .reinitialize_module(id, config)
                 .await
                 .map(|_| ())
-                .map_err(|error| crate::module::resolve::reconfigure_failure(&error));
+                .map_err(|error| crate::module::resolve::access::reconfigure_failure(&error));
             if outcome == Err(ReconfigureFailure::Initializing) {
                 if let Some(notifier) = self
                     .initializing_notifier
