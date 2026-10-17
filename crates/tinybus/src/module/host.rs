@@ -1619,14 +1619,27 @@ impl ModuleHost {
                 info: admitted.clone(),
                 module_id: ModuleId::new(manifest.module.name.clone()),
                 transport,
-                unique_name: unique,
+                unique_name: unique.clone(),
                 transition_from: None,
                 descriptor_info,
                 lifecycle_busy: false,
                 callback_config: None,
                 callback_state: None,
             });
-        staged.start();
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| staged.start())).is_err() {
+            let mut loaded = self.inner.loaded.lock().expect("module list lock");
+            if let Some(index) = loaded.iter().position(|module| {
+                module.unique_name == unique && Arc::ptr_eq(&module.transport, &ready_transport)
+            }) {
+                loaded.remove(index);
+            }
+            drop(loaded);
+            ready_transport.commit_terminal(true);
+            ready_transport.request_terminal(true);
+            let error = Error::module_refused(path, "module transport could not start");
+            self.record_manifest_rejection(&error, manifest, RefusalClass::Failed);
+            return Err(error);
+        }
         let broker = self.inner.broker.clone();
         tokio::spawn(async move {
             if lazy_init {
