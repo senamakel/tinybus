@@ -16,6 +16,7 @@ mod github;
 mod hash;
 pub mod manifest;
 pub mod platform;
+pub mod service_slot;
 #[cfg(feature = "modules")]
 pub mod reconfigure;
 mod release;
@@ -131,10 +132,6 @@ pub fn sha256_file(path: impl AsRef<std::path::Path>) -> crate::Result<String> {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "service_slot_tests.rs"]
-mod service_slot_tests;
 
 #[cfg(feature = "modules")]
 mod requirements;

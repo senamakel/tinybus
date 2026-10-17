@@ -1,5 +1,4 @@
 use super::*;
-use crate::module::service_slot::ModuleServiceSlot;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
