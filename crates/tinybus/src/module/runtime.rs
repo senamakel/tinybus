@@ -137,26 +137,44 @@ impl Drop for HostObjectGuard {
         let registry = self.registry.clone();
         let name = self.name.clone();
         self.handle.spawn(async move {
-            let mut state = registry.lock().await;
-            let _ = state.connection.unserve_if_owned(&registration).await;
-            let release = if let Some(lease) = state.names.get_mut(&name) {
-                lease.registrations = lease.registrations.saturating_sub(1);
-                if lease.registrations == 0 {
-                    let release = lease.release_when_empty;
-                    state.names.remove(&name);
-                    release
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            if release {
-                if let Some(unique) = state.connection.unique_name() {
-                    let _ = state.broker.release_host_name(&unique, &name);
-                }
-            }
+            remove_host_object(registry, name, registration).await;
         });
+    }
+}
+
+impl HostObjectGuard {
+    /// Withdraw this exact registration and wait for the local broker to remove it.
+    pub(super) async fn remove(mut self) {
+        let Some(registration) = self.registration.take() else {
+            return;
+        };
+        remove_host_object(self.registry.clone(), self.name.clone(), registration).await;
+    }
+}
+
+async fn remove_host_object(
+    registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+    name: crate::BusName,
+    registration: ObjectRegistration,
+) {
+    let mut state = registry.lock().await;
+    let _ = state.connection.unserve_if_owned(&registration).await;
+    let release = if let Some(lease) = state.names.get_mut(&name) {
+        lease.registrations = lease.registrations.saturating_sub(1);
+        if lease.registrations == 0 {
+            let release = lease.release_when_empty;
+            state.names.remove(&name);
+            release
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if release {
+        if let Some(unique) = state.connection.unique_name() {
+            let _ = state.broker.release_host_name(&unique, &name);
+        }
     }
 }
 

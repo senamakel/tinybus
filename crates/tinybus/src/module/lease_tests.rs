@@ -34,10 +34,7 @@ enum DriverCall {
     Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
     Object(Identity, oneshot::Sender<Result<Object, DriverError>>),
     Start(oneshot::Sender<Result<(), DriverError>>),
-    Stop(
-        std::time::Instant,
-        oneshot::Sender<Result<(), DriverError>>,
-    ),
+    Stop(std::time::Instant, oneshot::Sender<Result<(), DriverError>>),
     Validated,
 }
 
@@ -298,9 +295,9 @@ async fn object_failure_after_reserve_keeps_the_cleanup_owner_until_stop_ack() {
         Some(DriverCall::Validated)
     ));
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Object(_, reply) => {
-            reply.send(Err(DriverError("private object detail"))).unwrap()
-        }
+        DriverCall::Object(_, reply) => reply
+            .send(Err(DriverError("private object detail")))
+            .unwrap(),
         _ => panic!("object failure follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
@@ -312,7 +309,10 @@ async fn object_failure_after_reserve_keeps_the_cleanup_owner_until_stop_ack() {
     };
     assert!(!format!("{error:?}").contains("private object detail"));
     assert!(!error.to_string().contains("private object detail"));
-    assert!(harness.calls.try_recv().is_err(), "failed object creation never serves or starts");
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "failed object creation never serves or starts"
+    );
     assert!(harness.callback().await.is_err());
 }
 
@@ -384,9 +384,7 @@ async fn a_timed_out_stop_attempt_is_bounded_and_does_not_overlap_its_retry() {
         .send(Err(DriverError("private stop detail")))
         .unwrap();
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => {
-            reply.send(Err(DriverError("private stop detail"))).unwrap()
-        }
+        DriverCall::Stop(_, reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
         _ => panic!("retry sequence remains serialized"),
     }
     assert!(closing.await.unwrap().is_err());
@@ -432,8 +430,14 @@ async fn timing_out_a_close_waiter_does_not_cancel_the_dedicated_stop_worker() {
         DriverCall::Stop(_, reply) => reply,
         _ => panic!("close starts a dedicated stop worker"),
     };
-    assert!(waiter.await.unwrap().is_err(), "the external close wait can expire");
-    assert!(harness.callback().await.is_ok(), "wait timeout is not STOP acknowledgement");
+    assert!(
+        waiter.await.unwrap().is_err(),
+        "the external close wait can expire"
+    );
+    assert!(
+        harness.callback().await.is_ok(),
+        "wait timeout is not STOP acknowledgement"
+    );
     stop_reply.send(Ok(())).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -445,7 +449,10 @@ async fn timing_out_a_close_waiter_does_not_cancel_the_dedicated_stop_worker() {
     })
     .await
     .expect("the original worker removes the callback after its acknowledgement");
-    assert!(harness.calls.try_recv().is_err(), "caller timeout creates no second STOP");
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "caller timeout creates no second STOP"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -478,7 +485,10 @@ async fn destroying_the_callers_runtime_does_not_cancel_the_dedicated_stop_worke
     tokio::task::spawn_blocking(move || caller.join().unwrap())
         .await
         .unwrap();
-    assert!(harness.callback().await.is_ok(), "caller runtime drop is not STOP ACK");
+    assert!(
+        harness.callback().await.is_ok(),
+        "caller runtime drop is not STOP ACK"
+    );
     stop_reply.send(Ok(())).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -500,9 +510,7 @@ async fn logical_failure_stops_retrying_without_claiming_acknowledgement() {
     harness.driver.failed.store(true, Ordering::Release);
     let closing = tokio::spawn(async move { lease.close().await });
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => {
-            reply.send(Err(DriverError("private stop detail"))).unwrap()
-        }
+        DriverCall::Stop(_, reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
         _ => panic!("close sends the first STOP before evaluating retry exit"),
     }
     assert!(closing.await.unwrap().is_err());

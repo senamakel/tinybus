@@ -12,7 +12,10 @@ use std::{
     time::Duration,
 };
 
-use tokio::{runtime::Handle, sync::{oneshot, watch}};
+use tokio::{
+    runtime::Handle,
+    sync::{oneshot, watch},
+};
 
 use super::runtime::ModuleRuntime;
 
@@ -80,20 +83,30 @@ impl RetryPolicy {
     ///
     /// # Errors
     /// Returns an error when a STOP attempt has no positive timeout.
-    pub fn new(per_attempt_timeout: Duration, retry_delays: Vec<Duration>) -> Result<Self, RetryPolicyError> {
+    pub fn new(
+        per_attempt_timeout: Duration,
+        retry_delays: Vec<Duration>,
+    ) -> Result<Self, RetryPolicyError> {
         if per_attempt_timeout.is_zero() {
             return Err(RetryPolicyError);
         }
-        Ok(Self { per_attempt_timeout, retry_delays })
+        Ok(Self {
+            per_attempt_timeout,
+            retry_delays,
+        })
     }
 
     /// Maximum duration of one STOP call.
     #[must_use]
-    pub fn per_attempt_timeout(&self) -> Duration { self.per_attempt_timeout }
+    pub fn per_attempt_timeout(&self) -> Duration {
+        self.per_attempt_timeout
+    }
 
     /// The finite delays between STOP attempts.
     #[must_use]
-    pub fn retry_delays(&self) -> &[Duration] { &self.retry_delays }
+    pub fn retry_delays(&self) -> &[Duration] {
+        &self.retry_delays
+    }
 }
 
 /// A retry policy was missing a positive per-attempt timeout.
@@ -117,34 +130,56 @@ pub struct LeaseError<E> {
 }
 
 impl<E> LeaseError<E> {
-    fn new(phase: LeasePhase, attempt: Option<usize>, acknowledged: bool, driver_error: Option<E>) -> Self {
-        Self { phase, attempt, acknowledged, driver_error: driver_error.map(Arc::new) }
+    fn new(
+        phase: LeasePhase,
+        attempt: Option<usize>,
+        acknowledged: bool,
+        driver_error: Option<E>,
+    ) -> Self {
+        Self {
+            phase,
+            attempt,
+            acknowledged,
+            driver_error: driver_error.map(Arc::new),
+        }
     }
 
     /// Lifecycle stage that failed.
     #[must_use]
-    pub fn phase(&self) -> LeasePhase { self.phase }
+    pub fn phase(&self) -> LeasePhase {
+        self.phase
+    }
 
     /// STOP attempt number associated with the error, if one occurred.
     #[must_use]
-    pub fn attempt(&self) -> Option<usize> { self.attempt }
+    pub fn attempt(&self) -> Option<usize> {
+        self.attempt
+    }
 
     /// Whether the native STOP operation was acknowledged.
     #[must_use]
-    pub fn acknowledged(&self) -> bool { self.acknowledged }
+    pub fn acknowledged(&self) -> bool {
+        self.acknowledged
+    }
 
     /// The original typed driver error, when a driver operation returned one.
     #[must_use]
-    pub fn driver_error(&self) -> Option<&E> { self.driver_error.as_deref() }
+    pub fn driver_error(&self) -> Option<&E> {
+        self.driver_error.as_deref()
+    }
 }
 
 impl<E> std::fmt::Debug for LeaseError<E> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("LeaseError")
+        formatter
+            .debug_struct("LeaseError")
             .field("phase", &self.phase)
             .field("attempt", &self.attempt)
             .field("acknowledged", &self.acknowledged)
-            .field("driver_error", &self.driver_error.as_ref().map(|_| "<redacted>"))
+            .field(
+                "driver_error",
+                &self.driver_error.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -152,8 +187,16 @@ impl<E> std::fmt::Debug for LeaseError<E> {
 impl<E> std::fmt::Display for LeaseError<E> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.attempt {
-            Some(attempt) => write!(formatter, "module lease {:?} phase failed (attempt {attempt}, acknowledged={})", self.phase, self.acknowledged),
-            None => write!(formatter, "module lease {:?} phase failed (acknowledged={})", self.phase, self.acknowledged),
+            Some(attempt) => write!(
+                formatter,
+                "module lease {:?} phase failed (attempt {attempt}, acknowledged={})",
+                self.phase, self.acknowledged
+            ),
+            None => write!(
+                formatter,
+                "module lease {:?} phase failed (acknowledged={})",
+                self.phase, self.acknowledged
+            ),
         }
     }
 }
@@ -178,7 +221,11 @@ pub trait RuntimeLeaseDriver: Send + Sync + 'static {
     /// Validate the reservation before any object construction or callback export.
     fn validate(&self, reservation: &Self::Reservation) -> Result<(), Self::Error>;
     /// Return the exact callback name and path for this reservation and object.
-    fn callback_address(&self, reservation: &Self::Reservation, object: &Self::Object) -> Result<(crate::BusName, crate::ObjectPath), Self::Error>;
+    fn callback_address(
+        &self,
+        reservation: &Self::Reservation,
+        object: &Self::Object,
+    ) -> Result<(crate::BusName, crate::ObjectPath), Self::Error>;
     /// Construct the host-side object or handle after validation.
     async fn object(&self, reservation: &Self::Reservation) -> Result<Self::Object, Self::Error>;
     /// Start work associated with this reservation.
@@ -190,7 +237,8 @@ pub trait RuntimeLeaseDriver: Send + Sync + 'static {
 }
 
 type WorkerFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-type StartWorker<E> = Box<dyn FnOnce(watch::Sender<CloseState<E>>) -> WorkerFuture + Send + 'static>;
+type StartWorker<E> =
+    Box<dyn FnOnce(watch::Sender<CloseState<E>>) -> WorkerFuture + Send + 'static>;
 
 enum CloseState<E> {
     Open,
@@ -220,11 +268,20 @@ struct LeaseControl<E> {
 impl<E: Send + Sync + 'static> LeaseControl<E> {
     fn new(runtime: Handle, starter: StartWorker<E>) -> Self {
         let (state, _) = watch::channel(CloseState::Open);
-        Self { runtime, users: AtomicUsize::new(1), state, starter: Mutex::new(Some(starter)) }
+        Self {
+            runtime,
+            users: AtomicUsize::new(1),
+            state,
+            starter: Mutex::new(Some(starter)),
+        }
     }
 
     fn start(&self) {
-        let starter = self.starter.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        let starter = self
+            .starter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         if let Some(starter) = starter {
             self.state.send_replace(CloseState::Running);
             let sender = self.state.clone();
@@ -243,7 +300,12 @@ impl<E: Send + Sync + 'static> LeaseControl<E> {
                 CloseState::Open | CloseState::Running => {}
             }
             if state.changed().await.is_err() {
-                return Err(Arc::new(LeaseError::new(LeasePhase::Runtime, None, false, None)));
+                return Err(Arc::new(LeaseError::new(
+                    LeasePhase::Runtime,
+                    None,
+                    false,
+                    None,
+                )));
             }
         }
     }
@@ -258,11 +320,15 @@ pub struct RuntimeLease<T, E: Send + Sync + 'static> {
 impl<T, E: Send + Sync + 'static> RuntimeLease<T, E> {
     /// The object or host handle created for this reservation.
     #[must_use]
-    pub fn object(&self) -> &T { &self.object }
+    pub fn object(&self) -> &T {
+        &self.object
+    }
 
     /// Wait for the one shared cleanup worker. Cancelling this future never cancels that worker.
     pub async fn close(&self) -> Result<(), Arc<LeaseError<E>>>
-    where E: Send + Sync + 'static {
+    where
+        E: Send + Sync + 'static,
+    {
         self.control.wait().await
     }
 }
@@ -270,7 +336,10 @@ impl<T, E: Send + Sync + 'static> RuntimeLease<T, E> {
 impl<T, E: Send + Sync + 'static> Clone for RuntimeLease<T, E> {
     fn clone(&self) -> Self {
         self.control.users.fetch_add(1, Ordering::Relaxed);
-        Self { object: self.object.clone(), control: self.control.clone() }
+        Self {
+            object: self.object.clone(),
+            control: self.control.clone(),
+        }
     }
 }
 
@@ -294,7 +363,9 @@ impl ModuleRuntime {
         make_callback: F,
         policy: RetryPolicy,
         reporter: R,
-    ) -> impl Future<Output = Result<RuntimeLease<D::Object, D::Error>, LeaseError<D::Error>>> + Send + 'static
+    ) -> impl Future<Output = Result<RuntimeLease<D::Object, D::Error>, LeaseError<D::Error>>>
+    + Send
+    + 'static
     where
         D: RuntimeLeaseDriver,
         F: FnOnce(&D::Reservation, &D::Object) -> Result<I, D::Error> + Send + 'static,
@@ -305,11 +376,21 @@ impl ModuleRuntime {
         let host_objects = self.lease_host_object_registry();
         let (response, result) = oneshot::channel();
         self.spawn(async move {
-            let activated = activate(runtime, host_objects, driver, make_callback, policy, reporter).await;
+            let activated = activate(
+                runtime,
+                host_objects,
+                driver,
+                make_callback,
+                policy,
+                reporter,
+            )
+            .await;
             let _ = response.send(activated);
         });
         async move {
-            result.await.unwrap_or_else(|_| Err(LeaseError::new(LeasePhase::Runtime, None, false, None)))
+            result
+                .await
+                .unwrap_or_else(|_| Err(LeaseError::new(LeasePhase::Runtime, None, false, None)))
         }
     }
 }
@@ -331,7 +412,14 @@ where
     let driver = Arc::new(driver);
     let reservation = match driver.reserve().await {
         Ok(reservation) => Arc::new(reservation),
-        Err(error) => return Err(LeaseError::new(LeasePhase::Reserve, None, false, Some(error))),
+        Err(error) => {
+            return Err(LeaseError::new(
+                LeasePhase::Reserve,
+                None,
+                false,
+                Some(error),
+            ));
+        }
     };
 
     // This cleanup owner exists before validation and before any later await. The returned lease
@@ -356,14 +444,24 @@ where
 
     if let Err(error) = driver.validate(&reservation) {
         let _ = control.wait().await;
-        return Err(LeaseError::new(LeasePhase::Validate, None, false, Some(error)));
+        return Err(LeaseError::new(
+            LeasePhase::Validate,
+            None,
+            false,
+            Some(error),
+        ));
     }
 
     let object = match driver.object(&reservation).await {
         Ok(object) => Arc::new(object),
         Err(error) => {
             let _ = control.wait().await;
-            return Err(LeaseError::new(LeasePhase::Object, None, false, Some(error)));
+            return Err(LeaseError::new(
+                LeasePhase::Object,
+                None,
+                false,
+                Some(error),
+            ));
         }
     };
 
@@ -371,7 +469,12 @@ where
         Ok(Ok(callback)) => callback,
         Ok(Err(error)) => {
             let _ = control.wait().await;
-            return Err(LeaseError::new(LeasePhase::Callback, None, false, Some(error)));
+            return Err(LeaseError::new(
+                LeasePhase::Callback,
+                None,
+                false,
+                Some(error),
+            ));
         }
         Err(_) => {
             let _ = control.wait().await;
@@ -383,12 +486,28 @@ where
         Ok(address) => address,
         Err(error) => {
             let _ = control.wait().await;
-            return Err(LeaseError::new(LeasePhase::Address, None, false, Some(error)));
+            return Err(LeaseError::new(
+                LeasePhase::Address,
+                None,
+                false,
+                Some(error),
+            ));
         }
     };
-    let host_object = super::runtime::serve_host_object_transaction(host_objects, runtime.clone(), name, path, callback).await;
+    let host_object = super::runtime::serve_host_object_transaction(
+        host_objects,
+        runtime.clone(),
+        name,
+        path,
+        callback,
+    )
+    .await;
     match host_object {
-        Ok(guard) => *callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard),
+        Ok(guard) => {
+            *callback_guard
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard)
+        }
         Err(_) => {
             let _ = control.wait().await;
             return Err(LeaseError::new(LeasePhase::Export, None, false, None));
@@ -410,11 +529,26 @@ async fn cleanup_worker<D, E>(
     callback_guard: Arc<Mutex<Option<super::runtime::HostObjectGuard>>>,
     policy: RetryPolicy,
     reporter: Arc<dyn Fn(LeaseReport) + Send + Sync>,
-) where D: RuntimeLeaseDriver<Error = E>, E: StdError + Send + Sync + 'static {
+) where
+    D: RuntimeLeaseDriver<Error = E>,
+    E: StdError + Send + Sync + 'static,
+{
     for attempt in 1..=policy.retry_delays.len() + 1 {
         if driver.failed(&reservation) {
-            report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Faulted });
-            let error = Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, None));
+            report(
+                &reporter,
+                LeaseReport {
+                    phase: LeasePhase::Stop,
+                    attempt: Some(attempt),
+                    outcome: LeaseReportOutcome::Faulted,
+                },
+            );
+            let error = Arc::new(LeaseError::new(
+                LeasePhase::Stop,
+                Some(attempt),
+                false,
+                None,
+            ));
             state.send_replace(CloseState::Unacknowledged(error));
             std::future::pending::<()>().await;
         }
@@ -422,19 +556,43 @@ async fn cleanup_worker<D, E>(
         let result = match tokio::time::timeout(policy.per_attempt_timeout, &mut stop).await {
             Ok(result) => result,
             Err(_) => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::TimedOut });
-                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, None))));
+                report(
+                    &reporter,
+                    LeaseReport {
+                        phase: LeasePhase::Stop,
+                        attempt: Some(attempt),
+                        outcome: LeaseReportOutcome::TimedOut,
+                    },
+                );
+                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
+                    LeasePhase::Stop,
+                    Some(attempt),
+                    false,
+                    None,
+                ))));
                 // A local deadline cannot cancel remote work. Keep the original operation alive;
                 // only its eventual result can acknowledge cleanup or permit a later retry.
                 match stop.await {
                     Ok(()) => {
-                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
-                        callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+                        report(
+                            &reporter,
+                            LeaseReport {
+                                phase: LeasePhase::Stop,
+                                attempt: Some(attempt),
+                                outcome: LeaseReportOutcome::Acknowledged,
+                            },
+                        );
+                        if let Some(guard) = callback_guard
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take()
+                        {
+                            guard.remove().await;
+                        }
                         state.send_replace(CloseState::Acknowledged);
                         return;
                     }
                     Err(error) => {
-                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Failed });
                         state.send_replace(CloseState::Running);
                         Err(error)
                     }
@@ -443,22 +601,59 @@ async fn cleanup_worker<D, E>(
         };
         match result {
             Ok(()) => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
-                callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+                report(
+                    &reporter,
+                    LeaseReport {
+                        phase: LeasePhase::Stop,
+                        attempt: Some(attempt),
+                        outcome: LeaseReportOutcome::Acknowledged,
+                    },
+                );
+                if let Some(guard) = callback_guard
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    guard.remove().await;
+                }
                 state.send_replace(CloseState::Acknowledged);
                 return;
             }
             Err(error) => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Failed });
+                report(
+                    &reporter,
+                    LeaseReport {
+                        phase: LeasePhase::Stop,
+                        attempt: Some(attempt),
+                        outcome: LeaseReportOutcome::Failed,
+                    },
+                );
                 if attempt == policy.retry_delays.len() + 1 {
-                    state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, Some(error)))));
+                    state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
+                        LeasePhase::Stop,
+                        Some(attempt),
+                        false,
+                        Some(error),
+                    ))));
                     std::future::pending::<()>().await;
                 }
             }
         }
         if driver.failed(&reservation) {
-            report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Faulted });
-            state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, None))));
+            report(
+                &reporter,
+                LeaseReport {
+                    phase: LeasePhase::Stop,
+                    attempt: Some(attempt),
+                    outcome: LeaseReportOutcome::Faulted,
+                },
+            );
+            state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
+                LeasePhase::Stop,
+                Some(attempt),
+                false,
+                None,
+            ))));
             std::future::pending::<()>().await;
         }
         tokio::time::sleep(policy.retry_delays[attempt - 1]).await;
