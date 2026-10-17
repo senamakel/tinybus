@@ -865,10 +865,12 @@ async fn a_reinitialization_that_times_out_reports_a_timeout_without_the_configu
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    let (transport, _) = ModuleTransport::new("timeout".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("timeout".to_string(), Vec::new());
     let mut module = TbModuleVtable::default();
     unsafe { initialize_ok(std::ptr::null(), &mut module) };
     transport.initialize(module).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
+    REINITIALIZE_ENTERED.store(false, Ordering::Release);
     REINITIALIZE_CODE.store(TB_TIMEOUT, Ordering::Release);
     let error = transport
         .reinitialize(crate::Secret::new(
@@ -878,6 +880,7 @@ async fn a_reinitialization_that_times_out_reports_a_timeout_without_the_configu
         .unwrap_err();
     REINITIALIZE_CODE.store(TB_OK, Ordering::Release);
     assert!(matches!(error, Error::Timeout { .. }), "{error}");
+    assert!(REINITIALIZE_ENTERED.load(Ordering::Acquire));
     assert!(!error.to_string().contains("never printed"));
 }
 
