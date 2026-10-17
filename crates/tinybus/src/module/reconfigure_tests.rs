@@ -162,6 +162,7 @@ struct FixtureAccess {
     reporter: FailureReporter,
     unattested_service: Option<Connection>,
     use_unattested_proxy: bool,
+    /// The retry scenario holds a concurrent first call inside initialization.
     skip_ready_wait: bool,
     reinitialize_calls: Arc<AtomicUsize>,
     initializing_notifier: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
