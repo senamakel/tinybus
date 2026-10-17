@@ -23,6 +23,10 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
         "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
         "overlap.zip" => include_bytes!("fixtures/overlap.zip"),
         "one_module.zip" => include_bytes!("fixtures/one_module.zip"),
+        "compat_deflate_descriptor_zip64_local.zip" => {
+            include_bytes!("fixtures/compat_deflate_descriptor_zip64_local.zip")
+        }
+        "deep_path.zip" => include_bytes!("fixtures/deep_path.zip"),
         _ => panic!("unknown test fixture"),
     };
     fs::write(&archive, bytes).unwrap();
@@ -80,6 +84,24 @@ fn extracts_a_small_archive_with_zip64_local_size_fields() {
         fs::read(destination.join("module.so")).unwrap(),
         b"zip64-local-module"
     );
+}
+
+#[test]
+fn accepts_streaming_zip64_local_headers_with_ordinary_central_sizes() {
+    let (_root, destination, result) =
+        extract_fixture("compat_deflate_descriptor_zip64_local.zip");
+    result.unwrap();
+    assert_eq!(
+        fs::read(destination.join("module.so")).unwrap(),
+        b"zip64 streaming descriptor"
+    );
+}
+
+#[test]
+fn excessive_path_depth_is_rejected_before_filesystem_extraction() {
+    let (_root, destination, result) = extract_fixture("deep_path.zip");
+    assert!(result.is_err());
+    assert!(fs::read_dir(destination).unwrap().next().is_none());
 }
 
 #[test]
