@@ -1,0 +1,12 @@
+/Users/enamakel/work/workflow-openhuman/worktrees/epic-8056-tinybus-resolver-inputs/openhuman/vendor/tinybus/examples/target/debug/deps/thiserror-4718e05670cb076e.d: /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/enamakel/work/workflow-openhuman/worktrees/epic-8056-tinybus-resolver-inputs/openhuman/vendor/tinybus/examples/target/debug/build/thiserror-9e67f7e3e210dd73/out/private.rs
+
+/Users/enamakel/work/workflow-openhuman/worktrees/epic-8056-tinybus-resolver-inputs/openhuman/vendor/tinybus/examples/target/debug/deps/libthiserror-4718e05670cb076e.rmeta: /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/enamakel/work/workflow-openhuman/worktrees/epic-8056-tinybus-resolver-inputs/openhuman/vendor/tinybus/examples/target/debug/build/thiserror-9e67f7e3e210dd73/out/private.rs
+
+/Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs:
+/Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs:
+/Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs:
+/Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs:
+/Users/enamakel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs:
+/Users/enamakel/work/workflow-openhuman/worktrees/epic-8056-tinybus-resolver-inputs/openhuman/vendor/tinybus/examples/target/debug/build/thiserror-9e67f7e3e210dd73/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/enamakel/work/workflow-openhuman/worktrees/epic-8056-tinybus-resolver-inputs/openhuman/vendor/tinybus/examples/target/debug/build/thiserror-9e67f7e3e210dd73/out
