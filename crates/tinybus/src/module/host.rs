@@ -275,6 +275,30 @@ struct LifecycleBusyGuard<'a> {
     stop_transport: Option<Arc<ModuleTransport>>,
 }
 
+/// Keeps a linked setup admission owned until the module publishes readiness.
+/// Dropping or timing out the async attach request revokes the broker peer and
+/// lets the existing native lifecycle path finish teardown; it never drops a
+/// module-owned future from the caller's runtime.
+struct LinkedSetupAdmissionGuard(Option<Arc<ModuleTransport>>);
+
+impl LinkedSetupAdmissionGuard {
+    fn new(transport: Arc<ModuleTransport>) -> Self {
+        Self(Some(transport))
+    }
+
+    fn ready(&mut self) {
+        self.0.take();
+    }
+}
+
+impl Drop for LinkedSetupAdmissionGuard {
+    fn drop(&mut self) {
+        if let Some(transport) = self.0.take() {
+            transport.request_terminal(true);
+        }
+    }
+}
+
 impl<'a> LifecycleBusyGuard<'a> {
     fn for_reinitialize(host: &'a ModuleHostInner, name: &str) -> Self {
         Self {
@@ -765,6 +789,7 @@ impl ModuleHost {
             .find(|loaded| loaded.info.name == info.name)
             .map(|loaded| loaded.transport.clone())
             .ok_or_else(|| Error::failed("linked module did not retain its admitted transport"))?;
+        let mut setup_admission = LinkedSetupAdmissionGuard::new(transport.clone());
         transport.ensure_initialized().await?;
         if tokio::time::timeout(Duration::from_secs(5), transport.wait_ready())
             .await
@@ -776,6 +801,7 @@ impl ModuleHost {
                 "linked module setup did not become ready",
             ));
         }
+        setup_admission.ready();
         Ok(self
             .list()
             .into_iter()
