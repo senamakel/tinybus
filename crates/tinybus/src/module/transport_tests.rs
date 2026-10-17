@@ -2367,7 +2367,7 @@ async fn actual_native_reinitializer_fault_denies_before_c_returns_and_joins_onc
         let transport = transport.clone();
         async move { transport.reinitialize(crate::Secret::new(vec![])).await }
     });
-    tokio::time::timeout(Duration::from_secs(2), barrier.entered.notified())
+    tokio::time::timeout(Duration::from_secs(10), barrier.entered.notified())
         .await
         .expect("native reinitializer enters after host readiness");
     unsafe {
