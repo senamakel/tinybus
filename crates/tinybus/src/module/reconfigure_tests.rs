@@ -4,7 +4,7 @@ use crate::module::abi::{TB_BAD_ARGUMENT, TB_OK, TbAbiDescriptor, TbHostVtable, 
 use crate::module::failure::{FailureReporter, FailureSink};
 use crate::module::host::ModuleHost;
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
-use crate::module::{AccessFuture, ReleaseRecord};
+use crate::module::{AccessFuture, ModuleState, ReleaseRecord};
 use crate::name::{BusName, ObjectPath};
 use crate::transport::memory::MemoryBus;
 use crate::{Connection, Message, Proxy};
@@ -162,6 +162,7 @@ struct FixtureAccess {
     reporter: FailureReporter,
     unattested_service: Option<Connection>,
     use_unattested_proxy: bool,
+    skip_ready_wait: bool,
     reinitialize_calls: Arc<AtomicUsize>,
     initializing_notifier: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
     initializing_gate: StdMutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -184,7 +185,24 @@ impl ModuleAccess for FixtureAccess {
         &self.reporter
     }
     fn ensure_loaded<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async move {
+            if self.skip_ready_wait {
+                return Ok(());
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    if self._host.list().iter().any(|module| {
+                        matches!(&module.state, ModuleState::Ready | ModuleState::Serving)
+                    }) {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .map_err(|_| "fixture module did not become ready".to_owned())?;
+            Ok(())
+        })
     }
     fn proxy<'a>(
         &'a self,
@@ -284,6 +302,7 @@ async fn fixture() -> FixtureAccess {
         reporter: FailureReporter::new(Arc::new(Quiet)),
         unattested_service: None,
         use_unattested_proxy: false,
+        skip_ready_wait: false,
         reinitialize_calls: Arc::new(AtomicUsize::new(0)),
         initializing_notifier: StdMutex::new(None),
         initializing_gate: StdMutex::new(None),
@@ -407,6 +426,7 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
         reporter: FailureReporter::new(Arc::new(Quiet)),
         unattested_service: None,
         use_unattested_proxy: false,
+        skip_ready_wait: true,
         reinitialize_calls: calls.clone(),
         initializing_notifier: StdMutex::new(Some(notifying_tx)),
         initializing_gate: StdMutex::new(Some(gate_rx)),
@@ -489,6 +509,7 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
             reporter: FailureReporter::new(Arc::new(Quiet)),
             unattested_service: Some(unattested_service),
             use_unattested_proxy: true,
+            skip_ready_wait: false,
             reinitialize_calls: Arc::new(AtomicUsize::new(0)),
             initializing_notifier: StdMutex::new(None),
             initializing_gate: StdMutex::new(None),
