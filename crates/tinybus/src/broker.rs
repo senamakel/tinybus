@@ -210,6 +210,32 @@ impl Broker {
             .request_name_for_unique(unique, name)
     }
 
+    /// Atomically claim a runtime-owned host name for one attached connection.
+    /// Returns whether this call created the claim. This stays local to the
+    /// broker so an idempotent public RequestName cannot erase ownership
+    /// disposition through a reply race.
+    #[cfg(feature = "modules")]
+    pub(crate) fn claim_host_name(&self, unique: &BusName, name: BusName) -> Result<bool> {
+        let change = self.reserve_module_name(unique, name)?;
+        let newly_claimed = change.old_owner.is_none();
+        if newly_claimed {
+            self.announce_name_change_now(change);
+        }
+        Ok(newly_claimed)
+    }
+
+    /// Release a host name only while the exact unique peer still owns it.
+    #[cfg(feature = "modules")]
+    pub(crate) fn release_host_name(&self, unique: &BusName, name: &BusName) -> Result<()> {
+        let change = self
+            .router
+            .lock()
+            .expect("router lock")
+            .release_name_for_unique(unique, name)?;
+        self.announce_name_change_now(change);
+        Ok(())
+    }
+
     /// Record that a loaded module's artifact matched the module allowlist.
     ///
     /// This is how a module peer becomes eligible to receive a confidential
