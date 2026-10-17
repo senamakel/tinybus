@@ -88,6 +88,7 @@ pub fn load_first_admitted(
                     release_url: plan.release_url,
                     asset_name: asset.archive,
                     expected_sha256: Some(asset.sha256),
+                    expected_library_sha256: asset.library_sha256,
                     cache_dir: &cache_dir,
                     allow_download: false,
                 };
@@ -97,6 +98,7 @@ pub fn load_first_admitted(
                     &cache_dir,
                     asset.archive,
                     asset.sha256,
+                    asset.library_sha256,
                     module_config.clone(),
                 )
             };
@@ -140,6 +142,7 @@ pub fn load_first_admitted(
             release_url: plan.release_url,
             asset_name: asset.archive,
             expected_sha256: Some(asset.sha256),
+            expected_library_sha256: asset.library_sha256,
             cache_dir: &cache_dir,
             allow_download: plan.allow_download,
         };
