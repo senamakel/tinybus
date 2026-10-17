@@ -505,6 +505,24 @@ async fn attested_calls_reject_archive_and_library_digests_crossed_between_asset
 }
 
 #[tokio::test]
+async fn attested_calls_reject_a_post_sign_library_digest_not_in_the_release_pin() {
+    let host_key = Box::leak(
+        crate::module::platform::host_candidates()[0]
+            .clone()
+            .into_boxed_str(),
+    );
+    let release_asset = attested_asset(host_key, "notarized", 'a', 'b');
+    let record = strict_record_with_assets(vec![release_asset]);
+    let post_sign_library = "c".repeat(64);
+
+    let observed =
+        call_with_attestation(record, release_asset.sha256, &post_sign_library).await;
+    assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
+    assert_eq!(observed.serialized_arguments, 0);
+    assert_eq!(observed.receiver_calls, 0);
+}
+
+#[tokio::test]
 async fn attested_calls_reject_a_valid_pair_for_an_unrelated_platform() {
     let compatible_key = Box::leak(
         crate::module::platform::host_candidates()[0]

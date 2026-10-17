@@ -131,16 +131,22 @@ impl std::error::Error for ModuleCallError {}
 
 /// A detailed call failure with remote prose kept out of its renderings.
 ///
-/// The fields are available to a product adapter that has its own display
-/// policy. `Debug`, `Display`, and the failure reporter never include them.
+/// The fields are untrusted peer-provided data available to a product adapter
+/// that has its own display policy. A remote message may contain arguments or
+/// credentials. `Debug`, `Display`, and the failure reporter never include
+/// these fields; callers should not log or display them without their own
+/// redaction policy.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModuleCallFailure {
     /// The closed, sanitized module outcome.
     pub kind: ModuleCallError,
-    /// The exact dotted name returned by a remote method failure, or a fixed
-    /// local name for failures that did not come from a remote method.
+    /// The untrusted dotted name returned by a remote method failure, or a
+    /// fixed local name for failures that did not come from a remote method.
+    /// Treat remote values as sensitive and do not log them directly.
     pub wire_name: String,
-    /// The exact remote method message, or a fixed local message.
+    /// The exact untrusted remote method message, or a fixed local message.
+    /// It may contain arguments or credentials; do not log or display it
+    /// without applying a product-specific redaction policy.
     pub message: String,
 }
 

@@ -307,6 +307,8 @@ impl crate::Interface for DetailedFailure {
 
 #[tokio::test]
 async fn detailed_call_preserves_remote_failure_without_rendering_it() {
+    const REMOTE_DETAIL: &str =
+        "fixture-only credential-like value: not-a-real-credential-token-7391";
     let sink = Arc::new(Recording::default());
     let transport = crate::transport::memory::MemoryBus::new();
     let _broker = crate::broker::Broker::new().spawn(transport.clone());
@@ -340,12 +342,21 @@ async fn detailed_call_preserves_remote_failure_without_rendering_it() {
         .unwrap_err();
     assert_eq!(failure.kind, ModuleCallError::ModuleFault);
     assert_eq!(failure.wire_name, "com.example.PrivateFailure");
-    assert_eq!(failure.message, "private remote detail");
+    assert_eq!(failure.message, REMOTE_DETAIL);
     for rendered in [format!("{failure:?}"), failure.to_string()] {
         assert!(!rendered.contains("com.example.PrivateFailure"));
-        assert!(!rendered.contains("private remote detail"));
+        assert!(!rendered.contains(REMOTE_DETAIL));
     }
+
+    let sanitized = client
+        .call::<String>(RECORD.id, "Fail", ())
+        .await
+        .unwrap_err();
+    assert_eq!(sanitized, ModuleCallError::ModuleFault);
+    assert!(!format!("{sanitized:?}").contains(REMOTE_DETAIL));
+    assert!(!sanitized.to_string().contains(REMOTE_DETAIL));
     assert_eq!(sink.0.lock().unwrap().len(), 1);
+    assert!(!format!("{:?}", sink.0.lock().unwrap()).contains(REMOTE_DETAIL));
 }
 
 struct JsonFixture;

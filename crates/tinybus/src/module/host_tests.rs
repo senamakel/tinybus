@@ -579,16 +579,20 @@ async fn a_lazy_manifest_registers_an_unmapped_library_and_the_first_call_loads_
 /// real library, as above, so admission runs without mapping anything.
 #[cfg(not(windows))]
 #[tokio::test]
-async fn a_bundle_marker_equal_to_the_pin_admits_the_extraction_without_its_archive() {
+async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_pin_differs() {
     use crate::module::{ReleaseAsset, ReleasePlan, artifact_dir, load_first_admitted};
 
     let bundled = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let user_cache = tempfile::tempdir().unwrap();
+    // Code signing can rewrite the bundled library after the release archive
+    // was hashed. The sealed local allowlist carries the final library digest.
+    let release_library_sha256 =
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
     let asset = ReleaseAsset {
         host_key: "macos-15-arm64",
         archive: "clock-macos-15-arm64.tar.gz",
         sha256: "abababababababababababababababababababababababababababababababab",
-        library_sha256: None,
+        library_sha256: Some(release_library_sha256),
     };
     let dir = artifact_dir(bundled.path(), "clock", "0.1.0", asset.host_key).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
@@ -647,11 +651,14 @@ async fn a_bundle_marker_equal_to_the_pin_admits_the_extraction_without_its_arch
         .await
         .unwrap()
         .expect("the allowlisted extraction is attested");
-    assert_eq!(
-        attestation.sha256,
-        crate::module::sha256_file(&artifact).unwrap()
-    );
+    let signed_library_sha256 = crate::module::sha256_file(&artifact).unwrap();
+    assert_eq!(attestation.sha256, signed_library_sha256);
+    assert_eq!(attestation.library_sha256.as_deref(), Some(&signed_library_sha256));
     assert_ne!(attestation.sha256, asset.sha256);
+    assert_ne!(
+        attestation.library_sha256.as_deref(),
+        asset.library_sha256
+    );
     broker_task.abort();
 }
 
