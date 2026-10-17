@@ -244,7 +244,7 @@ impl ReconfigurableModule {
                 ProxyFailure::Contract => ModuleCallError::IncompatibleContract,
             })?;
         proxy
-            .call::<serde_json::Value>(member, (config,))
+            .call_confidential::<serde_json::Value>(member, (config,))
             .await
             .map(|_| ())
             .map_err(|error| super::client::classify(&error).0)
