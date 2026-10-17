@@ -25,6 +25,20 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
     (root, destination, result)
 }
 
+fn extract_through_cache_staging(bytes: &[u8]) -> (tempfile::TempDir, Result<()>) {
+    let root = tempfile::tempdir().unwrap();
+    let cache_dir = root.path().join("cache");
+    fs::create_dir(&cache_dir).unwrap();
+    let result = (|| {
+        let staging = crate::module::cache::stage(&cache_dir)?;
+        let archive = staging.path().join("fixture.zip");
+        fs::write(&archive, bytes).map_err(|_| refused("test fixture write failed"))?;
+        extract(&archive, staging.path())?;
+        crate::module::cache::commit(staging, &cache_dir)
+    })();
+    (root, result)
+}
+
 #[test]
 fn extracts_independent_stored_and_deflated_archives() {
     let (_root, destination, result) = extract_fixture("compat_store.zip");
@@ -149,10 +163,25 @@ fn corrupt_central_crc_is_refused_without_promoting_partial_output() {
         .position(|window| window == b"PK\x01\x02")
         .unwrap();
     bytes[central + 16] ^= 0x80;
+    bytes[14] ^= 0x80;
     fs::write(&archive, bytes).unwrap();
 
     assert!(extract(&archive, &destination).is_err());
-    assert!(!destination.join("folder/module.so").exists());
+}
+
+#[test]
+fn corrupt_crc_never_promotes_partial_cache_staging() {
+    let mut bytes = include_bytes!("fixtures/compat_store.zip").to_vec();
+    let central = bytes
+        .windows(4)
+        .position(|window| window == b"PK\x01\x02")
+        .unwrap();
+    bytes[central + 16] ^= 0x80;
+    bytes[14] ^= 0x80;
+
+    let (root, result) = extract_through_cache_staging(&bytes);
+    assert!(result.is_err());
+    assert_eq!(fs::read_dir(root.path().join("cache")).unwrap().count(), 0);
 }
 
 #[test]
