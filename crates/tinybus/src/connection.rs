@@ -1200,6 +1200,7 @@ impl Connection {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn call_with_stream_serialized<R: DeserializeOwned, A: Serialize>(
         &self,
         destination: BusName,
