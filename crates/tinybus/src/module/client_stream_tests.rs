@@ -531,7 +531,16 @@ async fn module_client_timeout_bounds_a_stalled_method_reply() {
         .expect("ModuleClient timeout bounded the stalled reply")
         .unwrap()
         .unwrap_err();
-    assert_eq!(failure.kind, ModuleCallError::TransportFailed);
+    assert_eq!(
+        failure.kind,
+        ModuleCallError::TransportFailed,
+        "wire failure: {} ({})",
+        failure.wire_name,
+        failure.message
+    );
+    assert!(!fixture
+        .refuse_first_write
+        .load(std::sync::atomic::Ordering::SeqCst));
     resume.notify_one();
 }
 
