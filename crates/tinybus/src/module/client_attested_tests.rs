@@ -429,7 +429,10 @@ impl crate::Interface for AttestedFailureReceiver {
 async fn call_with_attestation_failure(
     name: &'static str,
     message: &'static str,
-) -> (Result<String, ModuleCallFailure>, Result<String, ModuleCallError>) {
+) -> (
+    Result<String, ModuleCallFailure>,
+    Result<String, ModuleCallError>,
+) {
     let bus = crate::transport::memory::MemoryBus::new();
     let broker = crate::broker::Broker::new();
     let broker_task = broker.spawn(bus.clone());
@@ -481,7 +484,10 @@ async fn strict_attested_detailed_calls_preserve_remote_input_refusals() {
     .await;
     let failure = failure.unwrap_err();
     assert_eq!(failure.kind, ModuleCallError::ModuleFault);
-    assert_eq!(failure.wire_name, "ai.tinyhumans.tinywallet.Error.InvalidInput");
+    assert_eq!(
+        failure.wire_name,
+        "ai.tinyhumans.tinywallet.Error.InvalidInput"
+    );
     assert_eq!(failure.message, "wallet address secret is invalid");
     assert_eq!(sanitized, Err(ModuleCallError::ModuleFault));
     assert!(!format!("{failure:?}").contains("wallet address secret"));

@@ -398,9 +398,7 @@ impl ModuleClient {
         member: &str,
         args: impl Serialize,
     ) -> Result<R, ModuleCallFailure> {
-        let record = self
-            .record(module)
-            .map_err(ModuleCallFailure::local)?;
+        let record = self.record(module).map_err(ModuleCallFailure::local)?;
         let candidates = crate::module::platform::host_candidates();
         // The resolver tries compatible release assets in host-candidate order
         // and may fall back after an admission failure. Keep each archive and
