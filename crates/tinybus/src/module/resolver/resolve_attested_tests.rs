@@ -144,9 +144,10 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     });
     let response: std::result::Result<String, ModuleCallError> =
         client.call_attested(record.id, "Now", ()).await;
+    let load_error = fixture.resolver.ensure_loaded(record.id).await.err();
     assert!(
         response.is_ok(),
-        "{response:?}; preparations={}, state={:?}, config_calls={}, runtime_calls={}",
+        "{response:?}; preparations={}, state={:?}, load_error={load_error:?}, config_calls={}, runtime_calls={}",
         preparations.load(Ordering::SeqCst),
         fixture.resolver.state_of(record.id),
         fixture.config_calls.load(Ordering::SeqCst),
