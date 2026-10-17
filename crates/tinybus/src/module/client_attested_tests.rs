@@ -33,6 +33,7 @@ fn strict_record_with_assets(
     }))
 }
 
+#[cfg(feature = "modules")]
 fn attested_asset(
     host_key: &'static str,
     suffix: &str,
@@ -152,6 +153,7 @@ impl ModuleAccess for PendingAccess {
     }
 }
 
+#[cfg(feature = "modules")]
 struct ReadinessAccess {
     record: &'static ReleaseRecord,
     connection: crate::Connection,
@@ -159,6 +161,7 @@ struct ReadinessAccess {
     host: Arc<crate::module::ModuleHost>,
 }
 
+#[cfg(feature = "modules")]
 impl ModuleAccess for ReadinessAccess {
     fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
         (id == self.record.id).then_some(self.record)
@@ -198,18 +201,22 @@ impl ModuleAccess for ReadinessAccess {
     }
 }
 
+#[cfg(feature = "modules")]
 unsafe extern "C" fn never_ready_deliver(_: *mut std::ffi::c_void, _: *const u8, _: usize) -> i32 {
     crate::module::abi::TB_OK
 }
 
+#[cfg(feature = "modules")]
 unsafe extern "C" fn no_op_lifecycle(_: *mut std::ffi::c_void, _: u64) -> i32 {
     crate::module::abi::TB_OK
 }
 
+#[cfg(feature = "modules")]
 unsafe extern "C" fn no_op_reinitialize(_: *mut std::ffi::c_void, _: *const u8, _: usize) -> i32 {
     crate::module::abi::TB_OK
 }
 
+#[cfg(feature = "modules")]
 unsafe extern "C" fn never_ready_init(
     _: *const crate::module::abi::TbHostVtable,
     out: *mut crate::module::abi::TbModuleVtable,
@@ -308,6 +315,7 @@ async fn a_short_client_deadline_bounds_readiness_before_argument_serialization(
     );
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test]
 async fn a_lazy_module_that_never_announces_ready_fails_before_serializing_arguments() {
     use crate::module::manifest::{
@@ -408,12 +416,14 @@ impl crate::Interface for AttestedReceiver {
     }
 }
 
+#[cfg(feature = "modules")]
 struct AttestedCallObservation {
     result: Result<String, ModuleCallError>,
     serialized_arguments: usize,
     receiver_calls: usize,
 }
 
+#[cfg(feature = "modules")]
 async fn call_with_attestation(
     record: &'static ReleaseRecord,
     archive_sha256: &str,
@@ -470,6 +480,7 @@ async fn call_with_attestation(
     }
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test]
 async fn attested_calls_accept_a_verified_compatible_fallback_asset_pair() {
     let candidates = crate::module::platform::host_candidates();
@@ -488,6 +499,7 @@ async fn attested_calls_accept_a_verified_compatible_fallback_asset_pair() {
     assert_eq!(observed.receiver_calls, 1);
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test]
 async fn attested_calls_reject_archive_and_library_digests_crossed_between_assets() {
     let candidates = crate::module::platform::host_candidates();
@@ -504,6 +516,7 @@ async fn attested_calls_reject_archive_and_library_digests_crossed_between_asset
     assert_eq!(observed.receiver_calls, 0);
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test]
 async fn attested_calls_reject_a_post_sign_library_digest_not_in_the_release_pin() {
     let host_key = Box::leak(
@@ -521,6 +534,7 @@ async fn attested_calls_reject_a_post_sign_library_digest_not_in_the_release_pin
     assert_eq!(observed.receiver_calls, 0);
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test]
 async fn attested_calls_refuse_post_sign_bytes_before_sending_confidential_arguments() {
     let host_key = Box::leak(
@@ -538,6 +552,7 @@ async fn attested_calls_refuse_post_sign_bytes_before_sending_confidential_argum
     assert_eq!(observed.receiver_calls, 0);
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test]
 async fn attested_calls_reject_a_valid_pair_for_an_unrelated_platform() {
     let compatible_key = Box::leak(
@@ -556,11 +571,13 @@ async fn attested_calls_reject_a_valid_pair_for_an_unrelated_platform() {
     assert_eq!(observed.receiver_calls, 0);
 }
 
+#[cfg(feature = "modules")]
 struct HandoverArgs {
     started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     barrier: Arc<std::sync::Barrier>,
 }
 
+#[cfg(feature = "modules")]
 impl serde::Serialize for HandoverArgs {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -574,6 +591,7 @@ impl serde::Serialize for HandoverArgs {
     }
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn a_confidential_call_stays_on_the_attested_unique_peer_after_name_handover() {
     let bus = crate::transport::memory::MemoryBus::new();

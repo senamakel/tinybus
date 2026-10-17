@@ -21,6 +21,7 @@ pub mod reconfigure;
 mod release;
 #[cfg(feature = "modules")]
 pub mod resolution;
+pub mod service_slot;
 #[cfg(any(feature = "modules", feature = "cli"))]
 mod zip_deflate;
 #[cfg(any(feature = "modules", feature = "cli"))]
