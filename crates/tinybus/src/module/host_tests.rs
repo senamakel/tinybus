@@ -3037,7 +3037,7 @@ async fn a_staged_start_unwind_removes_its_exact_published_peer() {
         .clone()
         .expect("peer observed at panic");
     assert!(
-        host.list().is_empty(),
+        host.inner.loaded.lock().unwrap().is_empty(),
         "failed start removes the published row"
     );
     assert!(
