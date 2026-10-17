@@ -138,7 +138,7 @@ fn incomplete_module_vtables_are_rejected_and_shutdown_reports_closed() {
 
 #[tokio::test]
 async fn an_older_vtable_loads_but_reports_reinitialization_as_unsupported() {
-    let (transport, _) = ModuleTransport::new("older".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("older".to_string(), Vec::new());
     let mut older = TbModuleVtable {
         module_ctx: std::ptr::dangling_mut(),
         deliver,
@@ -148,6 +148,7 @@ async fn an_older_vtable_loads_but_reports_reinitialization_as_unsupported() {
     };
     older.size = TB_MODULE_VTABLE_BASE_SIZE;
     transport.initialize(older).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
     let error = transport
         .reinitialize(crate::Secret::new(
             serde_json::to_vec(&serde_json::json!({ "secret": "never printed" })).unwrap(),
@@ -189,10 +190,11 @@ async fn reinitialization_maps_callback_failures_without_exposing_configuration(
             .contains("not initialized")
     );
 
-    let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("configured".to_string(), Vec::new());
     let mut module = TbModuleVtable::default();
     unsafe { initialize_ok(std::ptr::null(), &mut module) };
     transport.initialize(module).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
     for (code, expected) in [
         (TB_BAD_ARGUMENT, "configuration is invalid"),
         (TB_CLOSED, "reinitialization failed"),
@@ -228,10 +230,11 @@ async fn a_running_reinitialization_excludes_another_reinitialization_and_shutdo
     REINITIALIZE_BLOCKED.store(true, Ordering::Release);
     REINITIALIZE_ENTERED.store(false, Ordering::Release);
     SHUTDOWN_CALLS.store(0, Ordering::Release);
-    let (transport, _) = ModuleTransport::new("configured".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("configured".to_string(), Vec::new());
     let mut module = TbModuleVtable::default();
     unsafe { initialize_ok(std::ptr::null(), &mut module) };
     transport.initialize(module).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
 
     let first_transport = transport.clone();
     let first = tokio::spawn(async move {
@@ -461,12 +464,170 @@ async fn canceling_reconfiguration_waiting_for_started_lazy_init_keeps_initializ
     initializing.await.unwrap().unwrap();
     assert!(!transport.is_faulted());
     assert!(!REINITIALIZE_ENTERED.load(Ordering::Acquire));
+    unsafe { (host.ready)(host.host_ctx) };
 
     transport
         .reinitialize(crate::Secret::new(br#"{"route":"after-init"}"#.to_vec()))
         .await
         .unwrap();
     assert!(REINITIALIZE_ENTERED.load(Ordering::Acquire));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reinitialization_waits_for_host_ready_after_lazy_vtable_publication() {
+    struct SetupState {
+        ready: AtomicBool,
+        calls: AtomicUsize,
+        callback_returned: AtomicBool,
+        release_early: StdMutex<Option<std::sync::mpsc::Receiver<()>>>,
+    }
+    unsafe extern "C" fn reinitialize_until_setup(ctx: *mut c_void, _: *const u8, _: usize) -> i32 {
+        let state = unsafe { &*ctx.cast::<SetupState>() };
+        state.calls.fetch_add(1, Ordering::AcqRel);
+        let code = if state.ready.load(Ordering::Acquire) {
+            TB_OK
+        } else {
+            if let Some(release) = state.release_early.lock().unwrap().take() {
+                let _ = release.recv();
+            }
+            TB_CLOSED
+        };
+        state.callback_returned.store(true, Ordering::Release);
+        code
+    }
+    unsafe extern "C" fn setup_deliver(_: *mut c_void, _: *const u8, _: usize) -> i32 {
+        TB_OK
+    }
+    unsafe extern "C" fn setup_shutdown(_: *mut c_void, _: u64) -> i32 {
+        TB_OK
+    }
+
+    let (transport, host) = ModuleTransport::new("host-ready-race".into(), b"{}".to_vec());
+    let state = Arc::new(SetupState {
+        ready: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        callback_returned: AtomicBool::new(false),
+        release_early: StdMutex::new(None),
+    });
+    *transport.fixture_controller.lock().unwrap() = Some(state.clone());
+    let (worker_started_tx, worker_started_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_worker_tx, release_worker_rx) = std::sync::mpsc::sync_channel(1);
+    *transport.before_worker_lock.lock().unwrap() = Some(Box::new(move || {
+        worker_started_tx.send(()).unwrap();
+        release_worker_rx.recv().unwrap();
+    }));
+    let (release_early_tx, release_early_rx) = std::sync::mpsc::sync_channel(1);
+    *state.release_early.lock().unwrap() = Some(release_early_rx);
+    let state_for_init = state.clone();
+    transport.defer_initializer(host, move |_| {
+        Ok(TbModuleVtable {
+            size: size_of::<TbModuleVtable>() as u32,
+            _reserved: 0,
+            module_ctx: Arc::as_ptr(&state_for_init).cast_mut().cast(),
+            deliver: setup_deliver,
+            shutdown: setup_shutdown,
+            reinitialize: Some(reinitialize_until_setup),
+        })
+    });
+
+    let first_call = tokio::spawn({
+        let transport = transport.clone();
+        async move { transport.send(call()).await }
+    });
+    transport.wait_initializing().await;
+    tokio::task::spawn_blocking(move || worker_started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Poll the reinitializer while the physical initializer is still parked.
+    // This proves it took the scheduled-initializer path before publication.
+    let reinitializing_transport = transport.clone();
+    let mut reinitializing = Box::pin(
+        reinitializing_transport
+            .reinitialize(crate::Secret::new(br#"{"route":"replacement"}"#.to_vec())),
+    );
+    std::future::poll_fn(|cx| match reinitializing.as_mut().poll(cx) {
+        std::task::Poll::Pending => std::task::Poll::Ready(()),
+        std::task::Poll::Ready(result) => {
+            panic!("reinitialization finished before lazy initialization: {result:?}")
+        }
+    })
+    .await;
+
+    release_worker_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if transport.context.physical.lock().unwrap().result.is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the lazy initializer publishes its vtable");
+
+    // Model the SDK setup window: the vtable is published while its
+    // reinitialization connection is absent and host.ready has not run.
+    assert!(transport.module.lock().unwrap().is_some());
+    assert!(!transport.is_ready());
+    let pending_before_ready = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(matches!(
+            reinitializing.as_mut().poll(cx),
+            std::task::Poll::Pending
+        ))
+    })
+    .await;
+    let native_callback_started_before_ready = transport.native_lifecycle_pending();
+    let callback_calls_before_ready = state.calls.load(Ordering::Acquire);
+    release_early_tx.send(()).unwrap();
+    if callback_calls_before_ready != 0 {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !state.callback_returned.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("an early native callback returns");
+    }
+
+    tokio::time::pause();
+    tokio::time::advance(MODULE_INIT_DEADLINE).await;
+    let timed_out_before_ready = matches!(reinitializing.await, Err(Error::Timeout { .. }));
+
+    state.ready.store(true, Ordering::Release);
+    unsafe { (host.ready)(host.host_ctx) };
+    let first_call_result = tokio::time::timeout(Duration::from_secs(2), first_call)
+        .await
+        .expect("the original business call is released by readiness")
+        .unwrap();
+    let reinitialize_after_ready = transport
+        .reinitialize(crate::Secret::new(br#"{"route":"after-ready"}"#.to_vec()))
+        .await;
+    let callback_calls_after_ready = state.calls.load(Ordering::Acquire);
+    tokio::time::resume();
+    let stopped = transport.stop(Duration::from_secs(2)).await;
+
+    assert!(
+        pending_before_ready,
+        "reconfiguration must wait for host.ready"
+    );
+    assert!(
+        timed_out_before_ready,
+        "readiness wait keeps the original deadline"
+    );
+    assert!(
+        !native_callback_started_before_ready,
+        "the native callback returns TB_CLOSED until setup publishes its connection"
+    );
+    assert_eq!(callback_calls_before_ready, 0);
+    first_call_result.unwrap();
+    reinitialize_after_ready.unwrap();
+    assert_eq!(
+        callback_calls_after_ready, 1,
+        "callback runs after readiness"
+    );
+    assert_eq!(stopped.unwrap(), TB_OK);
 }
 
 #[tokio::test]
@@ -704,10 +865,12 @@ async fn a_reinitialization_that_times_out_reports_a_timeout_without_the_configu
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    let (transport, _) = ModuleTransport::new("timeout".to_string(), Vec::new());
+    let (transport, host) = ModuleTransport::new("timeout".to_string(), Vec::new());
     let mut module = TbModuleVtable::default();
     unsafe { initialize_ok(std::ptr::null(), &mut module) };
     transport.initialize(module).unwrap();
+    unsafe { (host.ready)(host.host_ctx) };
+    REINITIALIZE_ENTERED.store(false, Ordering::Release);
     REINITIALIZE_CODE.store(TB_TIMEOUT, Ordering::Release);
     let error = transport
         .reinitialize(crate::Secret::new(
@@ -717,6 +880,7 @@ async fn a_reinitialization_that_times_out_reports_a_timeout_without_the_configu
         .unwrap_err();
     REINITIALIZE_CODE.store(TB_OK, Ordering::Release);
     assert!(matches!(error, Error::Timeout { .. }), "{error}");
+    assert!(REINITIALIZE_ENTERED.load(Ordering::Acquire));
     assert!(!error.to_string().contains("never printed"));
 }
 
@@ -2191,6 +2355,10 @@ async fn actual_native_reinitializer_fault_denies_before_c_returns_and_joins_onc
     transport.defer_initialize(init, host);
     transport.ensure_initialized().await.unwrap();
     barrier.entered.notified().await;
+    // This raw-controls fixture does not request Ready from its native init
+    // entry point. Publish readiness through the real ABI before exercising
+    // the reinitializer, whose SDK connection slot is installed at that edge.
+    unsafe { (host.ready)(host.host_ctx) };
     {
         let mut state = barrier.state.lock().unwrap();
         state.1 = false;
@@ -2199,7 +2367,9 @@ async fn actual_native_reinitializer_fault_denies_before_c_returns_and_joins_onc
         let transport = transport.clone();
         async move { transport.reinitialize(crate::Secret::new(vec![])).await }
     });
-    barrier.entered.notified().await;
+    tokio::time::timeout(Duration::from_secs(10), barrier.entered.notified())
+        .await
+        .expect("native reinitializer enters after host readiness");
     unsafe {
         (host.fault)(host.host_ctx, std::ptr::null(), 0);
     }
