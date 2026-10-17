@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, MutexGuard};
 
 use super::client::{ModuleAccess, ModuleCallError, ProxyFailure, ReconfigureFailure};
+use super::failure::Reason;
 use crate::Proxy;
 
 /// A hash of serialized module configuration, with no configuration retained.
@@ -136,9 +137,7 @@ impl ReconfigurableModule {
     /// Returns a sanitized module outcome or a JSON serialization error.
     pub async fn proxy(&self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
         let _guard = self.transition.lock().await;
-        self.proxy_locked(config)
-            .await
-            .map_err(|error| self.report_failure(error))
+        self.proxy_locked(config).await
     }
 
     /// Hold configuration admission exclusively through a caller's bus call.
@@ -155,28 +154,36 @@ impl ReconfigurableModule {
 
     async fn proxy_locked(&self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
         if self.loaded_state().member_uncertain {
-            return Err(ModuleCallError::Unavailable);
+            return Err(
+                self.report_failure(ModuleCallError::Unavailable, Reason::ModuleUnavailable)
+            );
         }
         let Some(record) = self.access.find(self.module_id) else {
-            return Err(ModuleCallError::Unavailable);
+            return Err(self.report_failure(ModuleCallError::Unavailable, Reason::UnknownModule));
         };
         if !self.access.enabled() {
-            return Err(ModuleCallError::Unavailable);
+            return Err(self.report_failure(ModuleCallError::Unavailable, Reason::Disabled));
         }
-        self.access
-            .ensure_loaded(record.id)
-            .await
-            .map_err(|_| ModuleCallError::Unavailable)?;
+        self.access.ensure_loaded(record.id).await.map_err(|_| {
+            self.report_failure(ModuleCallError::Unavailable, Reason::ResolutionFailed)
+        })?;
 
-        let fingerprint =
-            ConfigFingerprint::of(config).map_err(|_| ModuleCallError::ModuleFault)?;
+        let fingerprint = ConfigFingerprint::of(config)
+            .map_err(|_| self.report_failure(ModuleCallError::ModuleFault, Reason::ModuleFault))?;
         let current = self.loaded_state().fingerprint.clone();
         if current.as_ref() != Some(&fingerprint) {
             // Clear before the operation: any failure leaves the held config
             // unknown, so reverting to the prior config still triggers a retry.
             self.loaded_state().fingerprint = None;
-            let value = serde_json::to_value(config).map_err(|_| ModuleCallError::ModuleFault)?;
-            self.reconfigure(value, fingerprint.clone()).await?;
+            let value = serde_json::to_value(config).map_err(|_| {
+                self.report_failure(ModuleCallError::ModuleFault, Reason::ModuleFault)
+            })?;
+            self.reconfigure(value, fingerprint.clone())
+                .await
+                .map_err(|error| {
+                    let reason = Self::reason_for(error);
+                    self.report_failure(error, reason)
+                })?;
             self.loaded_state().fingerprint = Some(fingerprint);
         }
 
@@ -184,8 +191,13 @@ impl ReconfigurableModule {
             .proxy(record.bus_name, record.object_path)
             .await
             .map_err(|failure| match failure {
-                ProxyFailure::Transport => ModuleCallError::TransportFailed,
-                ProxyFailure::Contract => ModuleCallError::IncompatibleContract,
+                ProxyFailure::Transport => {
+                    self.report_failure(ModuleCallError::TransportFailed, Reason::TransportFailed)
+                }
+                ProxyFailure::Contract => self.report_failure(
+                    ModuleCallError::IncompatibleContract,
+                    Reason::IncompatibleContract,
+                ),
             })
     }
 
@@ -278,24 +290,28 @@ impl ReconfigurableModule {
         }
     }
 
-    fn report_failure(&self, error: ModuleCallError) -> ModuleCallError {
+    fn reason_for(error: ModuleCallError) -> Reason {
+        match error {
+            ModuleCallError::Unavailable => Reason::ModuleUnavailable,
+            ModuleCallError::IncompatibleContract => Reason::IncompatibleContract,
+            ModuleCallError::TransportFailed => Reason::TransportFailed,
+            ModuleCallError::ModuleFault => Reason::ModuleFault,
+        }
+    }
+
+    fn report_failure(&self, error: ModuleCallError, reason: Reason) -> ModuleCallError {
+        if reason == Reason::UnknownModule {
+            self.access.reporter().report_unknown_module();
+            return error;
+        }
         let Some(record) = self.access.find(self.module_id) else {
             self.access.reporter().report_unknown_module();
             return error;
         };
-        let reason = if !self.access.enabled() {
-            super::failure::Reason::Disabled
-        } else {
-            match error {
-                ModuleCallError::Unavailable => super::failure::Reason::ModuleUnavailable,
-                ModuleCallError::IncompatibleContract => {
-                    super::failure::Reason::IncompatibleContract
-                }
-                ModuleCallError::TransportFailed => super::failure::Reason::TransportFailed,
-                ModuleCallError::ModuleFault => super::failure::Reason::ModuleFault,
-            }
-        };
-        if matches!(reason, super::failure::Reason::ModuleUnavailable) {
+        if matches!(
+            reason,
+            Reason::Disabled | Reason::ResolutionFailed | Reason::ModuleUnavailable
+        ) {
             self.access
                 .reporter()
                 .report(record.id, record.version, reason);
@@ -324,10 +340,7 @@ impl ReconfigureGuard<'_> {
     /// Reconcile the configuration while retaining exclusive access until this
     /// guard is dropped.
     pub async fn proxy(&mut self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
-        self.module
-            .proxy_locked(config)
-            .await
-            .map_err(|error| self.module.report_failure(error))
+        self.module.proxy_locked(config).await
     }
 }
 
