@@ -3373,11 +3373,11 @@ fn load_search_paths_except_skips_an_artifact_before_opening_it() {
     let directory = root.path().join("private-modules");
     super::super::windows_acl::create_private_dir_all(&directory).unwrap();
     let file_name = if cfg!(windows) {
-        "libskip-before-open.dll"
+        "skip-before-open.dll"
     } else if cfg!(target_os = "macos") {
-        "libskip-before-open.dylib"
+        "skip-before-open.dylib"
     } else {
-        "libskip-before-open.so"
+        "skip-before-open.so"
     };
     // Invalid bytes make admission fail if the skip filter opens the artifact.
     std::fs::write(directory.join(file_name), b"not a shared library").unwrap();
