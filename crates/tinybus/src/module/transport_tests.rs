@@ -563,13 +563,10 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
         hello.header.member.as_ref().map(MemberName::as_str),
         Some("Hello")
     );
-    transport
-        .send(Message::method_return(
-            &hello.header,
-            serde_json::json!(":tinybus.module.1"),
-        ))
-        .await
-        .unwrap();
+    let mut hello_reply =
+        Message::method_return(&hello.header, serde_json::json!(":tinybus.module.1"));
+    hello_reply.header.sender = Some(crate::BusName::new(crate::BUS_NAME).unwrap());
+    transport.send(hello_reply).await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), setup_started_rx)
         .await
         .expect("SDK setup starts after its handshake")
