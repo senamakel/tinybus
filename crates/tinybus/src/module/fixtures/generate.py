@@ -109,18 +109,6 @@ depth_name = "/".join(["a"] * 130) + "/module.so"
 write("deep_path.zip", stored([(depth_name, b"", None)]))
 write("one_module.zip", stored([("module.so", b"payload", None)]))
 
-zip64_streaming = NonSeekable()
-with zipfile.ZipFile(zip64_streaming, "w") as writer:
-    info = zipfile.ZipInfo("module.so")
-    info.compress_type = zipfile.ZIP_DEFLATED
-    with writer.open(info, "w", force_zip64=True) as entry:
-        entry.write(b"zip64 streaming descriptor")
-write("compat_deflate_descriptor_zip64_local.zip", zip64_streaming.getvalue())
-
-depth_name = "/".join(["a"] * 130) + "/module.so"
-write("deep_path.zip", stored([(depth_name, b"", None)]))
-write("one_module.zip", stored([("module.so", b"payload", None)]))
-
 encrypted = write("encrypted.zip", stored([("module.so", b"module", None)]))
 local = encrypted.find(b"PK\x03\x04")
 central = central_records(encrypted)[0]

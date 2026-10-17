@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
 use rawzip::{CompressionMethod, ZipArchive, ZipArchiveEntryWayfinder};
