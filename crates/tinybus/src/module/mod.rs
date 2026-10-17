@@ -21,6 +21,8 @@ mod release;
 pub mod resolution;
 #[cfg(feature = "modules")]
 mod zip_extract;
+#[cfg(feature = "modules")]
+mod zip_descriptor;
 
 #[cfg(feature = "modules")]
 pub(crate) mod host;
