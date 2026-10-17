@@ -442,16 +442,6 @@ impl Message {
                 "only a method call can request a streamed reply",
             ));
         }
-        if let Some(module_lifecycle) = self.header.module_lifecycle {
-            if self.header.kind != MessageKind::Error
-                || self.header.error_name.as_deref() != Some(Error::MODULE_UNAVAILABLE)
-                || module_lifecycle != ModuleLifecycle::Initializing
-            {
-                return Err(Error::protocol(
-                    "module lifecycle metadata needs an initializing unavailable error",
-                ));
-            }
-        }
         if self
             .header
             .expected_responder
