@@ -853,11 +853,8 @@ impl Connection {
         args: impl Serialize,
         timeout: Duration,
     ) -> Result<R> {
-        // Keep the method with the peer that accepted Open. A well-known name
-        // may have changed owners while the stream was being opened, and
-        // splitting its handle from its payload would make the transfer fail.
         let message = Message::method_call(
-            writer.destination().clone(),
+            destination,
             path,
             interface,
             member.clone(),
@@ -1206,8 +1203,11 @@ impl Connection {
                 timeout,
             )
             .await?;
+        // Keep the method with the peer that accepted Open. A well-known name
+        // may have changed owners while the stream was being opened, and
+        // splitting its handle from its payload would make the transfer fail.
         let message = Message::method_call(
-            destination,
+            writer.destination().clone(),
             path,
             interface,
             member,
