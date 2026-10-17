@@ -145,6 +145,7 @@ pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, St
         release.asset_name,
         release.expected_sha256,
     ) {
+        verify_library_digest(&hit.module, release.expected_library_sha256)?;
         info!(
             asset = release.asset_name,
             "release loaded from the local cache"
@@ -158,6 +159,11 @@ pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, St
     let agent = agent();
     let located = locate(&agent, owner, repo, tag, release.asset_name)?;
     let manifest_sha = manifest_digest(&located, release.asset_name, release.expected_sha256)?;
+    let _manifest_library_sha = manifest_library_digest(
+        &located,
+        release.asset_name,
+        release.expected_library_sha256,
+    )?;
 
     let staging = cache::stage(release.cache_dir)?;
     let archive_path = staging.path().join(release.asset_name);
@@ -165,6 +171,7 @@ pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, St
     verify_archive(&archive_path, &manifest_sha)?;
     extract(release.asset_name, &archive_path, staging.path())?;
     let module = cache::find_module(staging.path())?;
+    verify_library_digest(&module, release.expected_library_sha256)?;
     let relative = module
         .strip_prefix(staging.path())
         .map_err(|_| refused("release module is outside its staging directory"))?
@@ -179,6 +186,7 @@ pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, St
             release.asset_name,
             release.expected_sha256,
         ) {
+            verify_library_digest(&hit.module, release.expected_library_sha256)?;
             warn!(
                 asset = release.asset_name,
                 "release cache: commit lost a race; using the concurrent fill"
@@ -193,6 +201,22 @@ pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, St
     );
     let module = canonical_module(release.cache_dir.join(relative))?;
     Ok((module, manifest_sha))
+}
+
+fn verify_library_digest(path: &Path, expected: Option<&str>) -> Result<()> {
+    let actual = file_hex(
+        std::fs::File::open(path).map_err(|_| refused("release library could not be read"))?,
+    )
+    .map_err(|_| refused("release library hash could not be read"))?;
+    if let Some(expected) = expected {
+        validate_hash(expected)?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(refused(
+                "extracted library hash does not match its release checksum",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// One agent per acquisition, so the three requests share a connection pool
