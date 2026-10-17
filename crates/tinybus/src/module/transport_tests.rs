@@ -567,10 +567,18 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
         Message::method_return(&hello.header, serde_json::json!(":tinybus.module.1"));
     hello_reply.header.sender = Some(crate::BusName::new(crate::BUS_NAME).unwrap());
     transport.send(hello_reply).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(2), setup_started_rx)
-        .await
-        .expect("SDK setup starts after its handshake")
-        .unwrap();
+    let setup_started_result = tokio::time::timeout(Duration::from_secs(2), setup_started_rx).await;
+    assert!(
+        setup_started_result.is_ok(),
+        "SDK setup starts after its handshake; ready={}, faulted={}, init_failed={}, init={:?}, result_published={}, native_pending={}",
+        transport.is_ready(),
+        transport.is_faulted(),
+        transport.init_failed(),
+        transport.context.physical.lock().unwrap().init,
+        transport.context.physical.lock().unwrap().result.is_some(),
+        transport.native_lifecycle_pending(),
+    );
+    setup_started_result.unwrap().unwrap();
 
     // The SDK publishes its reinitialization connection only after setup
     // succeeds. At this barrier the vtable exists, but host.ready has not run.
