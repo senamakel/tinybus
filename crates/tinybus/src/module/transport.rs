@@ -869,6 +869,17 @@ impl ModuleTransport {
             return Ok(());
         }
         if self.module.lock().expect("module vtable lock").is_none() {
+            let initialization_in_progress = matches!(
+                self.context
+                    .physical
+                    .lock()
+                    .expect("physical state lock")
+                    .init,
+                InitState::Scheduled | InitState::Entered
+            );
+            if !initialization_in_progress {
+                return Err(Error::transport("module is not initialized"));
+            }
             // An ordinary bus call may have scheduled lazy initialization
             // before this reconfiguration acquired the lifecycle lock. Let the
             // physical initializer run without holding either lifecycle or

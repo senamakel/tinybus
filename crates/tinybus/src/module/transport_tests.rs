@@ -348,6 +348,61 @@ async fn deferred_initialization_waits_for_ready_then_delivers_pending_calls() {
     assert_eq!(transport.stop_sync(Duration::from_millis(1)), TB_OK);
 }
 
+#[tokio::test]
+async fn deferred_reinitialize_replaces_the_initializer_config_slice() {
+    let original = br#"{"token":"old-sensitive-value"}"#;
+    let replacement = br#"{"route":"new"}"#;
+    let (transport, host) = ModuleTransport::new("deferred-config".into(), original.to_vec());
+    let original_pointer = host.config.ptr;
+    let observed = Arc::new(StdMutex::new(None));
+    let observed_by_init = observed.clone();
+    transport.defer_initializer(host, move |host| {
+        if host.config.ptr.is_null() && host.config.len != 0 {
+            return Err("configuration pointer is null".to_owned());
+        }
+        let config = serde_json::from_slice(unsafe {
+            std::slice::from_raw_parts(host.config.ptr, host.config.len)
+        })
+        .map_err(|_| "configuration is invalid".to_owned())?;
+        *observed_by_init.lock().expect("observed config lock") = Some(config);
+        let mut module = TbModuleVtable::default();
+        let code = unsafe { initialize_ok(&host, &mut module) };
+        if code == TB_OK {
+            Ok(module)
+        } else {
+            Err("module initialization failed".to_owned())
+        }
+    });
+
+    transport
+        .reinitialize(crate::Secret::new(replacement.to_vec()))
+        .await
+        .unwrap();
+    {
+        let config = transport.context.config.lock().expect("module config lock");
+        let initializer = transport
+            .initializer
+            .lock()
+            .expect("module initializer lock");
+        let host = &initializer.as_ref().unwrap().host;
+        assert_ne!(config.as_ptr(), original_pointer);
+        assert_eq!(config, replacement);
+        assert_eq!(host.config.ptr, config.as_ptr());
+        assert_eq!(host.config.len, config.len());
+        assert!(
+            !config
+                .windows(b"old-sensitive-value".len())
+                .any(|window| window == b"old-sensitive-value")
+        );
+    }
+
+    transport.ensure_initialized().await.unwrap();
+    assert_eq!(
+        observed.lock().unwrap().as_ref(),
+        Some(&serde_json::json!({ "route": "new" }))
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn canceling_reconfiguration_waiting_for_started_lazy_init_keeps_initializer_owned() {
     let _lock = VTABLE_TEST_LOCK
