@@ -106,10 +106,23 @@ unsafe extern "C" fn fixture_init(host: *const TbHostVtable, out: *mut TbModuleV
         return TB_BAD_ARGUMENT;
     }
     let host = unsafe { *host };
+    let initial_config = if host.config.len == 0 {
+        serde_json::Value::Null
+    } else {
+        if host.config.ptr.is_null() {
+            return TB_BAD_ARGUMENT;
+        }
+        match serde_json::from_slice(unsafe {
+            std::slice::from_raw_parts(host.config.ptr, host.config.len)
+        }) {
+            Ok(config) => config,
+            Err(_) => return TB_BAD_ARGUMENT,
+        }
+    };
     let host_ctx = host.host_ctx as usize;
     let send = host.send;
     let ready = host.ready;
-    let config = Arc::new(StdMutex::new(serde_json::Value::Null));
+    let config = Arc::new(StdMutex::new(initial_config));
     let service_config = config.clone();
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(16);
     std::thread::spawn(move || {
@@ -885,6 +898,52 @@ async fn resolver_load_failure_is_reported_once_with_its_resolution_reason() {
             Reason::ResolutionFailed,
         )]
     );
+}
+
+#[tokio::test]
+async fn resolver_reconfigures_a_lazy_linked_module_before_its_first_call() {
+    let runtime = Box::leak(Box::new(
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap(),
+    ));
+    let mut manifest = fixture_manifest();
+    manifest.lazy_init = true;
+    runtime
+        .host()
+        .attach_linked_with_config(
+            crate::module::LinkedModule {
+                descriptor: TbAbiDescriptor::current(ID, "0.0.0"),
+                manifest,
+                init: fixture_init,
+            },
+            serde_json::Value::Null,
+        )
+        .unwrap();
+    let resolver = crate::module::Resolver::new(crate::module::ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources: std::collections::HashMap::new(),
+        linked: std::collections::HashMap::new(),
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: vec![&RECORD],
+        terminal_marker: String::new(),
+        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        module_config: Arc::new(|_| serde_json::Value::Null),
+        reporter: Arc::new(FailureReporter::new(Arc::new(Quiet))),
+    });
+    resolver.ensure_loaded(ID).await.unwrap();
+    assert_eq!(runtime.host().list()[0].state, ModuleState::Resolved);
+    let module = ReconfigurableModule::new(resolver, ID);
+    let config = serde_json::json!({ "credential": "private-before-first-call" });
+
+    let proxy = module
+        .proxy(&config)
+        .await
+        .expect("lazy configuration should be applied before the first business call");
+    assert_eq!(read_config(&proxy).await, config);
 }
 
 #[tokio::test]
