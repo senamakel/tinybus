@@ -56,13 +56,15 @@ fn a_library_pin_is_validated_against_file_bytes_before_mapping() {
     std::fs::write(&path, b"library bytes with a compiled pin").unwrap();
 
     let invalid_pin = load_verified(&path, false, Some("not-a-sha256"))
-        .unwrap_err()
+        .err()
+        .expect("invalid pin must be refused")
         .to_string();
     assert!(invalid_pin.contains("library digest pin is invalid"));
 
     let wrong_pin = "a".repeat(64);
     let mismatched_pin = load_verified(&path, false, Some(&wrong_pin))
-        .unwrap_err()
+        .err()
+        .expect("mismatched library pin must be refused")
         .to_string();
     assert!(mismatched_pin.contains("module library hash does not match its pin"));
 }
