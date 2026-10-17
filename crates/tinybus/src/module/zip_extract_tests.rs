@@ -148,7 +148,7 @@ fn path_policy_rejects_unportable_or_ambiguous_names_before_normalization() {
         "./file",
         "",
     ] {
-        assert!(checked_path(name).is_err(), "accepted {name:?}");
+        assert!(checked_path(name, MAX_PATH_DEPTH).is_err(), "accepted {name:?}");
     }
     let (root, _destination, result) = extract_fixture("unsafe_parent.zip");
     assert!(result.is_err());
@@ -172,7 +172,7 @@ fn duplicate_names_are_refused_before_any_file_is_written() {
 }
 
 #[test]
-fn case_colliding_components_are_refused_portably() {
+fn case_colliding_paths_are_refused_portably() {
     let (_root, destination, result) = extract_fixture("case_collision.zip");
     assert!(result.is_err());
     assert!(!destination.join("foo/a").exists());
@@ -228,9 +228,38 @@ fn inflated_output_is_bounded_even_when_the_archive_is_small() {
     )
     .unwrap();
 
-    let result = extract_with_limits(&archive, &destination, 8, 16, 8);
+    let result = extract_with_limits(
+        &archive,
+        &destination,
+        ExtractionLimits {
+            entry_bytes: 8,
+            total_bytes: 16,
+            entries: 8,
+            ..DEFAULT_LIMITS
+        },
+    );
     assert!(result.is_err());
     assert!(!destination.join("folder/module.so").exists());
+}
+
+#[test]
+fn path_metadata_budget_is_checked_before_output_creation() {
+    let root = tempfile::tempdir().unwrap();
+    let archive = root.path().join("fixture.zip");
+    let destination = root.path().join("staging");
+    fs::create_dir(&destination).unwrap();
+    fs::write(&archive, include_bytes!("fixtures/compat_store.zip")).unwrap();
+
+    let result = extract_with_limits(
+        &archive,
+        &destination,
+        ExtractionLimits {
+            path_metadata_bytes: 4,
+            ..DEFAULT_LIMITS
+        },
+    );
+    assert!(result.is_err());
+    assert!(fs::read_dir(destination).unwrap().next().is_none());
 }
 
 #[test]
