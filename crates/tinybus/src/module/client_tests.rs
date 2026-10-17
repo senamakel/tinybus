@@ -293,8 +293,8 @@ impl crate::Interface for JsonFixture {
 async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refusals() {
     let (sink, resolver) = resolver(true);
     let bus = crate::transport::memory::MemoryBus::new();
-    let broker = crate::broker::Broker::new();
-    let _broker_task = broker.clone().spawn(bus.clone());
+    let _broker = crate::broker::Broker::new();
+    let _broker_task = _broker.clone().spawn(bus.clone());
     let service = crate::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
@@ -376,18 +376,21 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
             .all(|(_, reason)| *reason == Reason::TransportFailed)
     );
 
-    broker.attest_module(
-        &service.unique_name().unwrap(),
-        crate::attest::Attestation {
-            name: crate::BusName::new(RECORD.bus_name).unwrap(),
-            sha256: "a".repeat(64),
-        },
-    );
-    let reply: serde_json::Value = client
-        .call_confidential_json(RECORD.id, "Json", ())
-        .await
-        .unwrap();
-    assert_eq!(reply, serde_json::json!({ "answer": 42 }));
+    #[cfg(feature = "modules")]
+    {
+        _broker.attest_module(
+            &service.unique_name().unwrap(),
+            crate::attest::Attestation {
+                name: crate::BusName::new(RECORD.bus_name).unwrap(),
+                sha256: "a".repeat(64),
+            },
+        );
+        let reply: serde_json::Value = client
+            .call_confidential_json(RECORD.id, "Json", ())
+            .await
+            .unwrap();
+        assert_eq!(reply, serde_json::json!({ "answer": 42 }));
+    }
 }
 
 #[tokio::test]
