@@ -118,9 +118,10 @@ fn physical_completion_is_published_only_after_anchor_retirement() {
         release: std::sync::Barrier::new(2),
     });
     *state.before_anchor_removal.lock().unwrap() = Some(gate.clone());
-    state.register(RuntimeHooks::new(|_| {}, || {
-        TerminalCompletion::PhysicallyStopped
-    }));
+    state.register(RuntimeHooks::new(
+        |_| {},
+        || TerminalCompletion::PhysicallyStopped,
+    ));
     state.publish();
     state.signal(TerminalReason::Stop);
 
@@ -130,7 +131,10 @@ fn physical_completion_is_published_only_after_anchor_retirement() {
         released: false,
     };
     assert!(TerminalState::lookup_in(&admission, state.context().addr()).is_some());
-    assert_eq!(view.inner.wait(Duration::ZERO), TerminalCompletion::Uncertain);
+    assert_eq!(
+        view.inner.wait(Duration::ZERO),
+        TerminalCompletion::Uncertain
+    );
 
     release.release();
     assert_eq!(
