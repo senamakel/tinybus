@@ -264,33 +264,52 @@ impl ModuleRuntime {
         path: crate::ObjectPath,
         interface: impl Interface,
     ) -> crate::Result<HostObjectGuard> {
-        let mut state = self.host_objects.lock().await;
-        let owner = state.connection.name_owner(name.as_str()).await?;
-        let own_unique = state.connection.unique_name();
-        let release_when_empty = match owner {
-            Some(owner) if own_unique.as_ref() == Some(&owner) => state
-                .names
-                .get(&name)
-                .is_some_and(|lease| lease.release_when_empty),
-            Some(_) => {
-                return Err(crate::Error::failed(
-                    "host object bus name is already owned",
-                ));
-            }
-            None => {
-                state.connection.request_name(name.as_str()).await?;
-                true
-            }
-        };
-        #[cfg(test)]
-        if let Some(barrier) = state.after_name_claim.clone() {
-            barrier.entered.add_permits(1);
-            let _permit = barrier.release.acquire().await.expect("registration barrier");
+        let registry = self.host_objects.clone();
+        let handle = self.handle.clone();
+        let (response, result) = tokio::sync::oneshot::channel();
+        self.handle.spawn(async move {
+            let guard =
+                serve_host_object_transaction(registry, handle, name, path, interface).await;
+            // If the caller canceled, dropping this failed send drops the guard;
+            // its cleanup is still owned by the dedicated runtime.
+            let _ = response.send(guard);
+        });
+        result.await.map_err(|_| crate::Error::ConnectionClosed)?
+    }
+}
+
+async fn serve_host_object_transaction(
+    registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+    handle: tokio::runtime::Handle,
+    name: crate::BusName,
+    path: crate::ObjectPath,
+    interface: impl Interface,
+) -> crate::Result<HostObjectGuard> {
+    let mut state = registry.lock().await;
+    let owner = state.connection.name_owner(name.as_str()).await?;
+    let own_unique = state.connection.unique_name();
+    let release_when_empty = match owner {
+        Some(owner) if own_unique.as_ref() == Some(&owner) => state
+            .names
+            .get(&name)
+            .is_some_and(|lease| lease.release_when_empty),
+        Some(_) => {
+            return Err(crate::Error::failed(
+                "host object bus name is already owned",
+            ));
         }
-        let registration = match state.connection.serve_at_owned(path, interface).await {
-            Ok(registration) => registration,
-            Err(error) => {
-                if release_when_empty {
+        None => {
+            if let Err(error) = state.connection.request_name(name.as_str()).await {
+                // A lost reply can make the RPC report failure after the broker
+                // committed the claim. Check the authoritative owner before
+                // returning, and roll it back only when no helper guard owns it.
+                let owner_after = state
+                    .connection
+                    .name_owner(name.as_str())
+                    .await
+                    .ok()
+                    .flatten();
+                if own_unique.as_ref() == owner_after.as_ref() {
                     if let Some(lease) = state.names.get_mut(&name) {
                         lease.release_when_empty = true;
                     } else {
@@ -299,20 +318,43 @@ impl ModuleRuntime {
                 }
                 return Err(error);
             }
-        };
-        let lease = state.names.entry(name.clone()).or_insert(HostNameLease {
-            registrations: 0,
-            release_when_empty,
-        });
-        lease.release_when_empty |= release_when_empty;
-        lease.registrations += 1;
-        Ok(HostObjectGuard {
-            registry: self.host_objects.clone(),
-            handle: self.handle.clone(),
-            name,
-            registration: Some(registration),
-        })
+            true
+        }
+    };
+    #[cfg(test)]
+    if let Some(barrier) = state.after_name_claim.clone() {
+        barrier.entered.add_permits(1);
+        let _permit = barrier
+            .release
+            .acquire()
+            .await
+            .expect("registration barrier");
     }
+    let registration = match state.connection.serve_at_owned(path, interface).await {
+        Ok(registration) => registration,
+        Err(error) => {
+            if release_when_empty {
+                if let Some(lease) = state.names.get_mut(&name) {
+                    lease.release_when_empty = true;
+                } else {
+                    let _ = state.connection.release_name(name.as_str()).await;
+                }
+            }
+            return Err(error);
+        }
+    };
+    let lease = state.names.entry(name.clone()).or_insert(HostNameLease {
+        registrations: 0,
+        release_when_empty,
+    });
+    lease.release_when_empty |= release_when_empty;
+    lease.registrations += 1;
+    Ok(HostObjectGuard {
+        registry: registry.clone(),
+        handle,
+        name,
+        registration: Some(registration),
+    })
 }
 
 async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
