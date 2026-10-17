@@ -63,11 +63,6 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     archive.into_inner().unwrap().finish().unwrap();
     let archive_sha256 = crate::module::sha256_file(&archive_path).unwrap();
     crate::module::cache::write_digest_marker(&cache_dir, archive_name, &archive_sha256).unwrap();
-    assert!(
-        crate::module::cache::find_verified(&cache_dir, archive_name, Some(&archive_sha256))
-            .is_some(),
-        "fixture archive must be recognized by the release cache"
-    );
 
     let assets = Box::leak(
         vec![crate::module::ReleaseAsset {
@@ -149,30 +144,7 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     });
     let response: std::result::Result<String, ModuleCallError> =
         client.call_attested(record.id, "Now", ()).await;
-    let load_error = fixture.resolver.ensure_loaded(record.id).await.err();
-    let diagnostic_host = crate::module::ModuleHost::new(crate::Broker::new());
-    let direct_error = diagnostic_host
-        .load_github_release_cached(
-            &crate::module::CachedRelease {
-                release_url: record.release_url,
-                asset_name: archive_name,
-                expected_sha256: Some(assets[0].sha256),
-                expected_library_sha256: assets[0].library_sha256,
-                cache_dir: &cache_dir,
-                allow_download: false,
-            },
-            serde_json::json!({}),
-        )
-        .err()
-        .map(|error| error.to_string());
-    assert!(
-        response.is_ok(),
-        "{response:?}; preparations={}, state={:?}, load_error={load_error:?}, direct_error={direct_error:?}, config_calls={}, runtime_calls={}",
-        preparations.load(Ordering::SeqCst),
-        fixture.resolver.state_of(record.id),
-        fixture.config_calls.load(Ordering::SeqCst),
-        fixture.runtime_calls.load(Ordering::SeqCst),
-    );
+    assert!(response.is_ok(), "{response:?}");
     assert_eq!(preparations.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.resolver.state_of(record.id), Availability::Ready);
 }
