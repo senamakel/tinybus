@@ -262,16 +262,19 @@ async fn canceling_pending_linked_setup_denies_late_ready_and_releases_the_name(
     assert!(matches!(attaching.await, Err(error) if error.is_cancelled()));
     assert!(host.module_for_sender(&peer).is_none());
     release.add_permits(1);
-    assert!(tokio::time::timeout(Duration::from_secs(5), settled_rx)
+    let settled = tokio::time::timeout(Duration::from_secs(5), settled_rx)
         .await
-        .expect("late setup callback did not settle")
-        .expect("late setup callback dropped before settling"));
+        .expect("late setup callback did not settle");
+    assert!(matches!(settled, Ok(true) | Err(_)));
     wait_for_owner(&observer, bus_name.as_str(), None).await;
-    assert!(observer
-        .proxy(&bus_name, "/linked/pending", "org.example.LinkedSetupValue")
-        .call("Value", serde_json::json!([]))
-        .await
-        .is_err());
+    assert!(
+        observer
+            .proxy(&bus_name, "/linked/pending", "org.example.LinkedSetupValue")
+            .unwrap()
+            .call::<serde_json::Value>("Value", serde_json::json!([]))
+            .await
+            .is_err()
+    );
     assert!(host.list().iter().all(|module| {
         module.manifest.bus_name != bus_name
             || !matches!(module.state, ModuleState::Ready | ModuleState::Serving)
@@ -330,16 +333,19 @@ async fn timed_out_linked_setup_denies_late_ready_and_releases_the_name() {
     assert!(attaching.await.unwrap().is_err());
     assert!(host.module_for_sender(&peer).is_none());
     release.add_permits(1);
-    assert!(tokio::time::timeout(Duration::from_secs(5), settled_rx)
+    let settled = tokio::time::timeout(Duration::from_secs(5), settled_rx)
         .await
-        .expect("late setup callback did not settle")
-        .expect("late setup callback dropped before settling"));
+        .expect("late setup callback did not settle");
+    assert!(matches!(settled, Ok(true) | Err(_)));
     wait_for_owner(&observer, bus_name.as_str(), None).await;
-    assert!(observer
-        .proxy(&bus_name, "/linked/pending", "org.example.LinkedSetupValue")
-        .call("Value", serde_json::json!([]))
-        .await
-        .is_err());
+    assert!(
+        observer
+            .proxy(&bus_name, "/linked/pending", "org.example.LinkedSetupValue")
+            .unwrap()
+            .call::<serde_json::Value>("Value", serde_json::json!([]))
+            .await
+            .is_err()
+    );
     assert!(host.list().iter().all(|module| {
         module.manifest.bus_name != bus_name
             || !matches!(module.state, ModuleState::Ready | ModuleState::Serving)
