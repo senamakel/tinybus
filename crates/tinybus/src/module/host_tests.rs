@@ -1864,20 +1864,6 @@ fn module_host_helpers_preserve_safe_names_states_and_allowlist_decisions() {
     })));
     assert!(!has_library_extension(Path::new("clock.txt")));
 
-    #[cfg(windows)]
-    let _local_app_data = {
-        let directory = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("LOCALAPPDATA", directory.path()) };
-        directory
-    };
-    let search_paths = ModuleHost::search_paths();
-    assert!(
-        search_paths
-            .iter()
-            .any(|path| path.ends_with("openhuman/modules"))
-    );
-    let _ = ModuleHost::new(Broker::new()).load_search_paths();
-
     let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let directory = root.path().join("private");
     // Protect the artifact parent before files inherit the checkout's DACL.
@@ -3354,4 +3340,98 @@ fn search_skip_matches_file_stems_only() {
         &["clock".into()]
     ));
     assert!(!is_search_skipped(Path::new("/m/libclock.so"), &[]));
+}
+
+#[test]
+fn an_explicit_search_path_config_preserves_env_first_order_without_product_defaults() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let env_dir = root.path().join("operator-modules");
+    std::fs::create_dir(&env_dir).unwrap();
+    let env_var = "TINYBUS_TEST_MODULE_SEARCH_PATHS";
+    unsafe { std::env::set_var(env_var, &env_dir) };
+    let app_dir = PathBuf::from("tinydemo/modules");
+
+    let host = ModuleHost::new(Broker::new())
+        .with_search_path_config(SearchPathConfig::new(env_var, app_dir.clone()));
+    let paths = host.search_paths();
+    unsafe { std::env::remove_var(env_var) };
+
+    let mut expected = vec![env_dir];
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
+            expected.push(PathBuf::from(path).join(&app_dir));
+        } else if let Some(path) = std::env::var_os("HOME") {
+            expected.push(PathBuf::from(path).join(".local/share").join(&app_dir));
+        }
+        expected.push(PathBuf::from("/usr/lib").join(&app_dir));
+    }
+    #[cfg(target_os = "macos")]
+    expected.push(PathBuf::from("/usr/local/lib").join(&app_dir));
+    #[cfg(windows)]
+    if let Some(path) = std::env::var_os("LOCALAPPDATA") {
+        expected.push(PathBuf::from(path).join(&app_dir));
+    }
+
+    assert_eq!(paths, expected);
+    assert!(!paths.iter().any(|path| path.ends_with("openhuman/modules")));
+}
+
+#[test]
+fn a_host_without_search_path_config_has_no_implicit_search_paths() {
+    let host = ModuleHost::new(Broker::new());
+
+    assert!(host.search_paths().is_empty());
+}
+
+#[test]
+fn rescan_with_no_explicit_paths_uses_the_host_search_path_config() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let directory = root.path().join("rescan-modules");
+    super::super::windows_acl::create_private_dir_all(&directory).unwrap();
+    let file_name = if cfg!(windows) {
+        "rescan-invalid.dll"
+    } else if cfg!(target_os = "macos") {
+        "rescan-invalid.dylib"
+    } else {
+        "rescan-invalid.so"
+    };
+    std::fs::write(directory.join(file_name), b"not a shared library").unwrap();
+    let env_var = "TINYBUS_TEST_RESCAN_SEARCH_PATH";
+    unsafe { std::env::set_var(env_var, &directory) };
+    let host = ModuleHost::new(Broker::new())
+        .with_search_path_config(SearchPathConfig::new(env_var, "tinybus-rescan/modules"));
+
+    let (modules, transitions) = host.inner.clone().rescan(Vec::new(), true).unwrap();
+    unsafe { std::env::remove_var(env_var) };
+
+    assert!(transitions.is_empty());
+    assert!(
+        matches!(modules.as_slice(), [module] if matches!(module.state, ModuleState::Rejected { .. }))
+    );
+}
+
+#[test]
+fn load_search_paths_except_skips_an_artifact_before_opening_it() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let directory = root.path().join("private-modules");
+    super::super::windows_acl::create_private_dir_all(&directory).unwrap();
+    let file_name = if cfg!(windows) {
+        "skip-before-open.dll"
+    } else if cfg!(target_os = "macos") {
+        "skip-before-open.dylib"
+    } else {
+        "skip-before-open.so"
+    };
+    // Invalid bytes make admission fail if the skip filter opens the artifact.
+    std::fs::write(directory.join(file_name), b"not a shared library").unwrap();
+    let env_var = "TINYBUS_TEST_SKIP_SEARCH_PATH";
+    unsafe { std::env::set_var(env_var, &directory) };
+    let host = ModuleHost::new(Broker::new())
+        .with_search_path_config(SearchPathConfig::new(env_var, "tinybus-test/modules"));
+
+    let outcomes = host.load_search_paths_except(&["skip-before-open".to_string()]);
+    unsafe { std::env::remove_var(env_var) };
+
+    assert!(outcomes.is_empty(), "the skipped file must never be opened");
 }

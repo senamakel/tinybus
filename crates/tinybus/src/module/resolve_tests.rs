@@ -323,7 +323,8 @@ mod resolver {
             allow_download: false,
             bundled_dir: None,
             sources: HashMap::new(),
-            linked: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
             search_skip: Vec::new(),
             gate: Some(Arc::new(|id| {
                 (id == "resolver-gated").then_some("test-switch")
@@ -380,10 +381,15 @@ mod resolver {
             allow_download: false,
             bundled_dir: None,
             sources,
-            linked: HashMap::from([(
-                record.id.to_string(),
-                (|| Err(crate::Error::Transport("secret path /home/x".into()))) as LinkedFactory,
-            )]),
+            linked: {
+                fn failing_factory() -> crate::Result<LinkedModule> {
+                    Err(crate::Error::Transport("secret path /home/x".into()))
+                }
+                let registry = Arc::new(LinkedRegistry::new());
+                registry.register(record.id, failing_factory);
+                registry
+            },
+            search_paths: None,
             search_skip: Vec::new(),
             gate: None,
             on_resolved: None,
@@ -413,7 +419,8 @@ mod resolver {
             allow_download: false,
             bundled_dir: None,
             sources: HashMap::new(),
-            linked: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
             search_skip: Vec::new(),
             gate: None,
             on_resolved: Some(Arc::new(move |id| recorded.lock().unwrap().push(id.into()))),
@@ -447,13 +454,16 @@ mod resolver {
         let record = record("resolver-linked-impostor");
         let sources = HashMap::from([(record.id.to_string(), ModuleSource::Linked)]);
         let mut f = fixture(record, true, sources.clone(), None);
+        let linked = Arc::new(LinkedRegistry::new());
+        linked.register(record.id, impostor);
         f.resolver = Resolver::new(ResolverInputs {
             enabled: true,
             install_dir: None,
             allow_download: false,
             bundled_dir: None,
             sources,
-            linked: HashMap::from([(record.id.to_string(), impostor as LinkedFactory)]),
+            linked,
+            search_paths: None,
             search_skip: Vec::new(),
             gate: None,
             on_resolved: None,
@@ -488,7 +498,8 @@ mod resolver {
             allow_download: false,
             bundled_dir: None,
             sources: HashMap::new(),
-            linked: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
             search_skip: Vec::new(),
             gate: Some(Arc::new(|_| Some("test-switch"))),
             on_resolved: None,
@@ -513,7 +524,8 @@ mod resolver {
             allow_download: false,
             bundled_dir: None,
             sources: HashMap::new(),
-            linked: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
             search_skip: Vec::new(),
             gate: None,
             on_resolved: Some(Arc::new(|_| panic!("hook bug"))),
@@ -576,7 +588,8 @@ mod resolver {
             allow_download: false,
             bundled_dir: None,
             sources: HashMap::new(),
-            linked: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
             search_skip: Vec::new(),
             gate: None,
             on_resolved: None,
@@ -640,4 +653,135 @@ mod resolver {
             );
         }
     }
+}
+
+#[test]
+fn bundled_directory_lookup_uses_registered_then_env_then_executable_sibling() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let registered = root.path().join("registered");
+    let from_env = root.path().join("environment");
+    let exe_dir = root.path().join("bin");
+    let sibling = exe_dir.join("bundled-modules");
+    for directory in [&registered, &from_env, &sibling] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+
+    assert_eq!(
+        resolve_bundled_dir_from(
+            Some(registered.clone()),
+            Some(from_env.clone()),
+            Some(exe_dir.clone()),
+        ),
+        Some(registered)
+    );
+    assert_eq!(
+        resolve_bundled_dir_from(None, Some(from_env.clone()), Some(exe_dir.clone())),
+        Some(from_env)
+    );
+    assert_eq!(
+        resolve_bundled_dir_from(None, None, Some(exe_dir)),
+        Some(sibling)
+    );
+}
+
+#[test]
+fn bundled_directory_lookup_skips_missing_higher_precedence_candidates() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let missing_registered = root.path().join("not-installed");
+    let valid_env = root.path().join("environment");
+    std::fs::create_dir_all(&valid_env).unwrap();
+
+    assert_eq!(
+        resolve_bundled_dir_from(Some(missing_registered), Some(valid_env.clone()), None),
+        Some(valid_env)
+    );
+}
+
+#[test]
+fn bundled_directory_lookup_reads_the_explicit_environment_variable_name() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let from_env = root.path().join("environment");
+    std::fs::create_dir_all(&from_env).unwrap();
+    let env_var = "TINYBUS_TEST_BUNDLED_RELEASES";
+    unsafe { std::env::set_var(env_var, &from_env) };
+
+    let resolved_from_env = resolve_bundled_dir(env_var);
+    unsafe { std::env::remove_var(env_var) };
+    assert_eq!(resolved_from_env, Some(from_env));
+
+    let registered = root.path().join("registered");
+    std::fs::create_dir_all(&registered).unwrap();
+    assert!(set_bundled_releases_dir(registered.clone()).is_ok());
+    assert_eq!(resolve_bundled_dir(env_var), Some(registered));
+}
+
+#[test]
+fn linked_registry_replaces_factories_and_returns_the_last_registration() {
+    fn first_factory() -> crate::Result<LinkedModule> {
+        Err(crate::Error::failed("first factory"))
+    }
+    fn replacement_factory() -> crate::Result<LinkedModule> {
+        Err(crate::Error::failed("replacement factory"))
+    }
+
+    let registry = LinkedRegistry::new();
+    assert!(!registry.is_registered("registry-test"));
+    assert!(registry.get("registry-test").is_none());
+
+    registry.register("registry-test", first_factory);
+    assert!(registry.is_registered("registry-test"));
+    let first = (registry.get("registry-test").unwrap())();
+    assert!(matches!(first, Err(error) if error.to_string().contains("first factory")));
+
+    registry.register("registry-test", replacement_factory);
+    let replacement = (registry.get("registry-test").unwrap())();
+    assert!(matches!(replacement, Err(error) if error.to_string().contains("replacement factory")));
+
+    let global = LinkedRegistry::global();
+    let same_global = LinkedRegistry::global();
+    global.register("global-registry-test", first_factory);
+    assert!(same_global.is_registered("global-registry-test"));
+    let global_result = (same_global.get("global-registry-test").unwrap())();
+    assert!(matches!(global_result, Err(error) if error.to_string().contains("first factory")));
+}
+
+struct ResolverSearchSink;
+
+impl crate::module::FailureSink for ResolverSearchSink {
+    fn capture(&self, _: &crate::module::FailureReport<'_>) {}
+}
+
+#[tokio::test]
+async fn resolver_inputs_configure_the_runtime_host_search_paths() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let search_dir = root.path().join("resolver-search");
+    std::fs::create_dir(&search_dir).unwrap();
+    let env_var = "TINYBUS_TEST_RESOLVER_SEARCH_PATH";
+    unsafe { std::env::set_var(env_var, &search_dir) };
+    let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap(),
+    ));
+    let resolver = Resolver::new(ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources: HashMap::new(),
+        linked: Arc::new(LinkedRegistry::new()),
+        search_paths: Some(SearchPathConfig::new(env_var, "test-host/modules")),
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: Vec::new(),
+        terminal_marker: String::new(),
+        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        module_config: Arc::new(|_| serde_json::Value::Null),
+        reporter: Arc::new(FailureReporter::new(Arc::new(ResolverSearchSink))),
+    });
+
+    let resolved_runtime = resolver.runtime().await.unwrap();
+    let paths = resolved_runtime.host().search_paths();
+    unsafe { std::env::remove_var(env_var) };
+
+    assert_eq!(paths.first(), Some(&search_dir));
 }

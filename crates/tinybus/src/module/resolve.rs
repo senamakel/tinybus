@@ -19,16 +19,17 @@
 //! outcome; two modules never queue behind each other.
 //! [`Resolver::ensure_loaded_within`] bounds the wait, never the resolution.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::module::LinkedModule;
+use crate::module::SearchPathConfig;
 use crate::module::failure::{FailureReporter, Reason};
 use crate::module::manifest::ModuleManifest;
 use crate::module::platform::host_candidates;
@@ -235,6 +236,103 @@ pub type ResolvedHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// Builds the [`LinkedModule`] compiled into the host for one module id. A plain
 /// `fn` so a registration carries no state.
 pub type LinkedFactory = fn() -> crate::Result<LinkedModule>;
+
+/// Process-wide set of module factories compiled into a host executable.
+/// Registration replaces a prior factory for the same id, allowing repeated
+/// host installation to remain idempotent.
+pub struct LinkedRegistry {
+    factories: Mutex<BTreeMap<&'static str, LinkedFactory>>,
+}
+
+impl LinkedRegistry {
+    /// Create an empty registry, usually for isolated host or test wiring.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            factories: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// The process-global registry used by a host binary.
+    #[must_use]
+    pub fn global() -> Arc<Self> {
+        static REGISTRY: OnceLock<Arc<LinkedRegistry>> = OnceLock::new();
+        Arc::clone(REGISTRY.get_or_init(|| Arc::new(Self::new())))
+    }
+
+    fn factories(&self) -> std::sync::MutexGuard<'_, BTreeMap<&'static str, LinkedFactory>> {
+        self.factories
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Register a factory for a module id. A later registration replaces it.
+    pub fn register(&self, id: &'static str, factory: LinkedFactory) {
+        let replaced = self.factories().insert(id, factory).is_some();
+        tracing::debug!(module = id, replaced, "linked module factory registered");
+    }
+
+    /// Whether this registry has a factory for `id`.
+    #[must_use]
+    pub fn is_registered(&self, id: &str) -> bool {
+        self.factories().contains_key(id)
+    }
+
+    /// Return the registered factory for `id`, if one exists.
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<LinkedFactory> {
+        self.factories().get(id).copied()
+    }
+}
+
+impl Default for LinkedRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static BUNDLED_RELEASES: OnceLock<PathBuf> = OnceLock::new();
+
+/// Register the installer-owned directory containing release archives.
+/// Its files still pass the ordinary digest and module admission checks.
+pub fn set_bundled_releases_dir(path: PathBuf) -> Result<(), PathBuf> {
+    BUNDLED_RELEASES.set(path)
+}
+
+/// Resolve the installer-owned archive directory from the registered path,
+/// the explicitly named environment variable, or `bundled-modules/` beside
+/// the current executable, in that order. Only existing directories qualify.
+#[must_use]
+pub fn resolve_bundled_dir(env_var_name: &str) -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    resolve_bundled_dir_from(
+        BUNDLED_RELEASES.get().cloned(),
+        std::env::var_os(env_var_name).map(PathBuf::from),
+        exe_dir,
+    )
+}
+
+fn resolve_bundled_dir_from(
+    registered: Option<PathBuf>,
+    from_env: Option<PathBuf>,
+    exe_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let found = [
+        registered,
+        from_env,
+        exe_dir.map(|dir| dir.join("bundled-modules")),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|dir| dir.is_dir());
+    if let Some(dir) = &found {
+        tracing::debug!(path = %dir.display(), "bundled module directory resolved");
+    }
+    found
+}
+
 #[path = "resolve_access.rs"]
 pub(super) mod access;
 
@@ -251,9 +349,11 @@ pub struct ResolverInputs {
     /// Per-module artifact sources. A module absent here, or `Pinned`, loads the
     /// pinned release.
     pub sources: HashMap<String, ModuleSource>,
-    /// Factories for modules linked into the host, consulted for a
-    /// [`ModuleSource::Linked`] source.
-    pub linked: HashMap<String, LinkedFactory>,
+    /// Registry of factories for `Linked` sources. The host binary uses
+    /// [`LinkedRegistry::global`]; tests and embedders may inject their own.
+    pub linked: Arc<LinkedRegistry>,
+    /// Search path policy for the module host. `None` means no implicit paths.
+    pub search_paths: Option<SearchPathConfig>,
     /// Library file stems the search-path rung must not open, e.g. the
     /// libraries of modules the host has switched off.
     pub search_skip: Vec<String>,
@@ -313,7 +413,11 @@ impl Resolver {
     ///
     /// Whatever the host's provider returns when the runtime cannot start.
     pub async fn runtime(&self) -> crate::Result<&'static ModuleRuntime> {
-        (self.inner.runtime)().await
+        let runtime = (self.inner.runtime)().await?;
+        runtime
+            .host()
+            .configure_search_path_config(self.inner.search_paths.clone());
+        Ok(runtime)
     }
 
     /// Report a terminal outcome for `record`, once per process.
@@ -563,7 +667,7 @@ impl Resolver {
                     .await;
             }
             Some(ModuleSource::Linked) => {
-                let factory = self.inner.linked.get(record.id).copied();
+                let factory = self.inner.linked.get(record.id);
                 let module_config = (self.inner.module_config)(record.id);
                 return self
                     .blocking(move || Self::load_linked(runtime, record, factory, module_config))
