@@ -2916,7 +2916,11 @@ impl crate::Interface for BoundNativeCallback {
         );
         assert!(
             self.sender_lookup
-                .module_for_sender(context.authenticated_sender().expect("authenticated sender"))
+                .module_for_sender(
+                    context
+                        .authenticated_sender()
+                        .expect("authenticated sender")
+                )
                 .is_some(),
             "the admitted module identity must be published before its eager setup callback"
         );
