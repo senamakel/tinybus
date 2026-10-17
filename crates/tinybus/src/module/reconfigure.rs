@@ -178,11 +178,14 @@ impl ReconfigurableModule {
             let value = serde_json::to_value(config).map_err(|_| {
                 self.report_failure(ModuleCallError::ModuleFault, Reason::ModuleFault)
             })?;
-            self.reconfigure(value, fingerprint.clone())
+            let mut report_reason = None;
+            self.reconfigure(value, fingerprint.clone(), &mut report_reason)
                 .await
                 .map_err(|error| {
-                    let reason = Self::reason_for(error);
-                    self.report_failure(error, reason)
+                    self.report_failure(
+                        error,
+                        report_reason.unwrap_or_else(|| Self::reason_for(error)),
+                    )
                 })?;
             self.loaded_state().fingerprint = Some(fingerprint);
         }
@@ -205,6 +208,7 @@ impl ReconfigurableModule {
         &self,
         config: serde_json::Value,
         fingerprint: ConfigFingerprint,
+        report_reason: &mut Option<Reason>,
     ) -> Result<(), ModuleCallError> {
         let mut outcome = Err(ReconfigureFailure::Failed);
         for attempt in 0..self.retry_attempts {
@@ -215,8 +219,13 @@ impl ReconfigurableModule {
                         .await
                 }
                 Reconfigure::Member(member) => {
-                    self.member_reconfigure(member, config.clone(), fingerprint.clone())
-                        .await
+                    self.member_reconfigure(
+                        member,
+                        config.clone(),
+                        fingerprint.clone(),
+                        report_reason,
+                    )
+                    .await
                 }
             };
             match outcome {
@@ -251,6 +260,7 @@ impl ReconfigurableModule {
         member: &'static str,
         config: serde_json::Value,
         fingerprint: ConfigFingerprint,
+        report_reason: &mut Option<Reason>,
     ) -> Result<(), ReconfigureFailure> {
         let record = self
             .access
@@ -259,10 +269,10 @@ impl ReconfigurableModule {
         if !self.access.enabled() {
             return Err(ReconfigureFailure::Unavailable);
         }
-        self.access
-            .ensure_loaded(record.id)
-            .await
-            .map_err(|_| ReconfigureFailure::Unavailable)?;
+        self.access.ensure_loaded(record.id).await.map_err(|_| {
+            *report_reason = Some(Reason::ResolutionFailed);
+            ReconfigureFailure::Unavailable
+        })?;
         let proxy = self
             .access
             .proxy(record.bus_name, record.object_path)
