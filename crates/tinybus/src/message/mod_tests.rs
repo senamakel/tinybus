@@ -87,11 +87,14 @@ fn legacy_errors_and_unknown_or_misplaced_metadata_fail_safely() {
     misplaced.header.module_lifecycle = Some(ModuleLifecycle::Initializing);
     assert!(misplaced.validate().is_err());
 
-    let mut wrong_name = Message::error_reply(&call.header, &Error::ModuleUnavailable {
-        module: "module".into(),
-        state: "initializing".into(),
-        detail: "module is initializing".into(),
-    });
+    let mut wrong_name = Message::error_reply(
+        &call.header,
+        &Error::ModuleUnavailable {
+            module: "module".into(),
+            state: "initializing".into(),
+            detail: "module is initializing".into(),
+        },
+    );
     wrong_name.header.error_name = Some(Error::FAILED.to_owned());
     assert!(wrong_name.validate().is_err());
 

@@ -2,15 +2,18 @@
 
 use super::Resolver;
 use crate::Proxy;
+use crate::module::ReleaseRecord;
 use crate::module::client::{AccessFuture, ModuleAccess, ProxyFailure, ReconfigureFailure};
 use crate::module::failure::FailureReporter;
 use crate::module::resolution;
-use crate::module::ReleaseRecord;
 
 pub(in crate::module) fn reconfigure_failure(error: &crate::Error) -> ReconfigureFailure {
     match error {
         crate::Error::ModuleUnavailable { state, .. }
-            if state.eq_ignore_ascii_case("initializing") => ReconfigureFailure::Initializing,
+            if state.eq_ignore_ascii_case("initializing") =>
+        {
+            ReconfigureFailure::Initializing
+        }
         crate::Error::ModuleUnavailable { .. } => ReconfigureFailure::Unavailable,
         crate::Error::MethodFailed { name, .. } if name == crate::Error::MODULE_UNAVAILABLE => {
             ReconfigureFailure::Unavailable
