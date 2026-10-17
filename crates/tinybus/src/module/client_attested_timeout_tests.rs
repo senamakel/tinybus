@@ -109,6 +109,7 @@ async fn client_waiting_on_metadata(
     member: &'static str,
 ) -> (
     ModuleClient,
+    crate::Connection,
     &'static ReleaseRecord,
     Arc<Notify>,
     Arc<Mutex<Vec<serde_json::Value>>>,
@@ -149,11 +150,20 @@ async fn client_waiting_on_metadata(
         preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let client = ModuleClient::new(access).with_timeout(Duration::from_millis(5));
-    (client, record, held, calls, sink, observed, broker_task)
+    (
+        client,
+        service,
+        record,
+        held,
+        calls,
+        sink,
+        observed,
+        broker_task,
+    )
 }
 
 async fn stalled_metadata_call_is_bounded(member: &'static str) {
-    let (client, record, held, calls, sink, observed, broker_task) =
+    let (client, _service, record, held, calls, sink, observed, broker_task) =
         client_waiting_on_metadata(member).await;
     let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let serializations_for_call = serializations.clone();
