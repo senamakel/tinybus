@@ -235,4 +235,25 @@ async fn linked_setup_admission_rejects_unmet_dependencies_before_running_the_ca
     assert!(result.is_err());
     assert_eq!(ran.load(Ordering::SeqCst), 0);
     assert!(host.list().is_empty());
+
+    let mut invalid_descriptor = linked_export("linked_bad_descriptor");
+    invalid_descriptor.descriptor.module_version = [0; 32];
+    invalid_descriptor.descriptor.module_version[..3].copy_from_slice(b"9.9");
+    let callback_ran = ran.clone();
+    let result = host
+        .attach_linked_with_setup(
+            invalid_descriptor,
+            serde_json::json!({}),
+            move |_| async move {
+                callback_ran.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(ran.load(Ordering::SeqCst), 0);
+    assert!(host.list().iter().any(|module| {
+        module.name == "linked_bad_descriptor"
+            && matches!(module.state, ModuleState::Rejected { .. })
+    }));
 }

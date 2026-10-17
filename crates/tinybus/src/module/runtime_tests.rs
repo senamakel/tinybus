@@ -103,6 +103,15 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
         .serve_host_object(name.clone(), first_path.clone(), HostObjectValue("old"))
         .await
         .unwrap();
+    assert!(
+        runtime
+            .connection()
+            .attestation(runtime.connection().unique_name().unwrap())
+            .await
+            .unwrap()
+            .is_none(),
+        "ordinary host objects do not attest their connection"
+    );
     let second = runtime
         .serve_host_object(name.clone(), second_path.clone(), HostObjectValue("second"))
         .await
