@@ -1,11 +1,7 @@
 use super::*;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use tokio::sync::oneshot;
-
-type ShutdownHook = Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 fn slot<K, S>() -> ModuleServiceSlot<K, S> {
     ModuleServiceSlot::new()

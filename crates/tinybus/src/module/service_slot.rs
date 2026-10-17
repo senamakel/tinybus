@@ -12,9 +12,8 @@ type CloseFuture<E> = Pin<Box<dyn Future<Output = Result<(), E>> + Send + 'stati
 type StoredCloser<S, E> = Box<dyn FnOnce(S) -> CloseFuture<E> + Send + 'static>;
 
 /// A host-compatible asynchronous shutdown hook accepted by [`ModuleServiceSlot::on_shutdown`].
-pub type ShutdownHook = Box<
-    dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> + Send + Sync + 'static,
->;
+pub type ShutdownHook =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> + Send + Sync + 'static>;
 
 struct Entry<K, S, E> {
     key: K,
@@ -59,14 +58,17 @@ impl<K, S, E> ModuleServiceSlot<K, S, E> {
         operation: Operation,
     ) -> Result<R, E>
     where
-        K: PartialEq,
-        Open: FnOnce() -> OpenFuture,
-        OpenFuture: Future<Output = Result<S, E>>,
+        K: PartialEq + Send,
+        S: Send,
+        Open: FnOnce() -> OpenFuture + Send,
+        OpenFuture: Future<Output = Result<S, E>> + Send,
         Close: FnOnce(S) -> CloseFutureType + Send + 'static,
         CloseFutureType: Future<Output = Result<(), E>> + Send + 'static,
         Operation: for<'service> FnOnce(
-            &'service mut S,
-        ) -> Pin<Box<dyn Future<Output = Result<R, E>> + Send + 'service>>,
+                &'service mut S,
+            )
+                -> Pin<Box<dyn Future<Output = Result<R, E>> + Send + 'service>>
+            + Send,
     {
         let mut entry = self.entry.lock().await;
         if entry.as_ref().is_some_and(|current| current.key != key) {
