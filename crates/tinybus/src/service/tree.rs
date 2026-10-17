@@ -48,11 +48,7 @@ impl ObjectTree {
     /// Export `interface` and return the identity of this exact registration.
     /// A later replacement at the same path and interface gets a different
     /// identity, so an older owner cannot unregister the newer implementation.
-    pub(crate) fn insert_owned(
-        &mut self,
-        path: ObjectPath,
-        interface: Arc<dyn Interface>,
-    ) -> u64 {
+    pub(crate) fn insert_owned(&mut self, path: ObjectPath, interface: Arc<dyn Interface>) -> u64 {
         self.next_registration = self
             .next_registration
             .checked_add(1)
@@ -75,9 +71,10 @@ impl ObjectTree {
         let Some(entries) = self.objects.get_mut(path) else {
             return false;
         };
-        let Some(index) = entries.iter().position(|entry| {
-            entry.id == id && entry.interface.name() == *interface
-        }) else {
+        let Some(index) = entries
+            .iter()
+            .position(|entry| entry.id == id && entry.interface.name() == *interface)
+        else {
             return false;
         };
         entries.remove(index);

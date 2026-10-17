@@ -12,12 +12,12 @@ use serde::{Deserialize, Serialize};
 use crate::broker::Broker;
 use crate::build_info;
 use crate::error::{Error, Result, sanitize_untrusted};
-use crate::module::{LinkedModule, LinkedModuleInitWithSetup, LinkedSetup, ModuleId};
 use crate::module::abi::{TB_OK, TbAbiDescriptor, TbModuleInit, TbModuleVtable, field_bytes};
 use crate::module::github::CachedRelease;
 use crate::module::loader::{self, LoadedArtifact};
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
 use crate::module::transport::{ModuleTransport, StopError};
+use crate::module::{LinkedModule, LinkedModuleInitWithSetup, LinkedSetup, ModuleId};
 use crate::name::{BusName, ObjectPath};
 use crate::ports::Transport;
 use crate::version::Version;
@@ -1363,14 +1363,14 @@ impl ModuleHost {
             None => {
                 admitted.state = ModuleState::Initializing;
                 if let Err(failure) = transport.eager_initialize(artifact.init, host_vtable) {
-                let reason = if failure.to_string().contains("vtable") {
-                    "module returned an invalid vtable"
-                } else {
-                    "module initialization failed"
-                };
-                let error = Error::module_refused(path, reason);
-                self.record_manifest_rejection(&error, manifest, RefusalClass::Failed);
-                return Err(error);
+                    let reason = if failure.to_string().contains("vtable") {
+                        "module returned an invalid vtable"
+                    } else {
+                        "module initialization failed"
+                    };
+                    let error = Error::module_refused(path, reason);
+                    self.record_manifest_rejection(&error, manifest, RefusalClass::Failed);
+                    return Err(error);
                 }
             }
         }

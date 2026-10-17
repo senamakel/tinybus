@@ -31,9 +31,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::broker::Broker;
+use crate::connection::ObjectRegistration;
 use crate::module::ModuleHost;
 use crate::transport::memory::MemoryBus;
-use crate::{Connection, Proxy};
+use crate::{Connection, Interface, Proxy};
 
 /// A per-attachment setup callback for a statically linked module.
 ///
@@ -59,7 +60,10 @@ pub type LinkedModuleInitWithSetup = unsafe fn(
 /// A host uses it to install the callback services its modules call back into,
 /// so they are being served before any module resolves.
 pub type RuntimeSetup = Box<
-    dyn for<'a> FnOnce(Connection, &'a ModuleHost) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>>
+    dyn for<'a> FnOnce(
+            Connection,
+            &'a ModuleHost,
+        ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>>
         + Send,
 >;
 
@@ -90,6 +94,56 @@ pub struct ModuleRuntime {
     /// Handle for work that must outlive the caller's runtime.
     handle: tokio::runtime::Handle,
     host_objects: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+}
+
+struct HostObjectRegistry {
+    connection: Connection,
+    names: std::collections::HashMap<crate::BusName, HostNameLease>,
+}
+
+struct HostNameLease {
+    registrations: usize,
+    release_when_empty: bool,
+}
+
+/// Owns one host object export and its share of a bus-name claim.
+///
+/// Dropping the guard schedules cleanup on its [`ModuleRuntime`]'s dedicated
+/// runtime, so it is safe to drop from synchronous code or another runtime.
+pub struct HostObjectGuard {
+    registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+    handle: tokio::runtime::Handle,
+    name: crate::BusName,
+    registration: Option<ObjectRegistration>,
+}
+
+impl Drop for HostObjectGuard {
+    fn drop(&mut self) {
+        let Some(registration) = self.registration.take() else {
+            return;
+        };
+        let registry = self.registry.clone();
+        let name = self.name.clone();
+        self.handle.spawn(async move {
+            let mut state = registry.lock().await;
+            let _ = state.connection.unserve_if_owned(&registration).await;
+            let release = if let Some(lease) = state.names.get_mut(&name) {
+                lease.registrations = lease.registrations.saturating_sub(1);
+                if lease.registrations == 0 {
+                    let release = lease.release_when_empty;
+                    state.names.remove(&name);
+                    release
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if release {
+                let _ = state.connection.release_name(name.as_str()).await;
+            }
+        });
+    }
 }
 
 impl ModuleRuntime {
@@ -184,6 +238,64 @@ impl ModuleRuntime {
     pub fn proxy(&self, bus_name: &str, object_path: &str) -> crate::Result<Proxy> {
         self.connection.proxy(bus_name, object_path, bus_name)
     }
+
+    /// Serve one ordinary host interface on the module runtime's bus.
+    ///
+    /// Same-name registrations share one name claim. Each guard owns only its
+    /// exact interface registration, so dropping an older guard cannot remove
+    /// a later replacement made through this helper or [`Connection::serve_at`].
+    /// A name already owned by this connection is preserved after the final
+    /// guard is dropped; a name claimed by another peer is refused.
+    ///
+    /// This is an ordinary host object registration. It does not attest this
+    /// peer or grant the interface confidential-call authority.
+    pub async fn serve_host_object(
+        &self,
+        name: crate::BusName,
+        path: crate::ObjectPath,
+        interface: impl Interface,
+    ) -> crate::Result<HostObjectGuard> {
+        let mut state = self.host_objects.lock().await;
+        let owner = state.connection.name_owner(name.as_str()).await?;
+        let own_unique = state.connection.unique_name();
+        let already_registered = state.names.contains_key(&name);
+        let release_when_empty = match owner {
+            Some(owner) if Some(owner) == own_unique => state
+                .names
+                .get(&name)
+                .is_some_and(|lease| lease.release_when_empty),
+            Some(_) => {
+                return Err(crate::Error::failed(
+                    "host object bus name is already owned",
+                ));
+            }
+            None => {
+                state.connection.request_name(name.as_str()).await?;
+                true
+            }
+        };
+        let registration = match state.connection.serve_at_owned(path, interface).await {
+            Ok(registration) => registration,
+            Err(error) => {
+                if !already_registered && release_when_empty {
+                    let _ = state.connection.release_name(name.as_str()).await;
+                }
+                return Err(error);
+            }
+        };
+        let lease = state.names.entry(name.clone()).or_insert(HostNameLease {
+            registrations: 0,
+            release_when_empty,
+        });
+        lease.release_when_empty |= release_when_empty;
+        lease.registrations += 1;
+        Ok(HostObjectGuard {
+            registry: self.host_objects.clone(),
+            handle: self.handle.clone(),
+            name,
+            registration: Some(registration),
+        })
+    }
 }
 
 async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
@@ -196,13 +308,18 @@ async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
 
     let host = ModuleHost::new(broker);
     let connection = Connection::connect(transport.connect().await?).await?;
+    let host_objects = std::sync::Arc::new(tokio::sync::Mutex::new(HostObjectRegistry {
+        connection: connection.clone(),
+        names: std::collections::HashMap::new(),
+    }));
     if let Some(setup) = setup {
-        setup(connection.clone()).await?;
+        setup(connection.clone(), &host).await?;
     }
     Ok(ModuleRuntime {
         host,
         connection,
         handle: tokio::runtime::Handle::current(),
+        host_objects,
     })
 }
 
