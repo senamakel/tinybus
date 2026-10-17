@@ -292,9 +292,11 @@ async fn serve_host_object_transaction(
 ) -> crate::Result<HostObjectGuard> {
     let mut state = registry.lock().await;
     let own_unique = state.connection.unique_name();
-    let unique = own_unique
-        .as_ref()
-        .ok_or(crate::Error::ConnectionClosed)?;
+    let unique = own_unique.as_ref().ok_or(crate::Error::ConnectionClosed)?;
+    // Preserve the public connection's fail-closed behavior for an already
+    // closed runtime connection. The following atomic local claim, rather
+    // than this observation, determines whether this helper acquired the name.
+    state.connection.name_owner(name.as_str()).await?;
     #[cfg(test)]
     if let Some(barrier) = state.before_name_request.clone() {
         barrier.entered.add_permits(1);
