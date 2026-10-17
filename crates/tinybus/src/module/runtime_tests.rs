@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 struct HostObjectValue(&'static str);
 
+struct PanickingHostObjectName;
+
 #[async_trait::async_trait]
 impl crate::Interface for HostObjectValue {
     fn name(&self) -> crate::InterfaceName {
@@ -20,6 +22,25 @@ impl crate::Interface for HostObjectValue {
         _: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
         Ok(serde_json::json!(self.0))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::Interface for PanickingHostObjectName {
+    fn name(&self) -> crate::InterfaceName {
+        panic!("fixture interface name panic")
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Value".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
     }
 }
 
@@ -273,6 +294,31 @@ async fn a_name_collision_leaves_no_host_object_registration_behind() {
         .unwrap();
     let leaked: crate::Result<serde_json::Value> = proxy.call("Value", ()).await;
     assert!(leaked.is_err());
+}
+
+#[tokio::test]
+async fn interface_name_panic_rolls_back_a_new_host_object_name_claim() {
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let name: crate::BusName = "ai.tinyhumans.test.PanickingHostObjectName"
+        .parse()
+        .unwrap();
+    let path: crate::ObjectPath = "/runtime/panicking_name".parse().unwrap();
+
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path, PanickingHostObjectName)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime
+            .connection()
+            .name_owner(name.as_str())
+            .await
+            .unwrap(),
+        None,
+        "failed registration must release the name it just claimed"
+    );
 }
 
 #[tokio::test]

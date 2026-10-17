@@ -330,7 +330,22 @@ async fn serve_host_object_transaction(
             .await
             .expect("registration barrier");
     }
-    let registration = match state.connection.serve_at_owned(path, interface).await {
+    // Run the user-provided interface registration in an owned child task so
+    // a panic in `Interface::name` becomes a registration error here. The
+    // transaction still owns the name claim and can roll it back below.
+    let registration_connection = state.connection.clone();
+    let registration_task = handle.spawn(async move {
+        registration_connection
+            .serve_at_owned(path, interface)
+            .await
+    });
+    let registration = match registration_task.await {
+        Ok(registration) => registration,
+        Err(_) => Err(crate::Error::failed(
+            "host object interface registration task failed",
+        )),
+    };
+    let registration = match registration {
         Ok(registration) => registration,
         Err(error) => {
             if release_when_empty {
