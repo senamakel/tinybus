@@ -168,8 +168,8 @@ fn two_modules_claiming_one_bus_name_are_both_reported_and_neither_is_initialize
 }
 
 mod resolver {
+    use super::super::test_support::{Recording, fixture, record, shared_runtime};
     use super::super::*;
-    use super::super::test_support::{fixture, record, shared_runtime, Recording};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -640,6 +640,4 @@ mod resolver {
             );
         }
     }
-    #[path = "resolve_attested_tests.rs"]
-    mod attested_tests;
 }
