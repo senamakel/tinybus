@@ -629,6 +629,7 @@ async fn cleanup_worker<D, E>(
                             Some(error),
                         ))));
                         std::future::pending::<()>().await;
+                        unreachable!("unacknowledged cleanup remains parked")
                     }
                 }
             }
