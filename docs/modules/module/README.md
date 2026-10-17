@@ -225,10 +225,13 @@ When present, `modules.toml` is authoritative for its directory. Keys are
 artifact file names (or stems) and values are lowercase SHA-256 hashes. An
 artifact absent from the file or with a mismatched hash is refused. For remote
 loads, the host supplies the expected SHA-256 alongside the artifact URL;
-hashing happens before the platform loader opens the artifact. Search
-precedence is `OPENHUMAN_MODULE_PATH`, the platform user data directory, then
-the platform system directory. `tinybus modules scan --path <dir> --dry-run`
-performs admission and dependency checks without initializing or attaching.
+hashing happens before the platform loader opens the artifact. Search paths are
+host-configured through `SearchPathConfig::new(env_var, app_dir)`. When set,
+path-list entries from `env_var` come first, followed by the app-specific user
+and system data directories for the platform. A `ModuleHost` without this
+configuration has no implicit search paths. `tinybus modules scan --path <dir>
+--dry-run` performs admission and dependency checks without initializing or
+attaching.
 
 GitHub releases are loaded with `ModuleHost::load_github_release`. The release
 URL must identify a tag, the selected asset must be a `.tar.gz` or `.zip` archive, and
