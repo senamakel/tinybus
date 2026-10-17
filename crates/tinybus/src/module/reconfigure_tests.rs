@@ -248,11 +248,8 @@ fn fingerprints_retain_only_a_digest() {
     let config = serde_json::json!({ "token": "sensitive-value" });
     let fingerprint = ConfigFingerprint::of(&config).unwrap();
     assert_eq!(fingerprint.0.len(), 32);
-    assert_eq!(fingerprint, ConfigFingerprint::of(&config).unwrap());
-    assert_ne!(
-        fingerprint,
-        ConfigFingerprint::of(&serde_json::json!({})).unwrap()
-    );
+    assert!(fingerprint == ConfigFingerprint::of(&config).unwrap());
+    assert!(fingerprint != ConfigFingerprint::of(&serde_json::json!({})).unwrap());
 }
 
 #[tokio::test]
