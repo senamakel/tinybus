@@ -88,6 +88,22 @@ write("archive_collision.zip", stored([("fixture.zip", b"must not replace the ar
 write("case_collision.zip", stored([("foo/module.so", b"first", None), ("FOO/MODULE.SO", b"second", None)]))
 write("parent_case_collision.zip", stored([("A/one", b"first", None), ("a/two", b"second", None)]))
 write("file_directory_collision.zip", stored([("a", b"file", None), ("a/b", b"child", None)]))
+write(
+    "canonical_parent_collision.zip",
+    stored([("é/one", b"first", None), ("e\u0301/two", b"second", None)]),
+)
+write(
+    "canonical_leaf_collision.zip",
+    stored([("dir/café", b"first", None), ("dir/cafe\u0301", b"second", None)]),
+)
+write(
+    "casefold_collision.zip",
+    stored([("dir/Straße", b"first", None), ("dir/STRASSE", b"second", None)]),
+)
+write(
+    "unicode_paths.zip",
+    stored([("café/module.so", b"accented", None), ("数据/module.so", b"cjk", None)]),
+)
 
 zip64_local = io.BytesIO()
 with zipfile.ZipFile(zip64_local, "w") as writer:
