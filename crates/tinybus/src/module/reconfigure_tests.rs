@@ -160,11 +160,17 @@ struct FixtureAccess {
     connection: Connection,
     broker_task: tokio::task::JoinHandle<crate::Result<()>>,
     reporter: FailureReporter,
+    registered: bool,
+    enabled: bool,
     unattested_service: Option<Connection>,
     use_unattested_proxy: bool,
     /// The retry scenario holds a concurrent first call inside initialization.
     skip_ready_wait: bool,
+    forced_reinitialize_failure: Option<ReconfigureFailure>,
+    proxy_failure: Option<ProxyFailure>,
+    initializing_left: AtomicUsize,
     reinitialize_calls: Arc<AtomicUsize>,
+    fault_calls: Arc<AtomicUsize>,
     initializing_notifier: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
     initializing_gate: StdMutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
@@ -177,10 +183,10 @@ impl Drop for FixtureAccess {
 
 impl ModuleAccess for FixtureAccess {
     fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
-        (id == ID).then_some(&RECORD)
+        (self.registered && id == ID).then_some(&RECORD)
     }
     fn enabled(&self) -> bool {
-        true
+        self.enabled
     }
     fn reporter(&self) -> &FailureReporter {
         &self.reporter
@@ -211,6 +217,9 @@ impl ModuleAccess for FixtureAccess {
         object_path: &'a str,
     ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
         Box::pin(async move {
+            if let Some(failure) = self.proxy_failure {
+                return Err(failure);
+            }
             let destination = if self.use_unattested_proxy {
                 UNATTESTED_BUS
             } else {
@@ -228,6 +237,26 @@ impl ModuleAccess for FixtureAccess {
     ) -> AccessFuture<'a, Result<(), ReconfigureFailure>> {
         Box::pin(async move {
             self.reinitialize_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(failure) = self.forced_reinitialize_failure {
+                return Err(failure);
+            }
+            if self
+                .initializing_left
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    (left > 0).then(|| left - 1)
+                })
+                .is_ok()
+            {
+                if let Some(notifier) = self
+                    .initializing_notifier
+                    .lock()
+                    .expect("initializing notifier lock")
+                    .take()
+                {
+                    let _ = notifier.send(());
+                }
+                return Err(ReconfigureFailure::Initializing);
+            }
             let outcome = self
                 .connection
                 .reinitialize_module(id, config)
@@ -254,6 +283,10 @@ impl ModuleAccess for FixtureAccess {
             }
             outcome
         })
+    }
+
+    fn mark_faulted(&self, _: &str) {
+        self.fault_calls.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -301,10 +334,16 @@ async fn fixture() -> FixtureAccess {
         connection,
         broker_task,
         reporter: FailureReporter::new(Arc::new(Quiet)),
+        registered: true,
+        enabled: true,
         unattested_service: None,
         use_unattested_proxy: false,
         skip_ready_wait: false,
+        forced_reinitialize_failure: None,
+        proxy_failure: None,
+        initializing_left: AtomicUsize::new(0),
         reinitialize_calls: Arc::new(AtomicUsize::new(0)),
+        fault_calls: Arc::new(AtomicUsize::new(0)),
         initializing_notifier: StdMutex::new(None),
         initializing_gate: StdMutex::new(None),
     }
@@ -425,10 +464,16 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
         connection,
         broker_task,
         reporter: FailureReporter::new(Arc::new(Quiet)),
+        registered: true,
+        enabled: true,
         unattested_service: None,
         use_unattested_proxy: false,
         skip_ready_wait: true,
+        forced_reinitialize_failure: None,
+        proxy_failure: None,
+        initializing_left: AtomicUsize::new(0),
         reinitialize_calls: calls.clone(),
+        fault_calls: Arc::new(AtomicUsize::new(0)),
         initializing_notifier: StdMutex::new(Some(notifying_tx)),
         initializing_gate: StdMutex::new(Some(gate_rx)),
     };
@@ -446,6 +491,110 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
     let proxy = retrying.await.unwrap().unwrap();
     assert_eq!(read_config(&proxy).await, config);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn retry_delay_is_applied_between_typed_initializing_attempts() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let mut access = fixture().await;
+    access.initializing_left.store(1, Ordering::SeqCst);
+    let calls = access.reinitialize_calls.clone();
+    let (attempt_tx, attempt_rx) = tokio::sync::oneshot::channel();
+    access.initializing_notifier = StdMutex::new(Some(attempt_tx));
+    let module = Arc::new(
+        ReconfigurableModule::new(access, ID)
+            .retry_while_initializing(2, Duration::from_secs(5)),
+    );
+    let config = serde_json::json!({ "route": "after-retry" });
+    let retrying_module = module.clone();
+    let retrying_config = config.clone();
+    let retrying = tokio::spawn(async move { retrying_module.proxy(&retrying_config).await });
+
+    attempt_rx.await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_secs(5)).await;
+    let proxy = retrying.await.unwrap().unwrap();
+    assert_eq!(read_config(&proxy).await, config);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn registry_and_enabled_gates_refuse_proxy_reconciliation() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let mut missing = fixture().await;
+    missing.registered = false;
+    let missing = ReconfigurableModule::new(missing, ID);
+    assert_eq!(
+        missing.proxy(&serde_json::json!({})).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+
+    let mut disabled = fixture().await;
+    disabled.enabled = false;
+    let disabled = ReconfigurableModule::new(disabled, ID);
+    assert_eq!(
+        disabled.proxy(&serde_json::json!({})).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+}
+
+#[tokio::test]
+async fn unavailable_fault_policy_only_marks_when_enabled() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let mut access = fixture().await;
+    access.forced_reinitialize_failure = Some(ReconfigureFailure::Unavailable);
+    let fault_calls = access.fault_calls.clone();
+    let module = ReconfigurableModule::new(access, ID).mark_faulted_on_unavailable(false);
+    assert_eq!(
+        module.proxy(&serde_json::json!({})).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(fault_calls.load(Ordering::SeqCst), 0);
+
+    let mut access = fixture().await;
+    access.forced_reinitialize_failure = Some(ReconfigureFailure::Unavailable);
+    let fault_calls = access.fault_calls.clone();
+    let module = ReconfigurableModule::new(access, ID).mark_faulted_on_unavailable(true);
+    assert_eq!(
+        module.proxy(&serde_json::json!({})).await.unwrap_err(),
+        ModuleCallError::Unavailable
+    );
+    assert_eq!(fault_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn lifecycle_and_member_proxy_failures_map_to_sanitized_outcomes() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    for (failure, expected) in [
+        (ProxyFailure::Transport, ModuleCallError::TransportFailed),
+        (
+            ProxyFailure::Contract,
+            ModuleCallError::IncompatibleContract,
+        ),
+    ] {
+        let mut access = fixture().await;
+        access.proxy_failure = Some(failure);
+        let lifecycle = ReconfigurableModule::new(access, ID);
+        assert_eq!(
+            lifecycle
+                .proxy(&serde_json::json!({ "route": "lifecycle" }))
+                .await
+                .unwrap_err(),
+            expected
+        );
+    }
+
+    let mut access = fixture().await;
+    access.proxy_failure = Some(ProxyFailure::Contract);
+    let member = ReconfigurableModule::new(access, ID)
+        .with_strategy(Reconfigure::Member("Configure"));
+    assert_eq!(
+        member
+            .proxy(&serde_json::json!({ "route": "member" }))
+            .await
+            .unwrap_err(),
+        ModuleCallError::ModuleFault
+    );
 }
 
 struct UnattestedService(Arc<AtomicUsize>);
@@ -508,10 +657,16 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
             connection,
             broker_task,
             reporter: FailureReporter::new(Arc::new(Quiet)),
+            registered: true,
+            enabled: true,
             unattested_service: Some(unattested_service),
             use_unattested_proxy: true,
             skip_ready_wait: false,
+            forced_reinitialize_failure: None,
+            proxy_failure: None,
+            initializing_left: AtomicUsize::new(0),
             reinitialize_calls: Arc::new(AtomicUsize::new(0)),
+            fault_calls: Arc::new(AtomicUsize::new(0)),
             initializing_notifier: StdMutex::new(None),
             initializing_gate: StdMutex::new(None),
         },
