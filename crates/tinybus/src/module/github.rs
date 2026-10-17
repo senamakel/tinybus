@@ -412,39 +412,14 @@ fn extract(name: &str, archive: &Path, destination: &Path) -> Result<()> {
             .unpack(destination)
             .map_err(|_| refused("release archive extraction failed"))?;
     } else if name.ends_with(".zip") {
-        let file =
-            std::fs::File::open(archive).map_err(|_| refused("release archive is unreadable"))?;
-        let mut zip =
-            zip::ZipArchive::new(file).map_err(|_| refused("release archive is invalid"))?;
-        for index in 0..zip.len() {
-            let mut entry = zip
-                .by_index(index)
-                .map_err(|_| refused("release archive is invalid"))?;
-            let Some(relative) = entry.enclosed_name() else {
-                return Err(refused("release archive contains an unsafe path"));
-            };
-            let target = destination.join(relative);
-            if entry.is_dir() {
-                std::fs::create_dir_all(&target)
-                    .map_err(|_| refused("release archive extraction failed"))?;
-            } else {
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|_| refused("release archive extraction failed"))?;
-                }
-                let mut output = std::fs::File::create(&target)
-                    .map_err(|_| refused("release archive extraction failed"))?;
-                std::io::copy(&mut entry, &mut output)
-                    .map_err(|_| refused("release archive extraction failed"))?;
-            }
-        }
+        super::zip_extract::extract(archive, destination)?;
     } else {
         return Err(refused("release asset is not a supported archive"));
     }
     Ok(())
 }
 
-fn refused(reason: impl Into<String>) -> Error {
+pub(super) fn refused(reason: impl Into<String>) -> Error {
     Error::module_refused(Path::new("github-release"), reason)
 }
 

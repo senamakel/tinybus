@@ -21,6 +21,12 @@ pub mod reconfigure;
 mod release;
 #[cfg(feature = "modules")]
 pub mod resolution;
+#[cfg(feature = "modules")]
+mod zip_deflate;
+#[cfg(feature = "modules")]
+mod zip_descriptor;
+#[cfg(feature = "modules")]
+mod zip_extract;
 
 #[cfg(feature = "modules")]
 pub(crate) mod host;
