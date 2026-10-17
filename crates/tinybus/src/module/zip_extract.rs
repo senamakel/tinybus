@@ -414,7 +414,7 @@ fn checked_path(original: &str) -> Result<(PathBuf, String, bool)> {
         return Err(refused("release archive contains an unsafe path"));
     }
     for part in &parts {
-        if part.ends_with(['.', ' ']) || is_windows_device_name(part) {
+        if part.ends_with('.') || part.ends_with(' ') || is_windows_device_name(part) {
             return Err(refused("release archive contains an unsafe path"));
         }
     }

@@ -22,8 +22,19 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
         "encrypted.zip" => include_bytes!("fixtures/encrypted.zip"),
         "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
         "overlap.zip" => include_bytes!("fixtures/overlap.zip"),
+        "one_module.zip" => include_bytes!("fixtures/one_module.zip"),
         _ => panic!("unknown test fixture"),
     };
+    fs::write(&archive, bytes).unwrap();
+    let result = extract(&archive, &destination);
+    (root, destination, result)
+}
+
+fn extract_fixture_bytes(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, Result<()>) {
+    let root = tempfile::tempdir().unwrap();
+    let archive = root.path().join("fixture.zip");
+    let destination = root.path().join("staging");
+    fs::create_dir(&destination).unwrap();
     fs::write(&archive, bytes).unwrap();
     let result = extract(&archive, &destination);
     (root, destination, result)
@@ -82,6 +93,18 @@ fn rejects_encryption_and_unsupported_methods() {
 #[test]
 fn rejects_overlapping_compressed_entry_ranges() {
     let (_root, _destination, result) = extract_fixture("overlap.zip");
+    assert!(result.is_err());
+}
+
+#[test]
+fn central_directory_entry_count_must_match_the_entries_read() {
+    let mut bytes = include_bytes!("fixtures/one_module.zip").to_vec();
+    let eocd = bytes
+        .windows(4)
+        .position(|signature| signature == b"PK\x05\x06")
+        .unwrap();
+    bytes[eocd + 10..eocd + 12].copy_from_slice(&0u16.to_le_bytes());
+    let (_root, _destination, result) = extract_fixture_bytes(&bytes);
     assert!(result.is_err());
 }
 
@@ -207,6 +230,27 @@ fn corrupt_central_crc_is_refused_without_promoting_partial_output() {
 }
 
 #[test]
+fn central_and_local_size_claims_must_match_the_decompressed_bytes() {
+    let mut bytes = include_bytes!("fixtures/one_module.zip").to_vec();
+    set_member_size(&mut bytes, "module.so", 6);
+    let (_root, _destination, result) = extract_fixture_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
+fn central_and_local_names_must_agree() {
+    let mut bytes = include_bytes!("fixtures/one_module.zip").to_vec();
+    let central = bytes
+        .windows(4)
+        .position(|signature| signature == b"PK\x01\x02")
+        .unwrap();
+    let name = central + 46;
+    bytes[name..name + 9].copy_from_slice(b"module.xx");
+    let (_root, _destination, result) = extract_fixture_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
 fn crc_zero_is_still_verified_for_an_empty_file() {
     let root = tempfile::tempdir().unwrap();
     let archive = root.path().join("fixture.zip");
@@ -293,6 +337,39 @@ fn set_member_crc(bytes: &mut [u8], name: &str, crc: u32) {
         let name_start = central + 46;
         if &bytes[name_start..name_start + name_len] == name.as_bytes() {
             bytes[central + 16..central + 20].copy_from_slice(&crc.to_le_bytes());
+            return;
+        }
+        offset = name_start + name_len;
+    }
+    panic!("fixture entry not found: {name}");
+}
+
+fn set_member_size(bytes: &mut [u8], name: &str, size: u32) {
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x03\x04")
+    {
+        let local = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[local + 26], bytes[local + 27]]) as usize;
+        let name_start = local + 30;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[local + 22..local + 26].copy_from_slice(&size.to_le_bytes());
+            break;
+        }
+        offset = name_start + name_len;
+    }
+
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x01\x02")
+    {
+        let central = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[central + 28], bytes[central + 29]]) as usize;
+        let name_start = central + 46;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[central + 24..central + 28].copy_from_slice(&size.to_le_bytes());
             return;
         }
         offset = name_start + name_len;
