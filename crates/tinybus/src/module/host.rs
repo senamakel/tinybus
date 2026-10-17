@@ -1607,7 +1607,11 @@ impl ModuleControl for ModuleHostInner {
                     "module lifecycle operation is already running",
                 ));
             }
-            if !matches!(state, ModuleState::Ready | ModuleState::Serving) {
+            let deferred_initialization = matches!(state, ModuleState::Resolved)
+                && module.transport.has_deferred_initializer();
+            if !matches!(state, ModuleState::Ready | ModuleState::Serving)
+                && !deferred_initialization
+            {
                 return Err(Error::ModuleUnavailable {
                     module: module.info.name.clone(),
                     state: state_name(&state).to_string(),
