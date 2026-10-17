@@ -237,6 +237,8 @@ struct FixtureAccess {
     fault_calls: Arc<AtomicUsize>,
     initializing_notifier: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
     initializing_gate: StdMutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    ensure_loaded_calls: AtomicUsize,
+    fail_ensure_loaded_at: Option<usize>,
 }
 
 impl Drop for FixtureAccess {
@@ -257,6 +259,12 @@ impl ModuleAccess for FixtureAccess {
     }
     fn ensure_loaded<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
         Box::pin(async move {
+            let call = self.ensure_loaded_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.fail_ensure_loaded_at == Some(call) {
+                self.reporter
+                    .report(ID, RECORD.version, Reason::ResolutionFailed);
+                return Err("module resolution failed".to_owned());
+            }
             if self.skip_ready_wait {
                 return Ok(());
             }
@@ -428,6 +436,8 @@ async fn fixture_with_sink(sink: Arc<dyn FailureSink>) -> FixtureAccess {
         fault_calls: Arc::new(AtomicUsize::new(0)),
         initializing_notifier: StdMutex::new(None),
         initializing_gate: StdMutex::new(None),
+        ensure_loaded_calls: AtomicUsize::new(0),
+        fail_ensure_loaded_at: None,
     }
 }
 
@@ -595,6 +605,8 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
         fault_calls: Arc::new(AtomicUsize::new(0)),
         initializing_notifier: StdMutex::new(Some(notifying_tx)),
         initializing_gate: StdMutex::new(Some(gate_rx)),
+        ensure_loaded_calls: AtomicUsize::new(0),
+        fail_ensure_loaded_at: None,
     };
     let module =
         Arc::new(ReconfigurableModule::new(access, ID).retry_while_initializing(2, Duration::ZERO));
@@ -685,6 +697,8 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
             fault_calls: Arc::new(AtomicUsize::new(0)),
             initializing_notifier: StdMutex::new(None),
             initializing_gate: StdMutex::new(None),
+            ensure_loaded_calls: AtomicUsize::new(0),
+            fail_ensure_loaded_at: None,
         },
         calls,
     )
