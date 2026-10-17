@@ -192,12 +192,22 @@ pub trait RuntimeLeaseDriver: Send + Sync + 'static {
 type WorkerFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type StartWorker<E> = Box<dyn FnOnce(watch::Sender<CloseState<E>>) -> WorkerFuture + Send + 'static>;
 
-#[derive(Clone)]
 enum CloseState<E> {
     Open,
     Running,
     Acknowledged,
     Unacknowledged(Arc<LeaseError<E>>),
+}
+
+impl<E> Clone for CloseState<E> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Open => Self::Open,
+            Self::Running => Self::Running,
+            Self::Acknowledged => Self::Acknowledged,
+            Self::Unacknowledged(error) => Self::Unacknowledged(error.clone()),
+        }
+    }
 }
 
 struct LeaseControl<E> {
@@ -240,12 +250,12 @@ impl<E: Send + Sync + 'static> LeaseControl<E> {
 }
 
 /// A cloneable owner of a started module reservation and its callback object.
-pub struct RuntimeLease<T, E> {
+pub struct RuntimeLease<T, E: Send + Sync + 'static> {
     object: Arc<T>,
     control: Arc<LeaseControl<E>>,
 }
 
-impl<T, E> RuntimeLease<T, E> {
+impl<T, E: Send + Sync + 'static> RuntimeLease<T, E> {
     /// The object or host handle created for this reservation.
     #[must_use]
     pub fn object(&self) -> &T { &self.object }
@@ -257,14 +267,14 @@ impl<T, E> RuntimeLease<T, E> {
     }
 }
 
-impl<T, E> Clone for RuntimeLease<T, E> {
+impl<T, E: Send + Sync + 'static> Clone for RuntimeLease<T, E> {
     fn clone(&self) -> Self {
         self.control.users.fetch_add(1, Ordering::Relaxed);
         Self { object: self.object.clone(), control: self.control.clone() }
     }
 }
 
-impl<T, E> Drop for RuntimeLease<T, E> {
+impl<T, E: Send + Sync + 'static> Drop for RuntimeLease<T, E> {
     fn drop(&mut self) {
         if self.control.users.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.control.start();
@@ -291,10 +301,10 @@ impl ModuleRuntime {
         I: crate::Interface,
         R: Fn(LeaseReport) + Send + Sync + 'static,
     {
-        let runtime = self.handle.clone();
+        let runtime = self.dedicated_handle();
         let host_objects = self.lease_host_object_registry();
         let (response, result) = oneshot::channel();
-        self.handle.spawn(async move {
+        self.spawn(async move {
             let activated = activate(runtime, host_objects, driver, make_callback, policy, reporter).await;
             let _ = response.send(activated);
         });
@@ -306,7 +316,7 @@ impl ModuleRuntime {
 
 async fn activate<D, F, I, R>(
     runtime: Handle,
-    host_objects: Arc<Mutex<super::runtime::HostObjectRegistry>>,
+    host_objects: Arc<tokio::sync::Mutex<super::runtime::HostObjectRegistry>>,
     driver: D,
     make_callback: F,
     policy: RetryPolicy,
