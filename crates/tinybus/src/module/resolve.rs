@@ -238,6 +238,24 @@ pub type ResolvedHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// `fn` so a registration carries no state.
 pub type LinkedFactory = fn() -> crate::Result<LinkedModule>;
 
+fn reconfigure_failure(error: &crate::Error) -> super::client::ReconfigureFailure {
+    match error {
+        crate::Error::ModuleUnavailable { state, .. }
+            if state.eq_ignore_ascii_case("initializing") =>
+        {
+            super::client::ReconfigureFailure::Initializing
+        }
+        crate::Error::ModuleUnavailable { .. } => super::client::ReconfigureFailure::Unavailable,
+        crate::Error::MethodFailed { name, .. } if name == crate::Error::MODULE_INITIALIZING => {
+            super::client::ReconfigureFailure::Initializing
+        }
+        crate::Error::MethodFailed { name, .. } if name == crate::Error::MODULE_UNAVAILABLE => {
+            super::client::ReconfigureFailure::Unavailable
+        }
+        _ => super::client::ReconfigureFailure::Failed,
+    }
+}
+
 impl ModuleAccess for Resolver {
     fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
         Resolver::find(self, id)
@@ -278,28 +296,12 @@ impl ModuleAccess for Resolver {
                 .runtime()
                 .await
                 .map_err(|_| super::client::ReconfigureFailure::Unavailable)?;
-            match runtime.connection().reinitialize_module(id, config).await {
-                Ok(_) => Ok(()),
-                Err(crate::Error::ModuleUnavailable { state, .. })
-                    if state.eq_ignore_ascii_case("initializing") =>
-                {
-                    Err(super::client::ReconfigureFailure::Initializing)
-                }
-                Err(crate::Error::ModuleUnavailable { .. }) => {
-                    Err(super::client::ReconfigureFailure::Unavailable)
-                }
-                Err(crate::Error::MethodFailed { ref name, .. })
-                    if name == crate::Error::MODULE_INITIALIZING =>
-                {
-                    Err(super::client::ReconfigureFailure::Initializing)
-                }
-                Err(crate::Error::MethodFailed { ref name, .. })
-                    if name == crate::Error::MODULE_UNAVAILABLE =>
-                {
-                    Err(super::client::ReconfigureFailure::Unavailable)
-                }
-                Err(_) => Err(super::client::ReconfigureFailure::Failed),
-            }
+            runtime
+                .connection()
+                .reinitialize_module(id, config)
+                .await
+                .map(|_| ())
+                .map_err(|error| reconfigure_failure(&error))
         })
     }
 
