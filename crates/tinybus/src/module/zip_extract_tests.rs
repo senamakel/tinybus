@@ -293,10 +293,23 @@ fn full_unicode_casefold_aliases_are_refused_portably() {
 
 #[test]
 fn distinct_unicode_paths_keep_their_archive_spelling() {
+    let decomposed = "cafe\u{301}/module.so";
+    let (path, _is_dir, _components) = checked_path(decomposed, MAX_PATH_DEPTH).unwrap();
+    assert_eq!(path, PathBuf::from(decomposed));
+
     let (_root, destination, result) = extract_fixture("unicode_paths.zip");
     result.unwrap();
     assert_eq!(fs::read(destination.join("café/module.so")).unwrap(), b"accented");
     assert_eq!(fs::read(destination.join("数据/module.so")).unwrap(), b"cjk");
+}
+
+#[test]
+fn expanded_collision_keys_count_toward_the_path_metadata_limit() {
+    let mut trie = PathNode::default();
+    let mut metadata_bytes = 0;
+    let result = trie.insert(Path::new("ß"), false, &mut metadata_bytes, 1);
+    assert!(result.is_err());
+    assert!(trie.children.is_empty());
 }
 
 #[test]
