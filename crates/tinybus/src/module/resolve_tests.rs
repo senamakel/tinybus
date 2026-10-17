@@ -8,9 +8,10 @@ use crate::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 fn reconfiguration_classifies_only_closed_lifecycle_wire_names() {
     let cases = [
         (
-            crate::Error::MethodFailed {
-                name: crate::Error::MODULE_INITIALIZING.into(),
-                message: "arbitrary remote prose is ignored".into(),
+            crate::Error::ModuleUnavailable {
+                module: "ignored".into(),
+                state: "initializing".into(),
+                detail: "arbitrary detail is ignored".into(),
             },
             crate::module::ReconfigureFailure::Initializing,
         ),
@@ -23,7 +24,7 @@ fn reconfiguration_classifies_only_closed_lifecycle_wire_names() {
         ),
         (
             crate::Error::MethodFailed {
-                name: "ai.tinyhumans.tinybus.Error.Other".into(),
+                name: crate::Error::MODULE_UNAVAILABLE.into(),
                 message: "module initializing".into(),
             },
             crate::module::ReconfigureFailure::Failed,

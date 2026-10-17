@@ -350,8 +350,8 @@ async fn connection_wire_errors_preserve_initializing_and_unavailable_as_closed_
         .unwrap_err();
     assert!(matches!(
         initializing,
-        crate::Error::MethodFailed { ref name, .. }
-            if name == crate::Error::MODULE_INITIALIZING
+        crate::Error::ModuleUnavailable { ref state, .. }
+            if state == "initializing"
     ));
     release_tx.send(()).unwrap();
     in_flight.await.unwrap().unwrap();
@@ -568,7 +568,6 @@ async fn a_failed_change_forgets_the_old_fingerprint_before_a_revert() {
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
-#[tokio::test]
 #[tokio::test]
 async fn member_strategy_applies_config_through_the_linked_fixture_bus() {
     let _test_guard = FIXTURE_LOCK.lock().await;

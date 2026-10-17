@@ -797,6 +797,7 @@ impl Broker {
                 ),
                 member: Some(MemberName::new(member).expect("literal is a valid member")),
                 error_name: None,
+                module_lifecycle: None,
                 // The bus's own announcements are broadcasts by construction.
                 confidential: false,
                 sensitive: false,

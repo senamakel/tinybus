@@ -56,6 +56,9 @@ pub enum MessageKind {
 pub enum ModuleLifecycle {
     /// The module has not finished its current initialization attempt.
     Initializing,
+    /// A future lifecycle state this version cannot classify safely.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Everything the router and the dispatcher need, and nothing else.

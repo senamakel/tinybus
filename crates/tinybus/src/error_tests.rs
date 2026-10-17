@@ -154,7 +154,7 @@ fn every_structured_error_has_a_stable_wire_name() {
 }
 
 #[test]
-fn module_unavailable_wire_name_preserves_only_the_initializing_state() {
+fn module_unavailable_wire_name_remains_stable_across_lifecycle_states() {
     let unavailable = Error::ModuleUnavailable {
         module: "module".into(),
         state: "faulted".into(),
@@ -166,5 +166,5 @@ fn module_unavailable_wire_name_preserves_only_the_initializing_state() {
         detail: "safe".into(),
     };
     assert_eq!(unavailable.wire_name(), Error::MODULE_UNAVAILABLE);
-    assert_eq!(initializing.wire_name(), Error::MODULE_INITIALIZING);
+    assert_eq!(initializing.wire_name(), Error::MODULE_UNAVAILABLE);
 }
