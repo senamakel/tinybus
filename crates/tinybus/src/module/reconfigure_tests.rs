@@ -156,7 +156,7 @@ impl FailureSink for Quiet {
 }
 
 struct FixtureAccess {
-    host: Arc<ModuleHost>,
+    _host: Arc<ModuleHost>,
     connection: Connection,
     broker_task: tokio::task::JoinHandle<crate::Result<()>>,
     reporter: FailureReporter,
@@ -278,7 +278,7 @@ async fn fixture() -> FixtureAccess {
         .await
         .unwrap();
     FixtureAccess {
-        host,
+        _host: host,
         connection,
         broker_task,
         reporter: FailureReporter::new(Arc::new(Quiet)),
@@ -401,7 +401,7 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
     let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
     let calls = Arc::new(AtomicUsize::new(0));
     let access = FixtureAccess {
-        host,
+        _host: host,
         connection,
         broker_task,
         reporter: FailureReporter::new(Arc::new(Quiet)),
@@ -483,7 +483,7 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
         .unwrap();
     (
         FixtureAccess {
-            host,
+            _host: host,
             connection,
             broker_task,
             reporter: FailureReporter::new(Arc::new(Quiet)),
