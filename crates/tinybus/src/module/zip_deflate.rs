@@ -12,8 +12,8 @@ pub(super) fn copy_bounded(
     actual: &mut u64,
 ) -> Result<()> {
     let mut limited = input.take(remaining.saturating_add(1));
-    *actual = io::copy(&mut limited, output)
-        .map_err(|_| refused("release archive extraction failed"))?;
+    *actual =
+        io::copy(&mut limited, output).map_err(|_| refused("release archive extraction failed"))?;
     if *actual > remaining {
         return Err(refused("release archive exceeds the extraction limit"));
     }
@@ -71,7 +71,9 @@ impl<R: Read> Read for StrictDeflate<R> {
                         flate2::FlushDecompress::None
                     },
                 )
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid DEFLATE stream"))?;
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid DEFLATE stream")
+                })?;
             let consumed = (self.decoder.total_in() - before_in) as usize;
             let produced = (self.decoder.total_out() - before_out) as usize;
             self.position += consumed;

@@ -1,7 +1,8 @@
 use super::*;
 
 fn encoded(bytes: &[u8]) -> Vec<u8> {
-    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(bytes).unwrap();
     encoder.finish().unwrap()
 }
