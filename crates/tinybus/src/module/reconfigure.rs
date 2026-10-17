@@ -49,7 +49,13 @@ pub struct ReconfigurableModule {
     retry_delay: Duration,
     mark_faulted: bool,
     transition: Mutex<()>,
-    loaded: std::sync::Mutex<Option<ConfigFingerprint>>,
+    loaded: std::sync::Mutex<ConfigurationState>,
+}
+
+#[derive(Default)]
+struct ConfigurationState {
+    fingerprint: Option<ConfigFingerprint>,
+    member_uncertain: bool,
 }
 
 impl ReconfigurableModule {
@@ -64,7 +70,7 @@ impl ReconfigurableModule {
             retry_delay: Duration::ZERO,
             mark_faulted: false,
             transition: Mutex::new(()),
-            loaded: std::sync::Mutex::new(None),
+            loaded: std::sync::Mutex::new(ConfigurationState::default()),
         }
     }
 
@@ -98,13 +104,13 @@ impl ReconfigurableModule {
     /// Returns an error if the configuration cannot be serialized.
     pub fn record_loaded_with(&self, config: &impl Serialize) -> Result<(), serde_json::Error> {
         let fingerprint = ConfigFingerprint::of(config)?;
-        *self.loaded_state() = Some(fingerprint);
+        self.loaded_state().fingerprint = Some(fingerprint);
         Ok(())
     }
 
     /// Forget which configuration the module currently holds.
     pub fn invalidate(&self) {
-        *self.loaded_state() = None;
+        self.loaded_state().fingerprint = None;
     }
 
     /// Obtain a proxy after reconciling the module's configuration.
@@ -118,7 +124,9 @@ impl ReconfigurableModule {
     /// Returns a sanitized module outcome or a JSON serialization error.
     pub async fn proxy(&self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
         let _guard = self.transition.lock().await;
-        self.proxy_locked(config).await
+        self.proxy_locked(config)
+            .await
+            .map_err(|error| self.report_failure(error))
     }
 
     /// Hold configuration admission exclusively through a caller's bus call.
@@ -134,6 +142,9 @@ impl ReconfigurableModule {
     }
 
     async fn proxy_locked(&self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
+        if self.loaded_state().member_uncertain {
+            return Err(ModuleCallError::Unavailable);
+        }
         let Some(record) = self.access.find(self.module_id) else {
             return Err(ModuleCallError::Unavailable);
         };
@@ -147,18 +158,14 @@ impl ReconfigurableModule {
 
         let fingerprint =
             ConfigFingerprint::of(config).map_err(|_| ModuleCallError::ModuleFault)?;
-        let current = self
-            .loaded
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let current = self.loaded_state().fingerprint.clone();
         if current.as_ref() != Some(&fingerprint) {
             // Clear before the operation: any failure leaves the held config
             // unknown, so reverting to the prior config still triggers a retry.
-            *self.loaded_state() = None;
+            self.loaded_state().fingerprint = None;
             let value = serde_json::to_value(config).map_err(|_| ModuleCallError::ModuleFault)?;
-            self.reconfigure(value).await?;
-            *self.loaded_state() = Some(fingerprint);
+            self.reconfigure(value, fingerprint.clone()).await?;
+            self.loaded_state().fingerprint = Some(fingerprint);
         }
 
         self.access
@@ -170,7 +177,11 @@ impl ReconfigurableModule {
             })
     }
 
-    async fn reconfigure(&self, config: serde_json::Value) -> Result<(), ModuleCallError> {
+    async fn reconfigure(
+        &self,
+        config: serde_json::Value,
+        fingerprint: ConfigFingerprint,
+    ) -> Result<(), ModuleCallError> {
         let mut outcome = Err(ReconfigureFailure::Failed);
         for attempt in 0..self.retry_attempts {
             outcome = match self.strategy {
@@ -180,7 +191,8 @@ impl ReconfigurableModule {
                         .await
                 }
                 Reconfigure::Member(member) => {
-                    self.member_reconfigure(member, config.clone()).await
+                    self.member_reconfigure(member, config.clone(), fingerprint.clone())
+                        .await
                 }
             };
             match outcome {
@@ -214,6 +226,7 @@ impl ReconfigurableModule {
         &self,
         member: &'static str,
         config: serde_json::Value,
+        fingerprint: ConfigFingerprint,
     ) -> Result<(), ReconfigureFailure> {
         let record = self
             .access
@@ -233,14 +246,50 @@ impl ReconfigurableModule {
             .map_err(|failure| match failure {
                 ProxyFailure::Transport | ProxyFailure::Contract => ReconfigureFailure::Failed,
             })?;
-        proxy
+        // TinyBus deadlines and caller cancellation stop waiting but do not
+        // cancel a handler already running in the remote module. Fence future
+        // admissions before polling the call, and keep the fence on every
+        // ambiguous result. A new coordinator may be created only after the
+        // host has independently established that the module was restarted.
+        self.loaded_state().member_uncertain = true;
+        match proxy
             .call_confidential::<serde_json::Value>(member, (config,))
             .await
-            .map(|_| ())
-            .map_err(|error| super::resolve::access::reconfigure_failure(&error))
+        {
+            Ok(_) => {
+                let mut state = self.loaded_state();
+                state.fingerprint = Some(fingerprint);
+                state.member_uncertain = false;
+                Ok(())
+            }
+            Err(error) => Err(super::resolve::access::reconfigure_failure(&error)),
+        }
     }
 
-    fn loaded_state(&self) -> std::sync::MutexGuard<'_, Option<ConfigFingerprint>> {
+    fn report_failure(&self, error: ModuleCallError) -> ModuleCallError {
+        let Some(record) = self.access.find(self.module_id) else {
+            self.access.reporter().report_unknown_module();
+            return error;
+        };
+        let reason = match error {
+            ModuleCallError::Unavailable => super::failure::Reason::ModuleUnavailable,
+            ModuleCallError::IncompatibleContract => super::failure::Reason::IncompatibleContract,
+            ModuleCallError::TransportFailed => super::failure::Reason::TransportFailed,
+            ModuleCallError::ModuleFault => super::failure::Reason::ModuleFault,
+        };
+        if matches!(reason, super::failure::Reason::ModuleUnavailable) {
+            self.access
+                .reporter()
+                .report(record.id, record.version, reason);
+        } else {
+            self.access
+                .reporter()
+                .report_invocation(record.id, record.version, reason);
+        }
+        error
+    }
+
+    fn loaded_state(&self) -> std::sync::MutexGuard<'_, ConfigurationState> {
         self.loaded
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -257,7 +306,10 @@ impl ReconfigureGuard<'_> {
     /// Reconcile the configuration while retaining exclusive access until this
     /// guard is dropped.
     pub async fn proxy(&mut self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
-        self.module.proxy_locked(config).await
+        self.module
+            .proxy_locked(config)
+            .await
+            .map_err(|error| self.module.report_failure(error))
     }
 }
 
