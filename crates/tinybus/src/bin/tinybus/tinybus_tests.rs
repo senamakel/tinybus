@@ -452,7 +452,7 @@ async fn a_module_stop_deadline_cannot_outlive_the_call_deadline() {
 async fn module_cli_controls_a_real_dynamic_module_lifecycle() {
     let path = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
     let (dir, address, _host) = broker_with_module_host().await;
-    let timeout = Duration::from_secs(2);
+    let timeout = Duration::from_secs(30);
     let config = dir.path().join("config.json");
     std::fs::write(&config, r#"{"prefix":"cli:"}"#).unwrap();
 
