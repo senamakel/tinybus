@@ -1,1 +1,0 @@
-{"tinybus_manifest":1,"module":{"name":"clock","version":"0.1.0"},"bus_name":"ai.tinyhumans.module.Clock","object_path":"/ai/tinyhumans/module/Clock","provides":[],"requires":[],"environment":[],"capabilities":[],"lazy_init":true,"worker_threads":1,"on_panic":"detach"}
