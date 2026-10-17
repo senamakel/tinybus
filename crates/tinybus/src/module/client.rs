@@ -303,16 +303,23 @@ impl ModuleClient {
         args: impl Serialize,
     ) -> Result<R, ModuleCallError> {
         let record = self.record(module)?;
-        let asset = crate::module::platform::host_candidates()
+        let candidates = crate::module::platform::host_candidates();
+        // The resolver tries compatible release assets in host-candidate order
+        // and may fall back after an admission failure. Keep each archive and
+        // library pin paired from the trusted registry so the loaded fallback
+        // can prove itself without allowing digest mixing across assets.
+        let compatible_assets: Vec<_> = record
+            .assets
             .iter()
-            .find_map(|host| record.asset_for(host))
+            .filter(|asset| candidates.iter().any(|host| host == asset.host_key))
             .filter(|asset| {
                 valid_sha256(asset.sha256) && asset.library_sha256.is_some_and(valid_sha256)
-            });
-        let Some(asset) = asset else {
+            })
+            .collect();
+        if compatible_assets.is_empty() {
             report(&*self.access, record, Reason::ModuleUnavailable);
             return Err(ModuleCallError::Unavailable);
-        };
+        }
         let preparation = self.access.prepare_attested(record.id);
         let prepared = if let Some(timeout) = self.timeout {
             tokio::time::timeout(timeout, preparation)
@@ -356,13 +363,15 @@ impl ModuleClient {
         };
         let expected_name = crate::name::BusName::new(record.bus_name)
             .expect("a release registry carries a validated bus name");
-        let expected_library = asset.library_sha256.expect("filtered library pin");
         if attestation.name != expected_name
-            || !attestation.sha256.eq_ignore_ascii_case(asset.sha256)
-            || !attestation
-                .library_sha256
-                .as_deref()
-                .is_some_and(|digest| digest.eq_ignore_ascii_case(expected_library))
+            || !compatible_assets.iter().any(|asset| {
+                attestation.sha256.eq_ignore_ascii_case(asset.sha256)
+                    && attestation.library_sha256.as_deref().is_some_and(|digest| {
+                        digest.eq_ignore_ascii_case(
+                            asset.library_sha256.expect("filtered library pin"),
+                        )
+                    })
+            })
         {
             report(&*self.access, record, Reason::ModuleUnavailable);
             return Err(ModuleCallError::Unavailable);
