@@ -35,12 +35,33 @@ use crate::module::ModuleHost;
 use crate::transport::memory::MemoryBus;
 use crate::{Connection, Proxy};
 
+/// A per-attachment setup callback for a statically linked module.
+///
+/// Unlike the module's export-time setup function, this value belongs to one
+/// admission only and can capture host state without process-global slots.
+pub type LinkedSetup =
+    Box<dyn FnOnce(Connection) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send>> + Send>;
+
+/// Rust-only entrypoint emitted by `tinybus_module::module_export_static!`.
+///
+/// Dynamic modules continue to use the stable C ABI [`crate::module::abi::TbModuleInit`].
+/// This entrypoint is only for linked exports and replaces that export's
+/// default setup callback for one initialization.
+#[doc(hidden)]
+pub type LinkedModuleInitWithSetup = unsafe fn(
+    *const crate::module::abi::TbHostVtable,
+    *mut crate::module::abi::TbModuleVtable,
+    LinkedSetup,
+) -> i32;
+
 /// Work run once on the new runtime, before the first module can load.
 ///
 /// A host uses it to install the callback services its modules call back into,
 /// so they are being served before any module resolves.
-pub type RuntimeSetup =
-    Box<dyn FnOnce(Connection) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send>> + Send>;
+pub type RuntimeSetup = Box<
+    dyn for<'a> FnOnce(Connection, &'a ModuleHost) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>>
+        + Send,
+>;
 
 /// Thread names for a [`ModuleRuntime`], so a host's threads are recognisable.
 #[derive(Debug, Clone)]
@@ -68,6 +89,7 @@ pub struct ModuleRuntime {
     connection: Connection,
     /// Handle for work that must outlive the caller's runtime.
     handle: tokio::runtime::Handle,
+    host_objects: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
 }
 
 impl ModuleRuntime {
