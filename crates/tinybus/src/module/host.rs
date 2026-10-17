@@ -408,6 +408,43 @@ impl ModuleHost {
         modules
     }
 
+    /// Initialize a loaded module and wait for its host lifecycle readiness.
+    ///
+    /// This host-owned preparation carries no business message. It is the
+    /// readiness barrier used before a caller asks the broker to attest a
+    /// lazily registered recipient.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed lifecycle error when the name is not a loaded module,
+    /// initialization fails, or the module does not reach `READY`.
+    pub async fn ensure_ready(&self, bus_name: &str) -> Result<()> {
+        let transport = self
+            .inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .find(|module| module.info.manifest.bus_name.as_str() == bus_name)
+            .map(|module| Arc::clone(&module.transport))
+            .ok_or_else(|| Error::ModuleUnavailable {
+                module: "registered module".to_string(),
+                state: "unavailable".to_string(),
+                detail: "module is not loaded".to_string(),
+            })?;
+        transport.ensure_initialized().await?;
+        transport.wait_ready().await;
+        if transport.is_ready() {
+            Ok(())
+        } else {
+            Err(Error::ModuleUnavailable {
+                module: "registered module".to_string(),
+                state: "unavailable".to_string(),
+                detail: "module did not become ready".to_string(),
+            })
+        }
+    }
+
     /// Load one newly installed module.
     ///
     /// A verified operator allowlist admits confidential delivery to the exact
@@ -1268,6 +1305,7 @@ impl ModuleHost {
                 crate::attest::Attestation {
                     name: admitted.manifest.bus_name.clone(),
                     sha256,
+                    library_sha256: activation.pinned_library_sha256,
                 },
             );
         }
