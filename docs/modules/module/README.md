@@ -99,7 +99,9 @@ a slot/generation address token, never a dereferenced pointer or extra ABI
 allocation. Callback lookup acquires the exact State before releasing registry
 exclusion. Successful teardown retires its registry anchor; only actual State
 last-Drop releases the slot, so old views and surviving SDK resources count
-against the limit. Generations never wrap: exhaustion permanently denies that
+before publishing physical completion. Only actual State last-Drop releases the
+slot, so old views and surviving SDK resources count against the limit.
+Generations never wrap: exhaustion permanently denies that
 slot. Null, stale or unknown context tokens return `TB_CLOSED` for otherwise
 valid terminal callbacks and cannot select a replacement. Legacy shutdown's
 null-context behavior remains unchanged.
