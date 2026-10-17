@@ -23,7 +23,7 @@ pub(super) fn validate_data_descriptor(
     let available = directory_offset
         .checked_sub(offset)
         .ok_or_else(|| refused("release archive has an invalid data descriptor"))?;
-    if available < if zip64 { 20 } else { 12 } {
+    if available < (if zip64 { 20u64 } else { 12u64 }) {
         return Ok(false);
     }
     let read_size = available.min(max_size) as usize;

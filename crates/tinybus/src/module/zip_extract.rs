@@ -26,7 +26,7 @@ const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 4096;
 const MAX_PATH_DEPTH: usize = 128;
 const MAX_PATH_METADATA_BYTES: usize = 16 * 1024 * 1024;
-const MAX_PATH_COMPONENTS: usize = 1_000_000;
+const MAX_PATH_COMPONENTS: usize = 250_000;
 
 #[derive(Clone, Copy)]
 struct ExtractionLimits {
