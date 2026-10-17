@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 const ID: &str = "reconfigure-test-module";
 const BUS: &str = "ai.tinyhumans.test.Reconfigure";
+const UNATTESTED_BUS: &str = "ai.tinyhumans.test.Unattested";
 const PATH: &str = "/ai/tinyhumans/test/Reconfigure";
 static RECORD: ReleaseRecord = ReleaseRecord {
     id: ID,
@@ -131,6 +132,8 @@ struct FixtureAccess {
     connection: Connection,
     broker_task: tokio::task::JoinHandle<crate::Result<()>>,
     reporter: FailureReporter,
+    unattested_service: Option<Connection>,
+    use_unattested_proxy: bool,
     reinitialize_calls: Arc<AtomicUsize>,
     initializing_left: AtomicUsize,
 }
@@ -160,8 +163,13 @@ impl ModuleAccess for FixtureAccess {
         object_path: &'a str,
     ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
         Box::pin(async move {
+            let destination = if self.use_unattested_proxy {
+                UNATTESTED_BUS
+            } else {
+                bus_name
+            };
             self.connection
-                .proxy(bus_name, object_path, bus_name)
+                .proxy(destination, object_path, bus_name)
                 .map_err(|_| ProxyFailure::Contract)
         })
     }
@@ -234,9 +242,74 @@ async fn fixture() -> FixtureAccess {
         connection,
         broker_task,
         reporter: FailureReporter::new(Arc::new(Quiet)),
+        unattested_service: None,
+        use_unattested_proxy: false,
         reinitialize_calls: Arc::new(AtomicUsize::new(0)),
         initializing_left: AtomicUsize::new(0),
     }
+}
+
+struct UnattestedService(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::Interface for UnattestedService {
+    fn name(&self) -> crate::InterfaceName {
+        crate::InterfaceName::new(BUS).unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec![crate::MemberName::new("Configure").unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(serde_json::Value::Null)
+    }
+}
+
+async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsize>) {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let host = Arc::new(ModuleHost::new(broker));
+    host.attach_linked_with_config(
+        crate::module::LinkedModule {
+            descriptor: TbAbiDescriptor::current(ID, "0.0.0"),
+            manifest: fixture_manifest(),
+            init: fixture_init,
+        },
+        serde_json::Value::Null,
+    )
+    .unwrap();
+    let connection = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let unattested_service = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    unattested_service.request_name(UNATTESTED_BUS).await.unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    unattested_service
+        .serve_at(ObjectPath::new(PATH).unwrap(), UnattestedService(calls.clone()))
+        .await
+        .unwrap();
+    (
+        FixtureAccess {
+            host,
+            connection,
+            broker_task,
+            reporter: FailureReporter::new(Arc::new(Quiet)),
+            unattested_service: Some(unattested_service),
+            use_unattested_proxy: true,
+            reinitialize_calls: Arc::new(AtomicUsize::new(0)),
+            initializing_left: AtomicUsize::new(0),
+        },
+        calls,
+    )
 }
 
 async fn read_config(proxy: &Proxy) -> serde_json::Value {
@@ -333,6 +406,17 @@ async fn member_strategy_applies_config_through_the_linked_fixture_bus() {
     let config = serde_json::json!({ "route": "member" });
     let proxy = module.proxy(&config).await.unwrap();
     assert_eq!(read_config(&proxy).await, config);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn member_strategy_refuses_an_unattested_recipient_before_delivery() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let (access, calls) = fixture_with_unattested_destination().await;
+    assert!(access.unattested_service.is_some());
+    let module = ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure"));
+    let result = module.proxy(&serde_json::json!({ "token": "private" })).await;
+    assert_eq!(result.unwrap_err(), ModuleCallError::ModuleFault);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
