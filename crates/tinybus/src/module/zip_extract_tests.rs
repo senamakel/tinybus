@@ -177,7 +177,7 @@ fn link_and_special_mode_metadata_never_create_links_or_privileges() {
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & (libc::S_ISUID | libc::S_ISGID), 0);
+        assert_eq!(mode & (libc::S_ISUID | libc::S_ISGID) as u32, 0);
     }
 }
 
