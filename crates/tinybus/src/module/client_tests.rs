@@ -355,8 +355,9 @@ async fn detailed_call_preserves_remote_failure_without_rendering_it() {
     assert_eq!(sanitized, ModuleCallError::ModuleFault);
     assert!(!format!("{sanitized:?}").contains(REMOTE_DETAIL));
     assert!(!sanitized.to_string().contains(REMOTE_DETAIL));
-    assert_eq!(sink.0.lock().unwrap().len(), 1);
-    assert!(!format!("{:?}", sink.0.lock().unwrap()).contains(REMOTE_DETAIL));
+    let reports = sink.0.lock().unwrap();
+    assert_eq!(reports.len(), 2);
+    assert!(!format!("{reports:?}").contains(REMOTE_DETAIL));
 }
 
 struct JsonFixture;
