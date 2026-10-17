@@ -305,7 +305,7 @@ impl crate::Interface for DetailedFailure {
 async fn detailed_call_preserves_remote_failure_without_rendering_it() {
     let sink = Arc::new(Recording::default());
     let transport = crate::transport::memory::MemoryBus::new();
-    let _broker = crate::Broker::new().spawn(transport.clone());
+    let _broker = crate::broker::Broker::new().spawn(transport.clone());
     let service = crate::Connection::connect(transport.connect().await.unwrap())
         .await
         .unwrap();

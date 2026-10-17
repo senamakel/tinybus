@@ -122,6 +122,69 @@ impl std::fmt::Display for ModuleCallError {
 
 impl std::error::Error for ModuleCallError {}
 
+/// A detailed call failure with remote prose kept out of its renderings.
+///
+/// The fields are available to a product adapter that has its own display
+/// policy. `Debug`, `Display`, and the failure reporter never include them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ModuleCallFailure {
+    /// The closed, sanitized module outcome.
+    pub kind: ModuleCallError,
+    /// The exact dotted name returned by a remote method failure, or a fixed
+    /// local name for failures that did not come from a remote method.
+    pub wire_name: String,
+    /// The exact remote method message, or a fixed local message.
+    pub message: String,
+}
+
+impl ModuleCallFailure {
+    fn local(kind: ModuleCallError) -> Self {
+        let wire_name = match kind {
+            ModuleCallError::Unavailable => "ai.tinyhumans.tinybus.Error.ModuleUnavailable",
+            ModuleCallError::IncompatibleContract => {
+                "ai.tinyhumans.tinybus.Error.IncompatibleVersion"
+            }
+            ModuleCallError::TransportFailed => "ai.tinyhumans.tinybus.Error.Transport",
+            ModuleCallError::ModuleFault => "ai.tinyhumans.tinybus.Error.Failed",
+        };
+        Self {
+            kind,
+            wire_name: wire_name.to_string(),
+            message: "module call failed".to_string(),
+        }
+    }
+
+    fn from_error(error: &Error, kind: ModuleCallError) -> Self {
+        match error {
+            Error::MethodFailed { name, message } => Self {
+                kind,
+                wire_name: name.clone(),
+                message: message.clone(),
+            },
+            _ => Self::local(kind),
+        }
+    }
+}
+
+impl std::fmt::Debug for ModuleCallFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ModuleCallFailure")
+            .field("kind", &self.kind)
+            .field("wire_name", &"<redacted>")
+            .field("message", &"<redacted>")
+            .finish()
+    }
+}
+
+impl std::fmt::Display for ModuleCallFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{kind}", kind = self.kind)
+    }
+}
+
+impl std::error::Error for ModuleCallFailure {}
+
 /// Calls contract members on registry modules, loading them lazily.
 #[derive(Clone)]
 pub struct ModuleClient {
@@ -181,6 +244,23 @@ impl ModuleClient {
         args: impl Serialize,
     ) -> Result<R, ModuleCallError> {
         self.invoke(module, member, args, false).await
+    }
+
+    /// Execute a contract member and retain a remote method's wire failure.
+    ///
+    /// Remote details are available only in the returned fields. Its `Debug`
+    /// and `Display` renderings, and the terminal report, remain sanitized.
+    ///
+    /// # Errors
+    ///
+    /// A detailed [`ModuleCallFailure`].
+    pub async fn call_detailed<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        self.invoke_detailed(module, member, args, false).await
     }
 
     /// Execute a confidential member after TinyBus recipient attestation.
@@ -353,6 +433,27 @@ impl ModuleClient {
         invoke_proxy(&*self.access, record, &proxy, member, args, confidential).await
     }
 
+    async fn invoke_detailed<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+        confidential: bool,
+    ) -> Result<R, ModuleCallFailure> {
+        let record = self
+            .record(module)
+            .map_err(ModuleCallFailure::local)?;
+        let proxy = if let Some(fixture) = &self.fixture {
+            fixture.clone()
+        } else {
+            self.load_proxy(record, record.object_path)
+                .await
+                .map_err(ModuleCallFailure::local)?
+        };
+        let proxy = self.with_deadline(proxy);
+        invoke_proxy_detailed(&*self.access, record, &proxy, member, args, confidential).await
+    }
+
     fn decode_json<R: DeserializeOwned>(
         &self,
         module: &str,
@@ -412,12 +513,25 @@ async fn invoke_proxy<R: DeserializeOwned>(
     args: impl Serialize,
     confidential: bool,
 ) -> Result<R, ModuleCallError> {
+    invoke_proxy_detailed(access, record, proxy, member, args, confidential)
+        .await
+        .map_err(|failure| failure.kind)
+}
+
+async fn invoke_proxy_detailed<R: DeserializeOwned>(
+    access: &dyn ModuleAccess,
+    record: &'static ReleaseRecord,
+    proxy: &Proxy,
+    member: &str,
+    args: impl Serialize,
+    confidential: bool,
+) -> Result<R, ModuleCallFailure> {
     let result = if confidential {
         proxy.call_confidential(member, args).await
     } else {
         proxy.call(member, args).await
     };
-    result.map_err(|error| report_proxy_failure(access.reporter(), record, &error))
+    result.map_err(|error| report_proxy_failure_detailed(access.reporter(), record, &error))
 }
 
 /// Report a bus failure without exposing its payload. Product adapters may
@@ -427,13 +541,21 @@ pub fn report_proxy_failure(
     record: &ReleaseRecord,
     error: &Error,
 ) -> ModuleCallError {
+    report_proxy_failure_detailed(reporter, record, error).kind
+}
+
+fn report_proxy_failure_detailed(
+    reporter: &FailureReporter,
+    record: &ReleaseRecord,
+    error: &Error,
+) -> ModuleCallFailure {
     let (outcome, reason) = classify(error);
     if reason == Reason::ModuleUnavailable {
         reporter.report(record.id, record.version, reason);
     } else {
         reporter.report_invocation(record.id, record.version, reason);
     }
-    outcome
+    ModuleCallFailure::from_error(error, outcome)
 }
 
 fn report(access: &dyn ModuleAccess, record: &ReleaseRecord, reason: Reason) {
@@ -491,6 +613,12 @@ pub fn classify(error: &Error) -> (ModuleCallError, Reason) {
         Error::MethodFailed { .. } => (ModuleCallError::ModuleFault, Reason::ModuleFault),
         _ => (ModuleCallError::TransportFailed, Reason::TransportFailed),
     }
+}
+
+/// Normalize any bus error to the closed module-call classification.
+#[must_use]
+pub fn wire_kind(error: &Error) -> ModuleCallError {
+    classify(error).0
 }
 
 #[cfg(test)]
