@@ -591,8 +591,19 @@ async fn cleanup_worker<D, E>(
                 // only its eventual result can acknowledge cleanup or permit a later retry.
                 match stop.await {
                     StopOutcome::Acknowledged => {
-                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
-                        if let Some(guard) = callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                        report(
+                            &reporter,
+                            LeaseReport {
+                                phase: LeasePhase::Stop,
+                                attempt: Some(attempt),
+                                outcome: LeaseReportOutcome::Acknowledged,
+                            },
+                        );
+                        if let Some(guard) = callback_guard
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take()
+                        {
                             guard.remove().await;
                         }
                         state.send_replace(CloseState::Acknowledged);
@@ -603,8 +614,20 @@ async fn cleanup_worker<D, E>(
                         Err(error)
                     }
                     StopOutcome::Unacknowledged(error) => {
-                        report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Unacknowledged });
-                        state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, Some(error)))));
+                        report(
+                            &reporter,
+                            LeaseReport {
+                                phase: LeasePhase::Stop,
+                                attempt: Some(attempt),
+                                outcome: LeaseReportOutcome::Unacknowledged,
+                            },
+                        );
+                        state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
+                            LeasePhase::Stop,
+                            Some(attempt),
+                            false,
+                            Some(error),
+                        ))));
                         std::future::pending::<()>().await;
                     }
                 }
@@ -650,8 +673,20 @@ async fn cleanup_worker<D, E>(
                 }
             }
             StopOutcome::Unacknowledged(error) => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Unacknowledged });
-                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, Some(error)))));
+                report(
+                    &reporter,
+                    LeaseReport {
+                        phase: LeasePhase::Stop,
+                        attempt: Some(attempt),
+                        outcome: LeaseReportOutcome::Unacknowledged,
+                    },
+                );
+                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
+                    LeasePhase::Stop,
+                    Some(attempt),
+                    false,
+                    Some(error),
+                ))));
                 std::future::pending::<()>().await;
             }
         }

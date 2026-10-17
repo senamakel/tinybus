@@ -34,7 +34,10 @@ enum DriverCall {
     Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
     Object(Identity, oneshot::Sender<Result<Object, DriverError>>),
     Start(oneshot::Sender<Result<(), DriverError>>),
-    Stop(std::time::Instant, oneshot::Sender<StopOutcome<DriverError>>),
+    Stop(
+        std::time::Instant,
+        oneshot::Sender<StopOutcome<DriverError>>,
+    ),
     Validated,
 }
 
@@ -182,7 +185,9 @@ impl Harness {
                 Ok(Callback(calls))
             },
             policy,
-            move |report| { let _ = reports.send(report); },
+            move |report| {
+                let _ = reports.send(report);
+            },
         )
     }
 
@@ -347,9 +352,11 @@ async fn exhausted_stop_parks_the_callback_until_an_acknowledgement() {
 
     for _ in 0..3 {
         match harness.calls.recv().await.unwrap() {
-            DriverCall::Stop(_, reply) => {
-                reply.send(StopOutcome::RetryableFailure(DriverError("private stop detail"))).unwrap()
-            }
+            DriverCall::Stop(_, reply) => reply
+                .send(StopOutcome::RetryableFailure(DriverError(
+                    "private stop detail",
+                )))
+                .unwrap(),
             _ => panic!("bounded retry calls STOP only"),
         }
     }
@@ -372,21 +379,40 @@ async fn a_stop_deadline_keeps_the_remote_operation_owned_until_its_late_ack() {
     };
 
     loop {
-        if matches!(harness.reports.recv().await.unwrap().outcome, LeaseReportOutcome::TimedOut) {
+        if matches!(
+            harness.reports.recv().await.unwrap().outcome,
+            LeaseReportOutcome::TimedOut
+        ) {
             break;
         }
     }
-    assert!(harness.callback().await.is_ok(), "deadline is not STOP acknowledgement");
-    assert!(harness.calls.try_recv().is_err(), "unresolved STOP remains the only remote operation");
+    assert!(
+        harness.callback().await.is_ok(),
+        "deadline is not STOP acknowledgement"
+    );
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "unresolved STOP remains the only remote operation"
+    );
     first_reply.send(StopOutcome::Acknowledged).unwrap();
-    assert!(closing.await.unwrap().is_err(), "close observes the deadline as unacknowledged");
+    assert!(
+        closing.await.unwrap().is_err(),
+        "close observes the deadline as unacknowledged"
+    );
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
-            if harness.callback().await.is_err() { break; }
+            if harness.callback().await.is_err() {
+                break;
+            }
             tokio::task::yield_now().await;
         }
-    }).await.expect("late STOP acknowledgement withdraws the callback");
-    assert!(harness.calls.try_recv().is_err(), "late ACK causes no duplicate STOP");
+    })
+    .await
+    .expect("late STOP acknowledgement withdraws the callback");
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "late ACK causes no duplicate STOP"
+    );
 }
 
 #[tokio::test]
@@ -504,7 +530,10 @@ async fn logical_failure_stops_retrying_without_claiming_acknowledgement() {
     harness.driver.failed.store(true, Ordering::Release);
     let closing = tokio::spawn(async move { lease.close().await });
     assert!(closing.await.unwrap().is_err());
-    assert!(harness.calls.try_recv().is_err(), "fault before first attempt sends no STOP");
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "fault before first attempt sends no STOP"
+    );
     assert!(
         harness.calls.try_recv().is_err(),
         "failed module has no subsequent retry"
