@@ -163,7 +163,8 @@ struct FixtureAccess {
     unattested_service: Option<Connection>,
     use_unattested_proxy: bool,
     reinitialize_calls: Arc<AtomicUsize>,
-    initializing_left: AtomicUsize,
+    initializing_notifier: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    initializing_gate: StdMutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 impl Drop for FixtureAccess {
@@ -208,20 +209,31 @@ impl ModuleAccess for FixtureAccess {
     ) -> AccessFuture<'a, Result<(), ReconfigureFailure>> {
         Box::pin(async move {
             self.reinitialize_calls.fetch_add(1, Ordering::SeqCst);
-            if self
-                .initializing_left
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                    if left > 0 { Some(left - 1) } else { None }
-                })
-                .is_ok()
-            {
-                return Err(ReconfigureFailure::Initializing);
-            }
-            self.connection
+            let outcome = self
+                .connection
                 .reinitialize_module(id, config)
                 .await
                 .map(|_| ())
-                .map_err(|_| ReconfigureFailure::Failed)
+                .map_err(|error| crate::module::resolve::reconfigure_failure(&error));
+            if outcome == Err(ReconfigureFailure::Initializing) {
+                if let Some(notifier) = self
+                    .initializing_notifier
+                    .lock()
+                    .expect("initializing notifier lock")
+                    .take()
+                {
+                    let _ = notifier.send(());
+                }
+                let gate = self
+                    .initializing_gate
+                    .lock()
+                    .expect("initializing gate lock")
+                    .take();
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+            }
+            outcome
         })
     }
 }
@@ -273,11 +285,18 @@ async fn fixture() -> FixtureAccess {
         unattested_service: None,
         use_unattested_proxy: false,
         reinitialize_calls: Arc::new(AtomicUsize::new(0)),
-        initializing_left: AtomicUsize::new(0),
+        initializing_notifier: StdMutex::new(None),
+        initializing_gate: StdMutex::new(None),
     }
 }
 
-async fn lazy_fixture(block_initialization: bool) -> (Arc<ModuleHost>, Connection, tokio::task::JoinHandle<crate::Result<()>>) {
+async fn lazy_fixture(
+    block_initialization: bool,
+) -> (
+    Arc<ModuleHost>,
+    Connection,
+    tokio::task::JoinHandle<crate::Result<()>>,
+) {
     let bus = MemoryBus::new();
     let broker = Broker::new();
     let broker_task = broker.spawn(bus.clone());
@@ -288,7 +307,11 @@ async fn lazy_fixture(block_initialization: bool) -> (Arc<ModuleHost>, Connectio
         crate::module::LinkedModule {
             descriptor: TbAbiDescriptor::current(ID, "0.0.0"),
             manifest,
-            init: if block_initialization { blocked_fixture_init } else { fixture_init },
+            init: if block_initialization {
+                blocked_fixture_init
+            } else {
+                fixture_init
+            },
         },
         serde_json::Value::Null,
     )
@@ -297,6 +320,111 @@ async fn lazy_fixture(block_initialization: bool) -> (Arc<ModuleHost>, Connectio
         .await
         .unwrap();
     (host, connection, broker_task)
+}
+
+#[tokio::test]
+async fn connection_wire_errors_preserve_initializing_and_unavailable_as_closed_codes() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    *INITIALIZER_STARTED
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap() = Some(started_tx);
+    *INITIALIZER_RELEASE
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap() = Some(release_rx);
+    let (host, connection, broker_task) = lazy_fixture(true).await;
+    let proxy = connection.proxy(BUS, PATH, BUS).unwrap();
+    let in_flight =
+        tokio::spawn(async move { proxy.call::<serde_json::Value>("ReadConfig", ()).await });
+    tokio::task::spawn_blocking(move || started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let initializing = connection
+        .reinitialize_module(ID, serde_json::json!({ "route": "new" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        initializing,
+        crate::Error::MethodFailed { ref name, .. }
+            if name == crate::Error::MODULE_INITIALIZING
+    ));
+    release_tx.send(()).unwrap();
+    in_flight.await.unwrap().unwrap();
+    broker_task.abort();
+    drop(host);
+
+    let (host, connection, broker_task) = lazy_fixture(false).await;
+    let unavailable = connection
+        .reinitialize_module(ID, serde_json::json!({ "route": "new" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        unavailable,
+        crate::Error::MethodFailed { ref name, .. }
+            if name == crate::Error::MODULE_UNAVAILABLE
+    ));
+    broker_task.abort();
+    drop(host);
+}
+
+#[tokio::test]
+async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_module_is_ready() {
+    let _test_guard = FIXTURE_LOCK.lock().await;
+    let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    *INITIALIZER_STARTED
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap() = Some(started_tx);
+    *INITIALIZER_RELEASE
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap() = Some(release_rx);
+    let (host, connection, broker_task) = lazy_fixture(true).await;
+    let initial_proxy = connection.proxy(BUS, PATH, BUS).unwrap();
+    let in_flight = tokio::spawn(async move {
+        initial_proxy
+            .call::<serde_json::Value>("ReadConfig", ())
+            .await
+    });
+    tokio::task::spawn_blocking(move || started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (notifying_tx, notifying_rx) = tokio::sync::oneshot::channel();
+    let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let access = FixtureAccess {
+        host,
+        connection,
+        broker_task,
+        reporter: FailureReporter::new(Arc::new(Quiet)),
+        unattested_service: None,
+        use_unattested_proxy: false,
+        reinitialize_calls: calls.clone(),
+        initializing_notifier: StdMutex::new(Some(notifying_tx)),
+        initializing_gate: StdMutex::new(Some(gate_rx)),
+    };
+    let module =
+        Arc::new(ReconfigurableModule::new(access, ID).retry_while_initializing(2, Duration::ZERO));
+    let config = serde_json::json!({ "route": "after-init" });
+    let retrying_module = module.clone();
+    let retrying_config = config.clone();
+    let retrying = tokio::spawn(async move { retrying_module.proxy(&retrying_config).await });
+    notifying_rx.await.unwrap();
+    release_tx.send(()).unwrap();
+    in_flight.await.unwrap().unwrap();
+    gate_tx.send(()).unwrap();
+
+    let proxy = retrying.await.unwrap().unwrap();
+    assert_eq!(read_config(&proxy).await, config);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 struct UnattestedService(Arc<AtomicUsize>);
@@ -362,7 +490,8 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
             unattested_service: Some(unattested_service),
             use_unattested_proxy: true,
             reinitialize_calls: Arc::new(AtomicUsize::new(0)),
-            initializing_left: AtomicUsize::new(0),
+            initializing_notifier: StdMutex::new(None),
+            initializing_gate: StdMutex::new(None),
         },
         calls,
     )
@@ -440,18 +569,6 @@ async fn a_failed_change_forgets_the_old_fingerprint_before_a_revert() {
 }
 
 #[tokio::test]
-async fn typed_initializing_results_are_retried_with_the_config() {
-    let _test_guard = FIXTURE_LOCK.lock().await;
-    let mut access = fixture().await;
-    access.initializing_left.store(2, Ordering::SeqCst);
-    let calls = access.reinitialize_calls.clone();
-    let module = ReconfigurableModule::new(access, ID).retry_while_initializing(3, Duration::ZERO);
-    let config = serde_json::json!({ "route": "ready" });
-    let proxy = module.proxy(&config).await.unwrap();
-    assert_eq!(read_config(&proxy).await, config);
-    assert_eq!(calls.load(Ordering::SeqCst), 3);
-}
-
 #[tokio::test]
 async fn member_strategy_applies_config_through_the_linked_fixture_bus() {
     let _test_guard = FIXTURE_LOCK.lock().await;
@@ -491,7 +608,7 @@ async fn an_exclusive_guard_keeps_the_config_stable_until_the_bus_call_finishes(
     let first_module = module.clone();
     let first_config = first.clone();
     let first_task = tokio::spawn(async move {
-        let guard = first_module.exclusive().await;
+        let mut guard = first_module.exclusive().await;
         let proxy = guard.proxy(&first_config).await.unwrap();
         proxy_ready_tx.send(()).unwrap();
         let _ = release_rx.await;

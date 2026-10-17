@@ -180,13 +180,7 @@ impl ReconfigurableModule {
                         .await
                 }
                 Reconfigure::Member(member) => {
-                    match self.member_reconfigure(member, config.clone()).await {
-                        Ok(()) => Ok(()),
-                        Err(error) => Err(match error {
-                            ModuleCallError::Unavailable => ReconfigureFailure::Unavailable,
-                            _ => ReconfigureFailure::Failed,
-                        }),
-                    }
+                    self.member_reconfigure(member, config.clone()).await
                 }
             };
             match outcome {
@@ -220,31 +214,30 @@ impl ReconfigurableModule {
         &self,
         member: &'static str,
         config: serde_json::Value,
-    ) -> Result<(), ModuleCallError> {
+    ) -> Result<(), ReconfigureFailure> {
         let record = self
             .access
             .find(self.module_id)
-            .ok_or(ModuleCallError::Unavailable)?;
+            .ok_or(ReconfigureFailure::Unavailable)?;
         if !self.access.enabled() {
-            return Err(ModuleCallError::Unavailable);
+            return Err(ReconfigureFailure::Unavailable);
         }
         self.access
             .ensure_loaded(record.id)
             .await
-            .map_err(|_| ModuleCallError::Unavailable)?;
+            .map_err(|_| ReconfigureFailure::Unavailable)?;
         let proxy = self
             .access
             .proxy(record.bus_name, record.object_path)
             .await
             .map_err(|failure| match failure {
-                ProxyFailure::Transport => ModuleCallError::TransportFailed,
-                ProxyFailure::Contract => ModuleCallError::IncompatibleContract,
+                ProxyFailure::Transport | ProxyFailure::Contract => ReconfigureFailure::Failed,
             })?;
         proxy
             .call_confidential::<serde_json::Value>(member, (config,))
             .await
             .map(|_| ())
-            .map_err(|error| super::client::classify(&error).0)
+            .map_err(|error| super::resolve::reconfigure_failure(&error))
     }
 
     fn loaded_state(&self) -> std::sync::MutexGuard<'_, Option<ConfigFingerprint>> {

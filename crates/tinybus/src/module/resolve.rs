@@ -238,7 +238,7 @@ pub type ResolvedHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// `fn` so a registration carries no state.
 pub type LinkedFactory = fn() -> crate::Result<LinkedModule>;
 
-fn reconfigure_failure(error: &crate::Error) -> super::client::ReconfigureFailure {
+pub(super) fn reconfigure_failure(error: &crate::Error) -> super::client::ReconfigureFailure {
     match error {
         crate::Error::ModuleUnavailable { state, .. }
             if state.eq_ignore_ascii_case("initializing") =>
