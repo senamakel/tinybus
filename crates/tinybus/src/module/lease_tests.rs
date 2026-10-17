@@ -268,7 +268,7 @@ async fn validation_failure_after_reserve_still_stops_and_never_starts() {
         Some(DriverCall::Validated)
     ));
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Stop(_, reply) => reply.send(Ok(())).unwrap(),
         _ => panic!("validation error is rolled back before object/export/start"),
     }
     let Err(error) = opening.await.unwrap() else {
@@ -284,6 +284,39 @@ async fn validation_failure_after_reserve_still_stops_and_never_starts() {
 }
 
 #[tokio::test]
+async fn object_failure_after_reserve_keeps_the_cleanup_owner_until_stop_ack() {
+    let mut harness = Harness::new();
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve must be first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(_, reply) => {
+            reply.send(Err(DriverError("private object detail"))).unwrap()
+        }
+        _ => panic!("object failure follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("object failure rolls back the already-owned reservation"),
+    }
+    let Err(error) = opening.await.unwrap() else {
+        panic!("object creation failure must fail activation");
+    };
+    assert!(!format!("{error:?}").contains("private object detail"));
+    assert!(!error.to_string().contains("private object detail"));
+    assert!(harness.calls.try_recv().is_err(), "failed object creation never serves or starts");
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
 async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
     let mut harness = Harness::new();
     let lease = harness.opened().await;
@@ -291,7 +324,7 @@ async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
 
     let closing = tokio::spawn(async move { lease.close().await });
     let stop_reply = match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(reply) => reply,
+        DriverCall::Stop(_, reply) => reply,
         _ => panic!("close starts one STOP"),
     };
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(2));
@@ -372,7 +405,7 @@ async fn cloned_close_waiters_and_last_user_drop_share_one_stop_worker() {
     let second = lease.clone();
     let first_waiter = tokio::spawn(async move { first.close().await });
     let stop_reply = match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(reply) => reply,
+        DriverCall::Stop(_, reply) => reply,
         _ => panic!("first close starts the worker"),
     };
     let second_waiter = tokio::spawn(async move { second.close().await });
@@ -386,6 +419,78 @@ async fn cloned_close_waiters_and_last_user_drop_share_one_stop_worker() {
     assert!(second_waiter.await.unwrap().is_ok());
     assert!(harness.calls.try_recv().is_err());
     assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn timing_out_a_close_waiter_does_not_cancel_the_dedicated_stop_worker() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    let waiter = tokio::spawn(async move {
+        tokio::time::timeout(std::time::Duration::from_millis(20), lease.close()).await
+    });
+    let stop_reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply,
+        _ => panic!("close starts a dedicated stop worker"),
+    };
+    assert!(waiter.await.unwrap().is_err(), "the external close wait can expire");
+    assert!(harness.callback().await.is_ok(), "wait timeout is not STOP acknowledgement");
+    stop_reply.send(Ok(())).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if harness.callback().await.is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the original worker removes the callback after its acknowledgement");
+    assert!(harness.calls.try_recv().is_err(), "caller timeout creates no second STOP");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn destroying_the_callers_runtime_does_not_cancel_the_dedicated_stop_worker() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (destroy_tx, destroy_rx) = std::sync::mpsc::channel();
+    let caller = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.spawn(async move {
+            let _ = lease.close().await;
+        });
+        ready_tx.send(()).unwrap();
+        destroy_rx.recv().unwrap();
+        drop(runtime);
+    });
+    tokio::task::spawn_blocking(move || ready_rx.recv().unwrap())
+        .await
+        .unwrap();
+    let stop_reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply,
+        _ => panic!("caller close starts the dedicated worker"),
+    };
+    destroy_tx.send(()).unwrap();
+    tokio::task::spawn_blocking(move || caller.join().unwrap())
+        .await
+        .unwrap();
+    assert!(harness.callback().await.is_ok(), "caller runtime drop is not STOP ACK");
+    stop_reply.send(Ok(())).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if harness.callback().await.is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runtime-owned worker completes after its caller runtime is gone");
+    assert!(harness.calls.try_recv().is_err());
 }
 
 #[tokio::test]
