@@ -177,7 +177,7 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
 async fn dropping_a_host_object_guard_outside_a_tokio_runtime_releases_its_name() {
     let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
     let name: crate::BusName = "ai.tinyhumans.test.DropOutsideRuntime".parse().unwrap();
-    let path: crate::ObjectPath = "/runtime/drop-outside".parse().unwrap();
+    let path: crate::ObjectPath = "/runtime/drop_outside".parse().unwrap();
     let guard = runtime
         .serve_host_object(name.clone(), path, HostObjectValue("value"))
         .await
@@ -209,18 +209,41 @@ async fn dropping_a_host_object_guard_preserves_a_name_owned_before_registration
 async fn a_name_collision_leaves_no_host_object_registration_behind() {
     let name: crate::BusName = "ai.tinyhumans.test.HostObjectCollision".parse().unwrap();
     let path: crate::ObjectPath = "/runtime/collision".parse().unwrap();
-    let other_peer = Arc::new(std::sync::Mutex::new(None));
-    let captured = other_peer.clone();
-    let setup_name = name.clone();
-    let setup: RuntimeSetup = Box::new(move |connection, _host| {
-        Box::pin(async move {
-            connection.request_name(setup_name.as_str()).await?;
-            *captured.lock().unwrap() = Some(connection);
-            Ok(())
-        })
-    });
-    let runtime = ModuleRuntime::start(&RuntimeNames::default(), Some(setup)).unwrap();
-    let owner = other_peer.lock().unwrap().as_ref().unwrap().unique_name();
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let manifest = crate::module::manifest::ModuleManifest {
+        schema: crate::module::manifest::MANIFEST_SCHEMA,
+        module: crate::module::manifest::ModuleIdentity {
+            name: "host-object-collision".to_string(),
+            version: crate::version::Version::new(0, 1, 0),
+            description: String::new(),
+            homepage: None,
+            license: String::new(),
+        },
+        bus_name: name.clone(),
+        object_path: path.clone(),
+        provides: Vec::new(),
+        requires: Vec::new(),
+        environment: Vec::new(),
+        capabilities: Vec::new(),
+        lazy_init: true,
+        worker_threads: 1,
+        on_panic: crate::module::manifest::PanicPolicy::Detach,
+    };
+    let descriptor = crate::module::abi::TbAbiDescriptor::current("host-object-collision", "0.1.0");
+    runtime
+        .host()
+        .attach_linked_with_config(
+            crate::module::LinkedModule {
+                descriptor,
+                manifest: manifest.clone(),
+                init: collision_module_init,
+                init_with_setup: None,
+            },
+            serde_json::Value::Null,
+        )
+        .unwrap();
+    let owner = runtime.connection().name_owner(name.as_str()).await.unwrap();
+    assert!(owner.is_some());
     assert!(
         runtime
             .serve_host_object(name.clone(), path.clone(), HostObjectValue("must not leak"))
@@ -238,4 +261,11 @@ async fn a_name_collision_leaves_no_host_object_registration_behind() {
         .unwrap();
     let leaked: crate::Result<serde_json::Value> = proxy.call("Value", ()).await;
     assert!(leaked.is_err());
+}
+
+unsafe extern "C" fn collision_module_init(
+    _: *const crate::module::abi::TbHostVtable,
+    _: *mut crate::module::abi::TbModuleVtable,
+) -> i32 {
+    crate::module::abi::TB_BAD_ARGUMENT
 }

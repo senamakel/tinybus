@@ -270,7 +270,6 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
     broker_task.abort();
 }
 
-#[tokio::test]
 #[test]
 fn linked_module_with_an_unmet_required_interface_is_refused_before_init() {
     let host = ModuleHost::new(Broker::new());
