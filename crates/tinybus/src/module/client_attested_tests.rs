@@ -396,6 +396,118 @@ struct AttestedReceiver {
     calls: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
+#[cfg(feature = "modules")]
+struct AttestedFailureReceiver {
+    name: &'static str,
+    message: &'static str,
+}
+
+#[cfg(feature = "modules")]
+#[async_trait::async_trait]
+impl crate::Interface for AttestedFailureReceiver {
+    fn name(&self) -> crate::InterfaceName {
+        crate::InterfaceName::new("ai.tinyhumans.test.AttestedClient").unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec![crate::MemberName::new("Consume").unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Err(crate::Error::MethodFailed {
+            name: self.name.to_string(),
+            message: self.message.to_string(),
+        })
+    }
+}
+
+#[cfg(feature = "modules")]
+async fn call_with_attestation_failure(
+    name: &'static str,
+    message: &'static str,
+) -> (Result<String, ModuleCallFailure>, Result<String, ModuleCallError>) {
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = strict_record();
+    service
+        .serve_at(
+            crate::ObjectPath::new(record.object_path).unwrap(),
+            AttestedFailureReceiver { name, message },
+        )
+        .await
+        .unwrap();
+    service.request_name(record.bus_name).await.unwrap();
+    broker.attest_module(
+        &service.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::BusName::new(record.bus_name).unwrap(),
+            sha256: record.assets[0].sha256.to_string(),
+            library_sha256: record.assets[0].library_sha256.map(str::to_string),
+        },
+    );
+    let access = PreparedAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    };
+    let client = ModuleClient::new(access);
+    let detailed = client
+        .call_attested_detailed(record.id, "Consume", ())
+        .await;
+    let sanitized = client.call_attested(record.id, "Consume", ()).await;
+    broker_task.abort();
+    (detailed, sanitized)
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn strict_attested_detailed_calls_preserve_remote_input_refusals() {
+    let (failure, sanitized) = call_with_attestation_failure(
+        "ai.tinyhumans.tinywallet.Error.InvalidInput",
+        "wallet address secret is invalid",
+    )
+    .await;
+    let failure = failure.unwrap_err();
+    assert_eq!(failure.kind, ModuleCallError::ModuleFault);
+    assert_eq!(failure.wire_name, "ai.tinyhumans.tinywallet.Error.InvalidInput");
+    assert_eq!(failure.message, "wallet address secret is invalid");
+    assert_eq!(sanitized, Err(ModuleCallError::ModuleFault));
+    assert!(!format!("{failure:?}").contains("wallet address secret"));
+    assert!(!failure.to_string().contains("wallet address secret"));
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn strict_attested_detailed_calls_preserve_remote_chain_refusals() {
+    let (failure, sanitized) = call_with_attestation_failure(
+        "ai.tinyhumans.tinywallet.Error.UnsupportedChain",
+        "private configured chain is unsupported",
+    )
+    .await;
+    let failure = failure.unwrap_err();
+    assert_eq!(failure.kind, ModuleCallError::ModuleFault);
+    assert_eq!(
+        failure.wire_name,
+        "ai.tinyhumans.tinywallet.Error.UnsupportedChain"
+    );
+    assert_eq!(failure.message, "private configured chain is unsupported");
+    assert_eq!(sanitized, Err(ModuleCallError::ModuleFault));
+    assert!(!format!("{failure:?}").contains("private configured chain"));
+    assert!(!failure.to_string().contains("private configured chain"));
+}
+
 #[async_trait::async_trait]
 impl crate::Interface for AttestedReceiver {
     fn name(&self) -> crate::InterfaceName {
