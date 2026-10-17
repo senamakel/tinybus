@@ -240,6 +240,14 @@ struct ModuleHostInner {
     artifacts: Mutex<Vec<tempfile::TempDir>>,
     warned: AtomicBool,
     search_path_config: RwLock<Option<SearchPathConfig>>,
+    #[cfg(test)]
+    before_loaded_publish: Mutex<Option<LoadedPublishBarrier>>,
+}
+
+#[cfg(test)]
+struct LoadedPublishBarrier {
+    reached: std::sync::mpsc::SyncSender<()>,
+    release: std::sync::mpsc::Receiver<()>,
 }
 
 /// Owned, read-only access to a host's admitted unique-peer lookup.
@@ -436,6 +444,8 @@ impl ModuleHost {
             artifacts: Mutex::new(Vec::new()),
             warned: AtomicBool::new(false),
             search_path_config: RwLock::new(None),
+            #[cfg(test)]
+            before_loaded_publish: Mutex::new(None),
         });
         let control: Arc<dyn ModuleControl> = inner.clone();
         broker.set_module_control(Arc::downgrade(&control));
@@ -1629,6 +1639,23 @@ impl ModuleHost {
             tracing::info!(module = %admitted.name, "module registered for lazy loading");
         } else {
             tracing::info!(module = %admitted.name, "module loaded");
+        }
+        #[cfg(test)]
+        if let Some(barrier) = self
+            .inner
+            .before_loaded_publish
+            .lock()
+            .expect("loaded publication barrier lock")
+            .take()
+        {
+            barrier
+                .reached
+                .send(())
+                .expect("test observes loaded publication barrier");
+            barrier
+                .release
+                .recv()
+                .expect("test releases loaded publication barrier");
         }
         self.inner
             .loaded
