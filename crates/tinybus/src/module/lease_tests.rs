@@ -34,7 +34,7 @@ enum DriverCall {
     Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
     Object(Identity, oneshot::Sender<Result<Object, DriverError>>),
     Start(oneshot::Sender<Result<(), DriverError>>),
-    Stop(std::time::Instant, oneshot::Sender<Result<(), DriverError>>),
+    Stop(std::time::Instant, oneshot::Sender<StopOutcome<DriverError>>),
     Validated,
 }
 
@@ -93,7 +93,7 @@ impl RuntimeLeaseDriver for ControlledDriver {
         result.await.unwrap()
     }
 
-    async fn stop(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
+    async fn stop(&self, _: &Self::Reservation) -> StopOutcome<Self::Error> {
         let (reply, result) = oneshot::channel();
         self.calls
             .send(DriverCall::Stop(std::time::Instant::now(), reply))
@@ -246,7 +246,7 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         _ => panic!("start follows callback registration"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
         _ => panic!("a lease whose result was abandoned is rolled back"),
     }
     assert!(harness.callback().await.is_err());
@@ -271,7 +271,7 @@ async fn validation_failure_after_reserve_still_stops_and_never_starts() {
         Some(DriverCall::Validated)
     ));
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
         _ => panic!("validation error is rolled back before object/export/start"),
     }
     let Err(error) = opening.await.unwrap() else {
@@ -307,7 +307,7 @@ async fn object_failure_after_reserve_keeps_the_cleanup_owner_until_stop_ack() {
         _ => panic!("object failure follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
         _ => panic!("object failure rolls back the already-owned reservation"),
     }
     let Err(error) = opening.await.unwrap() else {
@@ -348,7 +348,7 @@ async fn exhausted_stop_parks_the_callback_until_an_acknowledgement() {
     for _ in 0..3 {
         match harness.calls.recv().await.unwrap() {
             DriverCall::Stop(_, reply) => {
-                reply.send(Err(DriverError("private stop detail"))).unwrap()
+                reply.send(StopOutcome::RetryableFailure(DriverError("private stop detail"))).unwrap()
             }
             _ => panic!("bounded retry calls STOP only"),
         }
@@ -378,7 +378,7 @@ async fn a_stop_deadline_keeps_the_remote_operation_owned_until_its_late_ack() {
     }
     assert!(harness.callback().await.is_ok(), "deadline is not STOP acknowledgement");
     assert!(harness.calls.try_recv().is_err(), "unresolved STOP remains the only remote operation");
-    first_reply.send(Ok(())).unwrap();
+    first_reply.send(StopOutcome::Acknowledged).unwrap();
     assert!(closing.await.unwrap().is_err(), "close observes the deadline as unacknowledged");
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -407,7 +407,7 @@ async fn cloned_close_waiters_and_last_user_drop_share_one_stop_worker() {
         harness.calls.try_recv().is_err(),
         "joining close and Drop do not duplicate STOP"
     );
-    stop_reply.send(Ok(())).unwrap();
+    stop_reply.send(StopOutcome::Acknowledged).unwrap();
     assert!(second_waiter.await.unwrap().is_ok());
     assert!(harness.calls.try_recv().is_err());
     assert!(harness.callback().await.is_err());
@@ -432,7 +432,7 @@ async fn timing_out_a_close_waiter_does_not_cancel_the_dedicated_stop_worker() {
         harness.callback().await.is_ok(),
         "wait timeout is not STOP acknowledgement"
     );
-    stop_reply.send(Ok(())).unwrap();
+    stop_reply.send(StopOutcome::Acknowledged).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             if harness.callback().await.is_err() {
@@ -504,7 +504,7 @@ async fn logical_failure_stops_retrying_without_claiming_acknowledgement() {
     harness.driver.failed.store(true, Ordering::Release);
     let closing = tokio::spawn(async move { lease.close().await });
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Unacknowledged(DriverError("private stop detail"))).unwrap(),
         _ => panic!("close sends the first STOP before evaluating retry exit"),
     }
     assert!(closing.await.unwrap().is_err());
