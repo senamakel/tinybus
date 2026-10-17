@@ -607,7 +607,10 @@ impl Connection {
     /// Apply replacement JSON configuration to a running module.
     ///
     /// Configuration is always carried as a sensitive control call and is
-    /// never eligible for signal fan-out or monitor output.
+    /// never eligible for signal fan-out or monitor output. If the module is
+    /// still resolved with a deferred lazy initializer, the replacement is
+    /// applied to that initializer so its first method call uses the new
+    /// configuration.
     #[cfg(feature = "modules")]
     pub async fn reinitialize_module(
         &self,
