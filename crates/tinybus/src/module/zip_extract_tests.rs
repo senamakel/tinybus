@@ -229,40 +229,57 @@ fn implicit_directory_case_collisions_and_file_directory_conflicts_are_refused()
 fn canonically_equivalent_unicode_components_are_refused_portably() {
     let mut trie = PathNode::default();
     let mut key_bytes = 0;
-    assert!(trie
-        .insert(Path::new("é/one"), false, &mut key_bytes, MAX_PATH_METADATA_BYTES)
-        .unwrap());
-    assert!(!trie
-        .insert(
-            Path::new("e\u{301}/two"),
+    assert!(
+        trie.insert(
+            Path::new("é/one"),
             false,
             &mut key_bytes,
-            MAX_PATH_METADATA_BYTES,
+            MAX_PATH_METADATA_BYTES
         )
-        .unwrap());
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("e\u{301}/two"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
 
     let mut trie = PathNode::default();
     let mut key_bytes = 0;
-    assert!(trie
-        .insert(
+    assert!(
+        trie.insert(
             Path::new("dir/café"),
             false,
             &mut key_bytes,
             MAX_PATH_METADATA_BYTES,
         )
-        .unwrap());
-    assert!(!trie
-        .insert(
-            Path::new("dir/cafe\u{301}"),
-            false,
-            &mut key_bytes,
-            MAX_PATH_METADATA_BYTES,
-        )
-        .unwrap());
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("dir/cafe\u{301}"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
 
-    for fixture in ["canonical_parent_collision.zip", "canonical_leaf_collision.zip"] {
+    for fixture in [
+        "canonical_parent_collision.zip",
+        "canonical_leaf_collision.zip",
+    ] {
         let (_root, _destination, result) = extract_fixture(fixture);
-        assert!(result.is_err(), "accepted canonical alias fixture {fixture}");
+        assert!(
+            result.is_err(),
+            "accepted canonical alias fixture {fixture}"
+        );
     }
 }
 
@@ -270,22 +287,25 @@ fn canonically_equivalent_unicode_components_are_refused_portably() {
 fn full_unicode_casefold_aliases_are_refused_portably() {
     let mut trie = PathNode::default();
     let mut key_bytes = 0;
-    assert!(trie
-        .insert(
+    assert!(
+        trie.insert(
             Path::new("dir/Straße"),
             false,
             &mut key_bytes,
             MAX_PATH_METADATA_BYTES,
         )
-        .unwrap());
-    assert!(!trie
-        .insert(
-            Path::new("dir/STRASSE"),
-            false,
-            &mut key_bytes,
-            MAX_PATH_METADATA_BYTES,
-        )
-        .unwrap());
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("dir/STRASSE"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
 
     let (_root, _destination, result) = extract_fixture("casefold_collision.zip");
     assert!(result.is_err());
@@ -299,8 +319,14 @@ fn distinct_unicode_paths_keep_their_archive_spelling() {
 
     let (_root, destination, result) = extract_fixture("unicode_paths.zip");
     result.unwrap();
-    assert_eq!(fs::read(destination.join("café/module.so")).unwrap(), b"accented");
-    assert_eq!(fs::read(destination.join("数据/module.so")).unwrap(), b"cjk");
+    assert_eq!(
+        fs::read(destination.join("café/module.so")).unwrap(),
+        b"accented"
+    );
+    assert_eq!(
+        fs::read(destination.join("数据/module.so")).unwrap(),
+        b"cjk"
+    );
 }
 
 #[test]
