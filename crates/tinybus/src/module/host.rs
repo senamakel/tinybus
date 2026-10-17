@@ -675,7 +675,7 @@ impl ModuleHost {
         // No pin: the caller handed over an already-resolved artifact rather
         // than bytes this host read and hashed, so there is nothing to vouch
         // for. Attestation, if any, comes from an allowlist beside the file.
-        self.activate(file.as_ref(), artifact, config, None)
+        self.activate(file.as_ref(), artifact, config, None, None)
     }
 
     /// Admit a module whose code is linked into the host executable.
@@ -855,7 +855,7 @@ impl ModuleHost {
         requirements.check(&artifact.manifest).map_err(|_| {
             Error::module_refused(path, "artifact does not satisfy required module surface")
         })?;
-        self.activate(path, artifact, config, None)
+        self.activate(path, artifact, config, None, None)
     }
 
     /// [`ModuleHost::load_file_with_config`], carrying a digest the caller has
@@ -925,7 +925,7 @@ impl ModuleHost {
                 self.record_manifest_rejection(&error, rejected_manifest, RefusalClass::Unresolved);
                 return Err(error);
             }
-            self.activate(path, artifact, config, pinned_sha256)
+            self.activate(path, artifact, config, pinned_sha256, None)
         })();
         if let Err(error) = &result {
             self.record_rejection(error);
@@ -1105,7 +1105,7 @@ impl ModuleHost {
                 // `modules.toml` in it is the operator's statement about them.
                 .and_then(|()| match module {
                     PendingModule::Loaded(artifact) => {
-                        self.activate(&path, *artifact, config, None)
+                        self.activate(&path, *artifact, config, None, None)
                     }
                     PendingModule::Lazy(manifest) => {
                         let library_sha256 = std::fs::File::open(&path)
@@ -1263,6 +1263,7 @@ impl ModuleHost {
         artifact: LoadedArtifact,
         config: serde_json::Value,
         pinned_sha256: Option<String>,
+        linked_setup: Option<(LinkedModuleInitWithSetup, LinkedSetup)>,
     ) -> Result<ModuleInfo> {
         let pinned_library_sha256 = artifact.library_sha256.clone();
         let _admission = self.inner.admission.lock().expect("module admission lock");
