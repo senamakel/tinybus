@@ -236,6 +236,10 @@ fn canonically_equivalent_unicode_components_are_refused_portably() {
 
 #[test]
 fn full_unicode_casefold_aliases_are_refused_portably() {
+    let mut trie = PathNode::default();
+    assert!(trie.insert(Path::new("dir/Straße"), false));
+    assert!(!trie.insert(Path::new("dir/STRASSE"), false));
+
     let (_root, destination, result) = extract_fixture("casefold_collision.zip");
     assert!(result.is_err());
     assert!(fs::read_dir(destination).unwrap().next().is_none());
