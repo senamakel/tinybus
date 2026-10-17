@@ -3349,14 +3349,31 @@ fn an_explicit_search_path_config_preserves_env_first_order_without_product_defa
     std::fs::create_dir(&env_dir).unwrap();
     let env_var = "TINYBUS_TEST_MODULE_SEARCH_PATHS";
     unsafe { std::env::set_var(env_var, &env_dir) };
+    let app_dir = PathBuf::from("tinydemo/modules");
 
     let host = ModuleHost::new(Broker::new())
-        .with_search_path_config(SearchPathConfig::new(env_var, "tinydemo/modules"));
+        .with_search_path_config(SearchPathConfig::new(env_var, app_dir.clone()));
     let paths = host.search_paths();
     unsafe { std::env::remove_var(env_var) };
 
-    assert_eq!(paths.first(), Some(&env_dir));
-    assert!(paths.iter().any(|path| path.ends_with("tinydemo/modules")));
+    let mut expected = vec![env_dir];
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
+            expected.push(PathBuf::from(path).join(&app_dir));
+        } else if let Some(path) = std::env::var_os("HOME") {
+            expected.push(PathBuf::from(path).join(".local/share").join(&app_dir));
+        }
+        expected.push(PathBuf::from("/usr/lib").join(&app_dir));
+    }
+    #[cfg(target_os = "macos")]
+    expected.push(PathBuf::from("/usr/local/lib").join(&app_dir));
+    #[cfg(windows)]
+    if let Some(path) = std::env::var_os("LOCALAPPDATA") {
+        expected.push(PathBuf::from(path).join(&app_dir));
+    }
+
+    assert_eq!(paths, expected);
     assert!(!paths.iter().any(|path| path.ends_with("openhuman/modules")));
 }
 
@@ -3365,6 +3382,33 @@ fn a_host_without_search_path_config_has_no_implicit_search_paths() {
     let host = ModuleHost::new(Broker::new());
 
     assert!(host.search_paths().is_empty());
+}
+
+#[test]
+fn rescan_with_no_explicit_paths_uses_the_host_search_path_config() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let directory = root.path().join("rescan-modules");
+    super::super::windows_acl::create_private_dir_all(&directory).unwrap();
+    let file_name = if cfg!(windows) {
+        "rescan-invalid.dll"
+    } else if cfg!(target_os = "macos") {
+        "rescan-invalid.dylib"
+    } else {
+        "rescan-invalid.so"
+    };
+    std::fs::write(directory.join(file_name), b"not a shared library").unwrap();
+    let env_var = "TINYBUS_TEST_RESCAN_SEARCH_PATH";
+    unsafe { std::env::set_var(env_var, &directory) };
+    let host = ModuleHost::new(Broker::new())
+        .with_search_path_config(SearchPathConfig::new(env_var, "tinybus-rescan/modules"));
+
+    let (modules, transitions) = host.inner.clone().rescan(Vec::new(), true).unwrap();
+    unsafe { std::env::remove_var(env_var) };
+
+    assert!(transitions.is_empty());
+    assert!(
+        matches!(modules.as_slice(), [module] if matches!(module.state, ModuleState::Rejected { .. }))
+    );
 }
 
 #[test]
