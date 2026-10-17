@@ -755,7 +755,6 @@ impl ModuleHost {
             .ok_or_else(|| Error::failed("linked export has no stateful setup entrypoint"))?;
         let setup: LinkedSetup = Box::new(move |connection| Box::pin(setup(connection)));
         let name = sanitize_untrusted(&module.manifest.module.name);
-        let module_id = ModuleId::new(module.manifest.module.name.clone());
         let info = self.attach_linked(module, config, Some((init, setup)))?;
         let transport = self
             .inner
@@ -763,7 +762,7 @@ impl ModuleHost {
             .lock()
             .expect("module list lock")
             .iter()
-            .find(|loaded| loaded.module_id == module_id)
+            .find(|loaded| loaded.info.name == info.name)
             .map(|loaded| loaded.transport.clone())
             .ok_or_else(|| Error::failed("linked module did not retain its admitted transport"))?;
         transport.ensure_initialized().await?;
