@@ -374,7 +374,6 @@ fn strict_record() -> &'static ReleaseRecord {
     }))
 }
 
-#[derive(Clone)]
 struct PreparedAccess {
     record: &'static ReleaseRecord,
     connection: crate::Connection,

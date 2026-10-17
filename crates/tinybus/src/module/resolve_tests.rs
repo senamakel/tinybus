@@ -691,12 +691,14 @@ mod resolver {
             .into_iter()
             .next()
             .expect("test host has a published module platform key");
-        let module_id = Box::leak("resolver-attested-lazy".to_string().into_boxed_str());
-        let archive_name = Box::leak("clock-attested-test.tar.gz".to_string().into_boxed_str());
+        let module_id: &'static str =
+            Box::leak("resolver-attested-lazy".to_string().into_boxed_str());
+        let archive_name: &'static str =
+            Box::leak("clock-attested-test.tar.gz".to_string().into_boxed_str());
         let version = "0.1.7";
         let bus_name = "ai.tinyhumans.openhuman.Clock";
         let object_path = "/ai/tinyhumans/openhuman/Clock";
-        let host_key = Box::leak(host_key.into_boxed_str());
+        let host_key: &'static str = Box::leak(host_key.into_boxed_str());
         let library_name = library_source
             .file_name()
             .and_then(|name| name.to_str())
