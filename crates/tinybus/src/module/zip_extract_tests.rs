@@ -20,6 +20,14 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
         "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
         "parent_case_collision.zip" => include_bytes!("fixtures/parent_case_collision.zip"),
         "file_directory_collision.zip" => include_bytes!("fixtures/file_directory_collision.zip"),
+        "canonical_parent_collision.zip" => {
+            include_bytes!("fixtures/canonical_parent_collision.zip")
+        }
+        "canonical_leaf_collision.zip" => {
+            include_bytes!("fixtures/canonical_leaf_collision.zip")
+        }
+        "casefold_collision.zip" => include_bytes!("fixtures/casefold_collision.zip"),
+        "unicode_paths.zip" => include_bytes!("fixtures/unicode_paths.zip"),
         "compat_zip64_local.zip" => include_bytes!("fixtures/compat_zip64_local.zip"),
         "encrypted.zip" => include_bytes!("fixtures/encrypted.zip"),
         "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
@@ -215,6 +223,119 @@ fn implicit_directory_case_collisions_and_file_directory_conflicts_are_refused()
         let (_root, _destination, result) = extract_fixture(fixture);
         assert!(result.is_err(), "accepted fixture {fixture}");
     }
+}
+
+#[test]
+fn canonically_equivalent_unicode_components_are_refused_portably() {
+    let mut trie = PathNode::default();
+    let mut key_bytes = 0;
+    assert!(
+        trie.insert(
+            Path::new("é/one"),
+            false,
+            &mut key_bytes,
+            MAX_PATH_METADATA_BYTES
+        )
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("e\u{301}/two"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
+
+    let mut trie = PathNode::default();
+    let mut key_bytes = 0;
+    assert!(
+        trie.insert(
+            Path::new("dir/café"),
+            false,
+            &mut key_bytes,
+            MAX_PATH_METADATA_BYTES,
+        )
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("dir/cafe\u{301}"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
+
+    for fixture in [
+        "canonical_parent_collision.zip",
+        "canonical_leaf_collision.zip",
+    ] {
+        let (_root, _destination, result) = extract_fixture(fixture);
+        assert!(
+            result.is_err(),
+            "accepted canonical alias fixture {fixture}"
+        );
+    }
+}
+
+#[test]
+fn full_unicode_casefold_aliases_are_refused_portably() {
+    let mut trie = PathNode::default();
+    let mut key_bytes = 0;
+    assert!(
+        trie.insert(
+            Path::new("dir/Straße"),
+            false,
+            &mut key_bytes,
+            MAX_PATH_METADATA_BYTES,
+        )
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("dir/STRASSE"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
+
+    let (_root, _destination, result) = extract_fixture("casefold_collision.zip");
+    assert!(result.is_err());
+}
+
+#[test]
+fn distinct_unicode_paths_keep_their_archive_spelling() {
+    let decomposed = "cafe\u{301}/module.so";
+    let (path, _is_dir, _components) = checked_path(decomposed, MAX_PATH_DEPTH).unwrap();
+    assert_eq!(path, PathBuf::from(decomposed));
+
+    let (_root, destination, result) = extract_fixture("unicode_paths.zip");
+    result.unwrap();
+    assert_eq!(
+        fs::read(destination.join("café/module.so")).unwrap(),
+        b"accented"
+    );
+    assert_eq!(
+        fs::read(destination.join("数据/module.so")).unwrap(),
+        b"cjk"
+    );
+}
+
+#[test]
+fn casefold_key_expansion_counts_toward_the_path_metadata_limit() {
+    let mut trie = PathNode::default();
+    let mut metadata_bytes = 0;
+    let result = trie.insert(Path::new("İ"), false, &mut metadata_bytes, 2);
+    assert!(result.is_err());
+    assert!(trie.children.is_empty());
 }
 
 #[test]
