@@ -259,6 +259,7 @@ async fn an_unprepared_custom_access_refuses_before_serializing_confidential_arg
 #[tokio::test]
 async fn a_short_client_deadline_bounds_readiness_before_argument_serialization() {
     let bus = crate::transport::memory::MemoryBus::new();
+    let _broker = crate::broker::Broker::new().spawn(bus.clone());
     let connection = crate::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();

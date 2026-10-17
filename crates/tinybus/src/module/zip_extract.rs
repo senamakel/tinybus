@@ -142,6 +142,7 @@ pub(super) fn extract(archive_path: &Path, destination: &Path) -> Result<()> {
 }
 
 /// Safely extract a ZIP archive and hash its sole shared module library.
+#[cfg(feature = "cli")]
 pub(super) fn library_sha256(archive_path: &Path) -> Result<String> {
     let directory = tempfile::tempdir()
         .map_err(|_| refused("checksum ZIP extraction directory is unavailable"))?;
