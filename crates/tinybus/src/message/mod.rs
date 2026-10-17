@@ -51,14 +51,26 @@ pub enum MessageKind {
 }
 
 /// Closed lifecycle metadata accompanying a module availability error.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModuleLifecycle {
     /// The module has not finished its current initialization attempt.
     Initializing,
     /// A future lifecycle state this version cannot classify safely.
-    #[serde(other)]
     Unknown,
+}
+
+impl<'de> Deserialize<'de> for ModuleLifecycle {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "initializing" => Self::Initializing,
+            _ => Self::Unknown,
+        })
+    }
 }
 
 /// Everything the router and the dispatcher need, and nothing else.
