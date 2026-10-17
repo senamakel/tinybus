@@ -1461,6 +1461,7 @@ async fn refuse_call(inner: &Inner, serial: u64, refusal: &Error) {
         interface: None,
         member: None,
         error_name: None,
+        module_lifecycle: None,
         confidential: false,
         sensitive: false,
         stream_reply: false,

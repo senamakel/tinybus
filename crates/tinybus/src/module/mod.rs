@@ -16,6 +16,8 @@ mod github;
 mod hash;
 pub mod manifest;
 pub mod platform;
+#[cfg(feature = "modules")]
+pub mod reconfigure;
 mod release;
 #[cfg(feature = "modules")]
 pub mod resolution;
@@ -45,7 +47,7 @@ mod windows_acl;
 pub use cache::{artifact_dir, is_safe_path_component, prune_stale_versions};
 pub use client::{
     AccessFuture, ModuleAccess, ModuleCallError, ModuleClient, ModuleObjectClient, ProxyFailure,
-    classify,
+    ReconfigureFailure, classify,
 };
 pub use failure::{FailureReport, FailureReporter, FailureSink, Reason};
 #[cfg(feature = "modules")]
@@ -59,6 +61,8 @@ pub use host::callbacks::{
 };
 #[cfg(feature = "modules")]
 pub use host::{ModuleHost, ModuleInfo, ModuleState};
+#[cfg(feature = "modules")]
+pub use reconfigure::{ConfigFingerprint, ReconfigurableModule, Reconfigure, ReconfigureGuard};
 pub use release::{ReleaseAsset, ReleaseRecord};
 #[cfg(feature = "modules")]
 pub use resolve::{

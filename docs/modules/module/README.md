@@ -191,6 +191,22 @@ Reinitialization has a mandatory four-second module-side deadline and is
 serialized with both other reinitializations and shutdown. A host timeout never
 permits a later lifecycle callback to overlap code that is still returning.
 
+Hosts that choose configuration from each caller can use
+`module::ReconfigurableModule` to hash the selected JSON configuration and
+reinitialize only when it changes. The coordinator stores a digest, not the
+configuration. Its default strategy uses lifecycle reinitialization; a
+`Reconfigure::Member("Configure")` strategy calls a module-owned member with
+the configuration as its sole argument over a confidential call, so the
+recipient must be attested. `retry_while_initializing` retries only a typed
+initializing result, within the configured attempt and delay bounds.
+
+`proxy(config)` serializes configuration transitions but releases its lock
+before the caller uses the returned proxy. When a bus call must run under the
+selected configuration, hold `exclusive()` through that call and obtain the
+proxy with `guard.proxy(config)`. All users of the coordinator must follow this
+contract; calling `proxy(config)` while holding its guard waits on the same
+lock.
+
 Stopping a module loaded with `HostCallbackBinding` revokes new callback
 admission and waits for already admitted user futures before starting native
 shutdown. Both phases share the stop deadline. A drain timeout refuses shutdown;
