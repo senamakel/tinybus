@@ -5,7 +5,7 @@
 //! DEFLATE entries, and writes regular files into the host-owned staging
 //! directory without applying archive permissions or creating links.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -23,6 +23,25 @@ const MAX_ENTRY_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
 /// archive leaves room for substantial decompression while bounding disk use.
 const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 4096;
+const MAX_PATH_DEPTH: usize = 128;
+const MAX_PATH_METADATA_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct ExtractionLimits {
+    entry_bytes: u64,
+    total_bytes: u64,
+    entries: u64,
+    path_metadata_bytes: usize,
+    path_depth: usize,
+}
+
+const DEFAULT_LIMITS: ExtractionLimits = ExtractionLimits {
+    entry_bytes: MAX_ENTRY_EXPANDED_BYTES,
+    total_bytes: MAX_ARCHIVE_EXPANDED_BYTES,
+    entries: MAX_ENTRY_COUNT,
+    path_metadata_bytes: MAX_PATH_METADATA_BYTES,
+    path_depth: MAX_PATH_DEPTH,
+};
 
 #[derive(Clone)]
 struct EntryPlan {
@@ -39,21 +58,13 @@ struct EntryPlan {
 ///
 /// The caller owns `destination` and must discard it if this function fails.
 pub(super) fn extract(archive_path: &Path, destination: &Path) -> Result<()> {
-    extract_with_limits(
-        archive_path,
-        destination,
-        MAX_ENTRY_EXPANDED_BYTES,
-        MAX_ARCHIVE_EXPANDED_BYTES,
-        MAX_ENTRY_COUNT,
-    )
+    extract_with_limits(archive_path, destination, DEFAULT_LIMITS)
 }
 
 fn extract_with_limits(
     archive_path: &Path,
     destination: &Path,
-    max_entry_bytes: u64,
-    max_total_bytes: u64,
-    max_entries: u64,
+    limits: ExtractionLimits,
 ) -> Result<()> {
     let file = File::open(archive_path).map_err(|_| refused("release archive is unreadable"))?;
     let file_len = file
@@ -64,49 +75,36 @@ fn extract_with_limits(
     let archive = ZipArchive::from_file(file, &mut buffer)
         .map_err(|_| refused("release archive is invalid"))?;
     let expected_count = archive.entries_hint();
-    if expected_count > max_entries {
+    if expected_count > limits.entries {
         return Err(refused("release archive contains too many entries"));
     }
 
     let mut plans = Vec::with_capacity(expected_count as usize);
     let mut seen_paths = HashSet::new();
-    let mut seen_components = HashMap::<String, String>::new();
     let mut hinted_expanded_total = 0u64;
+    let mut path_metadata_bytes = 0usize;
     let mut local_header_buffer = vec![0; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
     let mut entries = archive.entries(&mut buffer);
     while let Some(entry) = entries
         .next_entry()
         .map_err(|_| refused("release archive is invalid"))?
     {
-        if plans.len() as u64 >= max_entries {
+        if plans.len() as u64 >= limits.entries {
             return Err(refused("release archive contains too many entries"));
         }
 
         let raw_path = entry.file_path();
         let original = std::str::from_utf8(raw_path.as_ref())
             .map_err(|_| refused("release archive contains an unsafe path"))?;
-        let (path, portable_key, is_dir) = checked_path(original)?;
+        path_metadata_bytes = path_metadata_bytes
+            .checked_add(original.len())
+            .ok_or_else(|| refused("release archive path metadata exceeds its limit"))?;
+        if path_metadata_bytes > limits.path_metadata_bytes {
+            return Err(refused("release archive path metadata exceeds its limit"));
+        }
+        let (path, portable_key, is_dir) = checked_path(original, limits.path_depth)?;
         if !seen_paths.insert(portable_key.clone()) {
             return Err(refused("release archive contains duplicate paths"));
-        }
-        let mut original_prefix = String::new();
-        let mut folded_prefix = String::new();
-        for component in path.components() {
-            let Component::Normal(part) = component else {
-                return Err(refused("release archive contains an unsafe path"));
-            };
-            if !original_prefix.is_empty() {
-                original_prefix.push('/');
-                folded_prefix.push('/');
-            }
-            original_prefix.push_str(&part.to_string_lossy());
-            folded_prefix.push_str(&part.to_string_lossy().to_lowercase());
-            if seen_components
-                .insert(folded_prefix.clone(), original_prefix.clone())
-                .is_some_and(|known| known != original_prefix)
-            {
-                return Err(refused("release archive contains case-colliding paths"));
-            }
         }
 
         let method = entry.compression_method();
@@ -120,7 +118,7 @@ fn extract_with_limits(
 
         let compressed_size = entry.compressed_size_hint();
         let expanded_size = entry.uncompressed_size_hint();
-        if expanded_size > max_entry_bytes {
+        if expanded_size > limits.entry_bytes {
             return Err(refused(
                 "release archive entry exceeds the extraction limit",
             ));
@@ -131,7 +129,7 @@ fn extract_with_limits(
         hinted_expanded_total = hinted_expanded_total
             .checked_add(expanded_size)
             .ok_or_else(|| refused("release archive exceeds the extraction limit"))?;
-        if hinted_expanded_total > max_total_bytes {
+        if hinted_expanded_total > limits.total_bytes {
             return Err(refused("release archive exceeds the extraction limit"));
         }
         let local = archive
@@ -242,7 +240,7 @@ fn extract_with_limits(
                 copy_bounded(
                     &mut verified,
                     &mut output,
-                    max_entry_bytes.min(max_total_bytes - expanded_total),
+                    limits.entry_bytes.min(limits.total_bytes - expanded_total),
                     &mut actual,
                 )?;
             }
@@ -252,7 +250,7 @@ fn extract_with_limits(
                 copy_bounded(
                     &mut verified,
                     &mut output,
-                    max_entry_bytes.min(max_total_bytes - expanded_total),
+                    limits.entry_bytes.min(limits.total_bytes - expanded_total),
                     &mut actual,
                 )?;
             }
@@ -386,7 +384,7 @@ fn validate_flags(flags: rawzip::EntryFlags, method: CompressionMethod) -> Resul
     Ok(())
 }
 
-fn checked_path(original: &str) -> Result<(PathBuf, String, bool)> {
+fn checked_path(original: &str, max_depth: usize) -> Result<(PathBuf, String, bool)> {
     if original.is_empty()
         || original.len() > MAX_NAME_BYTES
         || original.as_bytes().contains(&0)
@@ -405,6 +403,9 @@ fn checked_path(original: &str) -> Result<(PathBuf, String, bool)> {
     } else {
         original
     };
+    if body.split('/').count() > max_depth {
+        return Err(refused("release archive path exceeds the depth limit"));
+    }
     let parts: Vec<_> = body.split('/').collect();
     if parts.is_empty()
         || parts
