@@ -5,7 +5,7 @@
 //! DEFLATE entries, and writes regular files into the host-owned staging
 //! directory without applying archive permissions or creating links.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -16,9 +16,12 @@ use crate::error::Result;
 use crate::module::github::refused;
 
 const MAX_ENTRY_COUNT: u64 = 100_000;
+/// A single uncompressed module file may be large (debug symbols, for example),
+/// but cannot exceed one GiB even when the download itself is compressed.
 const MAX_ENTRY_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
+/// The current release-download limit is 512 MiB compressed; a 2 GiB expanded
+/// archive leaves room for substantial decompression while bounding disk use.
 const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_DEFLATE_RATIO: u64 = 1032;
 const MAX_NAME_BYTES: usize = 4096;
 
 #[derive(Clone)]
@@ -67,6 +70,7 @@ fn extract_with_limits(
 
     let mut plans = Vec::with_capacity(expected_count as usize);
     let mut seen_paths = HashSet::new();
+    let mut seen_components = HashMap::<String, String>::new();
     let mut hinted_expanded_total = 0u64;
     let mut entries = archive.entries(&mut buffer);
     while let Some(entry) = entries
@@ -83,6 +87,25 @@ fn extract_with_limits(
         let (path, portable_key, is_dir) = checked_path(original)?;
         if !seen_paths.insert(portable_key.clone()) {
             return Err(refused("release archive contains duplicate paths"));
+        }
+        let mut original_prefix = String::new();
+        let mut folded_prefix = String::new();
+        for component in path.components() {
+            let Component::Normal(part) = component else {
+                return Err(refused("release archive contains an unsafe path"));
+            };
+            if !original_prefix.is_empty() {
+                original_prefix.push('/');
+                folded_prefix.push('/');
+            }
+            original_prefix.push_str(&part.to_string_lossy());
+            folded_prefix.push_str(&part.to_string_lossy().to_lowercase());
+            if seen_components
+                .insert(folded_prefix.clone(), original_prefix.clone())
+                .is_some_and(|known| known != original_prefix)
+            {
+                return Err(refused("release archive contains case-colliding paths"));
+            }
         }
 
         let method = entry.compression_method();
@@ -106,20 +129,12 @@ fn extract_with_limits(
         if hinted_expanded_total > max_total_bytes {
             return Err(refused("release archive exceeds the extraction limit"));
         }
-        if method == CompressionMethod::DEFLATE {
-            let max_by_ratio = compressed_size
-                .checked_mul(MAX_DEFLATE_RATIO)
-                .unwrap_or(u64::MAX);
-            if expanded_size > max_by_ratio {
-                return Err(refused("release archive entry exceeds the compression ratio limit"));
-            }
-        }
-
         let local = archive
             .get_entry(entry.wayfinder())
             .map_err(|_| refused("release archive is invalid"))?;
         let range = local.compressed_data_range();
         if range.0 > range.1
+            || range.0 < entry.local_header_offset()
             || range.1 > file_len
             || range.1 > archive.directory_offset()
             || range.1 - range.0 != compressed_size
@@ -137,6 +152,16 @@ fn extract_with_limits(
             return Err(refused("release archive headers disagree"));
         }
         if flags.has_data_descriptor() {
+            let local_sizes = (
+                local_header.crc32(),
+                local_header.compressed_size_hint(),
+                local_header.uncompressed_size_hint(),
+            );
+            let all_zero = local_sizes == (0, 0, 0);
+            let matches_central = local_sizes == (entry.crc32(), compressed_size, expanded_size);
+            if !all_zero && !matches_central {
+                return Err(refused("release archive headers disagree"));
+            }
             let descriptor = local
                 .reader()
                 .data_descriptor()
@@ -219,19 +244,14 @@ fn extract_with_limits(
                 )?;
             }
             CompressionMethod::DEFLATE => {
-                let mut decoder = flate2::read::DeflateDecoder::new(reader);
-                {
-                    let mut verified = local.verifying_reader(&mut decoder);
-                    copy_bounded(
-                        &mut verified,
-                        &mut output,
-                        max_entry_bytes.min(max_total_bytes - expanded_total),
-                        &mut actual,
-                    )?;
-                }
-                if decoder.total_in() != plan.compressed_size {
-                    return Err(refused("release archive has a truncated DEFLATE stream"));
-                }
+                let decoder = StrictDeflate::new(reader, plan.compressed_size);
+                let mut verified = local.verifying_reader(decoder);
+                copy_bounded(
+                    &mut verified,
+                    &mut output,
+                    max_entry_bytes.min(max_total_bytes - expanded_total),
+                    &mut actual,
+                )?;
             }
             _ => return Err(refused("release archive uses an unsupported compression method")),
         }
@@ -258,6 +278,86 @@ fn copy_bounded(
         return Err(refused("release archive exceeds the extraction limit"));
     }
     Ok(())
+}
+
+/// DEFLATE reader that requires a real end-of-stream marker and exact input
+/// consumption. The high-level flate2 Read adapter treats EOF as a flush and
+/// can return ordinary EOF for an incomplete stream.
+struct StrictDeflate<R> {
+    input: R,
+    decoder: flate2::Decompress,
+    buffer: [u8; 8192],
+    position: usize,
+    length: usize,
+    expected_input: u64,
+    ended: bool,
+}
+
+impl<R> StrictDeflate<R> {
+    fn new(input: R, expected_input: u64) -> Self {
+        Self {
+            input,
+            decoder: flate2::Decompress::new(false),
+            buffer: [0; 8192],
+            position: 0,
+            length: 0,
+            expected_input,
+            ended: false,
+        }
+    }
+}
+
+impl<R: Read> Read for StrictDeflate<R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() || self.ended {
+            return Ok(0);
+        }
+        loop {
+            if self.position == self.length {
+                self.length = self.input.read(&mut self.buffer)?;
+                self.position = 0;
+            }
+            let eof = self.length == 0;
+            let input = &self.buffer[self.position..self.length];
+            let before_in = self.decoder.total_in();
+            let before_out = self.decoder.total_out();
+            let status = self
+                .decoder
+                .decompress(
+                    input,
+                    output,
+                    if eof {
+                        flate2::FlushDecompress::Finish
+                    } else {
+                        flate2::FlushDecompress::None
+                    },
+                )
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid DEFLATE stream"))?;
+            let consumed = (self.decoder.total_in() - before_in) as usize;
+            let produced = (self.decoder.total_out() - before_out) as usize;
+            self.position += consumed;
+
+            if status == flate2::Status::StreamEnd {
+                if self.decoder.total_in() != self.expected_input {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "DEFLATE stream did not consume its complete entry",
+                    ));
+                }
+                self.ended = true;
+                return Ok(produced);
+            }
+            if produced != 0 {
+                return Ok(produced);
+            }
+            if eof || (consumed == 0 && self.position < self.length) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "truncated DEFLATE stream",
+                ));
+            }
+        }
+    }
 }
 
 fn validate_flags(flags: rawzip::EntryFlags, method: CompressionMethod) -> Result<()> {
