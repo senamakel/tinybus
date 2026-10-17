@@ -987,7 +987,7 @@ impl TerminalState {
         }
         true
     }
-    fn dispose_setup(&self) {
+    fn dispose_setup(self: &Arc<Self>) {
         // The worker already observed active_reinit=false. Every last capture
         // is taken mechanically and destroyed after all bookkeeping unlocks.
         let (reinitialize, future, reinit_future) = {
