@@ -372,7 +372,33 @@ impl ModuleClient {
         member: &str,
         args: impl Serialize,
     ) -> Result<R, ModuleCallError> {
-        let record = self.record(module)?;
+        self.call_attested_detailed(module, member, args)
+            .await
+            .map_err(|failure| failure.kind)
+    }
+
+    /// Execute a confidential member after the host registry pins both the
+    /// release archive and extracted library and the same unique peer proves
+    /// that exact pair. This retains a remote method failure's wire name and
+    /// message in the result fields; its `Debug`, `Display`, and terminal report
+    /// remain sanitized.
+    ///
+    /// Lazy readiness is established without a business call, before this
+    /// method queries the broker or serializes `args`. Missing or mismatched
+    /// proofs fail closed and are never retried through ordinary delivery.
+    ///
+    /// # Errors
+    ///
+    /// A detailed [`ModuleCallFailure`]. Remote values may contain arguments
+    /// or credentials; callers must apply their own redaction policy before
+    /// displaying or logging the public fields.
+    pub async fn call_attested_detailed<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        let record = self.record(module).map_err(ModuleCallFailure::local)?;
         let candidates = crate::module::platform::host_candidates();
         // The resolver tries compatible release assets in host-candidate order
         // and may fall back after an admission failure. Keep each archive and
@@ -388,7 +414,7 @@ impl ModuleClient {
             .collect();
         if compatible_assets.is_empty() {
             report(&*self.access, record, Reason::ModuleUnavailable);
-            return Err(ModuleCallError::Unavailable);
+            return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
         }
         let preparation = self.access.prepare_attested(record.id);
         let prepared = if let Some(timeout) = self.timeout {
@@ -400,10 +426,13 @@ impl ModuleClient {
         };
         if self.fixture.is_some() || !prepared {
             report(&*self.access, record, Reason::ModuleUnavailable);
-            return Err(ModuleCallError::Unavailable);
+            return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
         }
 
-        let name_proxy = self.load_proxy(record, record.object_path).await?;
+        let name_proxy = self
+            .load_proxy(record, record.object_path)
+            .await
+            .map_err(ModuleCallFailure::local)?;
         let metadata_timeout = self.timeout.unwrap_or(crate::connection::DEFAULT_TIMEOUT);
         let owner = match name_proxy
             .connection()
@@ -413,10 +442,14 @@ impl ModuleClient {
             Ok(Some(owner)) if owner.is_unique() => owner,
             Ok(_) => {
                 report(&*self.access, record, Reason::ModuleUnavailable);
-                return Err(ModuleCallError::Unavailable);
+                return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
             }
             Err(error) => {
-                return Err(report_proxy_failure(self.access.reporter(), record, &error));
+                return Err(report_proxy_failure_detailed(
+                    self.access.reporter(),
+                    record,
+                    &error,
+                ));
             }
         };
         let unique_proxy = name_proxy
@@ -424,7 +457,7 @@ impl ModuleClient {
             .proxy(owner.as_str(), record.object_path, record.bus_name)
             .map_err(|_| {
                 report(&*self.access, record, Reason::IncompatibleContract);
-                ModuleCallError::IncompatibleContract
+                ModuleCallFailure::local(ModuleCallError::IncompatibleContract)
             })?;
         let attestation = match unique_proxy
             .connection()
@@ -434,10 +467,14 @@ impl ModuleClient {
             Ok(Some(attestation)) => attestation,
             Ok(None) => {
                 report(&*self.access, record, Reason::ModuleUnavailable);
-                return Err(ModuleCallError::Unavailable);
+                return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
             }
             Err(error) => {
-                return Err(report_proxy_failure(self.access.reporter(), record, &error));
+                return Err(report_proxy_failure_detailed(
+                    self.access.reporter(),
+                    record,
+                    &error,
+                ));
             }
         };
         let expected_name = crate::name::BusName::new(record.bus_name)
@@ -453,11 +490,11 @@ impl ModuleClient {
             })
         {
             report(&*self.access, record, Reason::ModuleUnavailable);
-            return Err(ModuleCallError::Unavailable);
+            return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
         }
 
         let unique_proxy = self.with_deadline(unique_proxy);
-        invoke_proxy(&*self.access, record, &unique_proxy, member, args, true).await
+        invoke_proxy_detailed(&*self.access, record, &unique_proxy, member, args, true).await
     }
 
     /// Call a member that returns a JSON-encoded string and deserialise that
