@@ -22,6 +22,8 @@ pub mod resolution;
 #[cfg(feature = "modules")]
 mod zip_descriptor;
 #[cfg(feature = "modules")]
+mod zip_deflate;
+#[cfg(feature = "modules")]
 mod zip_extract;
 
 #[cfg(feature = "modules")]
