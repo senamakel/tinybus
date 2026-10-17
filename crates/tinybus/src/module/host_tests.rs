@@ -255,6 +255,34 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         attestation.sha256,
         crate::module::sha256_file(executable).unwrap()
     );
+
+    let alias: crate::BusName = "ai.tinyhumans.test.ModuleAliasHandover".parse().unwrap();
+    let first_owner = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    first_owner.request_name(alias.as_str()).await.unwrap();
+    assert!(host.module_for_sender(&alias).is_none());
+    drop(first_owner);
+    let replacement_owner = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    replacement_owner
+        .request_name(alias.as_str())
+        .await
+        .unwrap();
+    assert!(host.module_for_sender(&alias).is_none());
+    assert_eq!(
+        host.module_for_sender(&unique)
+            .expect("alias handover does not change module identity")
+            .as_str(),
+        "clock"
+    );
+
+    host.inner
+        .stop(&info.name, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(host.module_for_sender(&unique).is_none());
     broker_task.abort();
 }
 
