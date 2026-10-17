@@ -222,12 +222,11 @@ async fn canceling_pending_linked_setup_denies_late_ready_and_releases_the_name(
     let module = linked_export("linked_cancel_pending");
     let bus_name = module.manifest.bus_name.clone();
     let release = Arc::new(tokio::sync::Semaphore::new(0));
-    let setup_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let release_setup = release.clone();
-    let returned = setup_returned.clone();
     let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+    let (settled_tx, settled_rx) = tokio::sync::oneshot::channel();
     let attaching_host = host.clone();
-    let attaching = tokio::spawn(async move {
+    let mut attaching = tokio::spawn(async move {
         attaching_host
             .attach_linked_with_setup(
                 module,
@@ -239,20 +238,20 @@ async fn canceling_pending_linked_setup_denies_late_ready_and_releases_the_name(
                         .acquire()
                         .await
                         .expect("release pending setup");
-                    connection
+                    let served = connection
                         .serve_at("/linked/pending".parse().unwrap(), SetupValue("late"))
-                        .await?;
-                    returned.store(true, Ordering::Release);
-                    Ok(())
+                        .await;
+                    let _ = settled_tx.send(served.is_ok());
+                    served
                 },
             )
             .await
     });
 
-    let peer = tokio::time::timeout(Duration::from_secs(2), peer_rx)
-        .await
-        .unwrap()
-        .unwrap();
+    let peer = tokio::select! {
+        result = &mut attaching => panic!("linked attach ended before setup entered: {result:?}"),
+        peer = peer_rx => peer.expect("linked setup callback did not provide its authenticated peer"),
+    };
     assert_eq!(
         host.module_for_sender(&peer)
             .as_ref()
@@ -263,8 +262,16 @@ async fn canceling_pending_linked_setup_denies_late_ready_and_releases_the_name(
     assert!(matches!(attaching.await, Err(error) if error.is_cancelled()));
     assert!(host.module_for_sender(&peer).is_none());
     release.add_permits(1);
+    assert!(tokio::time::timeout(Duration::from_secs(5), settled_rx)
+        .await
+        .expect("late setup callback did not settle")
+        .expect("late setup callback dropped before settling"));
     wait_for_owner(&observer, bus_name.as_str(), None).await;
-    assert!(!setup_returned.load(Ordering::Acquire));
+    assert!(observer
+        .proxy(&bus_name, "/linked/pending", "org.example.LinkedSetupValue")
+        .call("Value", serde_json::json!([]))
+        .await
+        .is_err());
     assert!(host.list().iter().all(|module| {
         module.manifest.bus_name != bus_name
             || !matches!(module.state, ModuleState::Ready | ModuleState::Serving)
@@ -284,12 +291,11 @@ async fn timed_out_linked_setup_denies_late_ready_and_releases_the_name() {
     let module = linked_export("linked_timeout_pending");
     let bus_name = module.manifest.bus_name.clone();
     let release = Arc::new(tokio::sync::Semaphore::new(0));
-    let setup_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let release_setup = release.clone();
-    let returned = setup_returned.clone();
     let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+    let (settled_tx, settled_rx) = tokio::sync::oneshot::channel();
     let attaching_host = host.clone();
-    let attaching = tokio::spawn(async move {
+    let mut attaching = tokio::spawn(async move {
         attaching_host
             .attach_linked_with_setup(
                 module,
@@ -301,20 +307,20 @@ async fn timed_out_linked_setup_denies_late_ready_and_releases_the_name() {
                         .acquire()
                         .await
                         .expect("release pending setup");
-                    connection
+                    let served = connection
                         .serve_at("/linked/pending".parse().unwrap(), SetupValue("late"))
-                        .await?;
-                    returned.store(true, Ordering::Release);
-                    Ok(())
+                        .await;
+                    let _ = settled_tx.send(served.is_ok());
+                    served
                 },
             )
             .await
     });
 
-    let peer = tokio::time::timeout(Duration::from_secs(2), peer_rx)
-        .await
-        .unwrap()
-        .unwrap();
+    let peer = tokio::select! {
+        result = &mut attaching => panic!("linked attach ended before setup entered: {result:?}"),
+        peer = peer_rx => peer.expect("linked setup callback did not provide its authenticated peer"),
+    };
     assert_eq!(
         host.module_for_sender(&peer)
             .as_ref()
@@ -324,8 +330,16 @@ async fn timed_out_linked_setup_denies_late_ready_and_releases_the_name() {
     assert!(attaching.await.unwrap().is_err());
     assert!(host.module_for_sender(&peer).is_none());
     release.add_permits(1);
+    assert!(tokio::time::timeout(Duration::from_secs(5), settled_rx)
+        .await
+        .expect("late setup callback did not settle")
+        .expect("late setup callback dropped before settling"));
     wait_for_owner(&observer, bus_name.as_str(), None).await;
-    assert!(!setup_returned.load(Ordering::Acquire));
+    assert!(observer
+        .proxy(&bus_name, "/linked/pending", "org.example.LinkedSetupValue")
+        .call("Value", serde_json::json!([]))
+        .await
+        .is_err());
     assert!(host.list().iter().all(|module| {
         module.manifest.bus_name != bus_name
             || !matches!(module.state, ModuleState::Ready | ModuleState::Serving)
