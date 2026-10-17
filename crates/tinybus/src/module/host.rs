@@ -841,7 +841,12 @@ impl ModuleHost {
         self.ensure_dependencies(&manifest, path)?;
         // No pin: a caller naming a path on disk vouches for it with the
         // `modules.toml` beside it, if at all.
-        self.register_lazy(path, manifest, config, None)
+        let library_sha256 = allowlisted_hash(
+            path,
+            std::fs::File::open(path)
+                .map_err(|_| Error::module_refused(path, "module library could not be opened"))?,
+        )?;
+        self.register_lazy(path, manifest, config, None, library_sha256)
     }
 
     /// Discover and load every platform library in a private directory.
@@ -973,7 +978,10 @@ impl ModuleHost {
                         self.activate(&path, *artifact, config, None)
                     }
                     PendingModule::Lazy(manifest) => {
-                        self.register_lazy(&path, *manifest, config, None)
+                        let library_sha256 = std::fs::File::open(&path)
+                            .map_err(Error::from)
+                            .and_then(|file| allowlisted_hash(&path, file))?;
+                        self.register_lazy(&path, *manifest, config, None, library_sha256)
                     }
                 });
             outcomes.push(result);

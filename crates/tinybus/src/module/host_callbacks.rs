@@ -673,7 +673,11 @@ impl ModuleHost {
         let hash = allowlisted_hash(path, std::fs::File::open(path)?)?.ok_or_else(|| {
             Error::module_refused(path, "scoped callbacks require a verified artifact")
         })?;
-        let artifact = loader::load(path, self.inner.strict.load(Ordering::Acquire))?;
+        let artifact = loader::load_verified(
+            path,
+            self.inner.strict.load(Ordering::Acquire),
+            Some(&hash),
+        )?;
         self.ensure_dependencies(&artifact.manifest, path)?;
         if allowlisted_hash(path, std::fs::File::open(path)?)?.as_ref() != Some(&hash) {
             return Err(Error::module_refused(
@@ -728,7 +732,8 @@ impl ModuleHost {
                     lazy_init: true,
                     lazy_load: false,
                     descriptor_info: None,
-                    pinned_sha256: Some(hash),
+                    pinned_sha256: Some(hash.clone()),
+                    pinned_library_sha256: Some(hash),
                 },
             )?;
             rollback.transport = Some(transport.clone());
