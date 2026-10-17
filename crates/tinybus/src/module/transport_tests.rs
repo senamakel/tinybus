@@ -469,6 +469,151 @@ async fn canceling_reconfiguration_waiting_for_started_lazy_init_keeps_initializ
     assert!(REINITIALIZE_ENTERED.load(Ordering::Acquire));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
+    let (transport, host) = ModuleTransport::new("sdk-ready-race".into(), b"{}".to_vec());
+    let (worker_started_tx, worker_started_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_worker_tx, release_worker_rx) = std::sync::mpsc::sync_channel(1);
+    *transport.before_worker_lock.lock().unwrap() = Some(Box::new(move || {
+        worker_started_tx.send(()).unwrap();
+        release_worker_rx.recv().unwrap();
+    }));
+
+    let (setup_started_tx, setup_started_rx) = tokio::sync::oneshot::channel();
+    let setup_started = Arc::new(StdMutex::new(Some(setup_started_tx)));
+    let (release_setup_tx, release_setup_rx) = tokio::sync::oneshot::channel();
+    let release_setup = Arc::new(StdMutex::new(Some(release_setup_rx)));
+    let setup_count = Arc::new(AtomicUsize::new(0));
+    let factory = {
+        let setup_started = setup_started.clone();
+        let release_setup = release_setup.clone();
+        let setup_count = setup_count.clone();
+        move || {
+            let setup_started = setup_started.clone();
+            let release_setup = release_setup.clone();
+            let setup_count = setup_count.clone();
+            move |_: crate::Connection, _: serde_json::Value| {
+                let first_setup = setup_count.fetch_add(1, Ordering::AcqRel) == 0;
+                let started = first_setup.then(|| setup_started.lock().unwrap().take().unwrap());
+                let release = first_setup.then(|| release_setup.lock().unwrap().take().unwrap());
+                async move {
+                    if let (Some(started), Some(release)) = (started, release) {
+                        started.send(()).unwrap();
+                        release.await.unwrap();
+                    }
+                    Ok(())
+                }
+            }
+        }
+    };
+    transport.defer_initializer(host, move |host| {
+        let mut module = TbModuleVtable::default();
+        let code =
+            unsafe {
+                tinybus_module::start_linked_reconfigurable_module_with_factory::<
+                    serde_json::Value,
+                    _,
+                    _,
+                >(&host, &mut module, 2, true, factory)
+            };
+        if code == TB_OK {
+            Ok(module)
+        } else {
+            Err(format!("SDK initialization returned {code}"))
+        }
+    });
+
+    let first_call = tokio::spawn({
+        let transport = transport.clone();
+        async move { transport.send(call()).await }
+    });
+    transport.wait_initializing().await;
+    tokio::task::spawn_blocking(move || worker_started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Poll the reinitializer while the physical initializer is still parked.
+    // This proves it took the scheduled-initializer path before publication.
+    let mut reinitializing = Box::pin(
+        transport
+            .clone()
+            .reinitialize(crate::Secret::new(br#"{"route":"replacement"}"#.to_vec())),
+    );
+    std::future::poll_fn(|cx| match reinitializing.as_mut().poll(cx) {
+        std::task::Poll::Pending => std::task::Poll::Ready(()),
+        std::task::Poll::Ready(result) => {
+            panic!("reinitialization finished before lazy initialization: {result:?}")
+        }
+    })
+    .await;
+
+    release_worker_tx.send(()).unwrap();
+    let hello = tokio::time::timeout(Duration::from_secs(2), transport.recv())
+        .await
+        .expect("SDK handshake reaches the host")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        hello.header.member.as_ref().map(MemberName::as_str),
+        Some("Hello")
+    );
+    transport
+        .send(Message::method_return(
+            &hello.header,
+            serde_json::json!(":tinybus.module.1"),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), setup_started_rx)
+        .await
+        .expect("SDK setup starts after its handshake")
+        .unwrap();
+
+    // The SDK publishes its reinitialization connection only after setup
+    // succeeds. At this barrier the vtable exists, but host.ready has not run.
+    assert!(transport.module.lock().unwrap().is_some());
+    assert!(!transport.is_ready());
+    let pending_before_ready = std::future::poll_fn(|cx| match reinitializing.as_mut().poll(cx) {
+        std::task::Poll::Pending => std::task::Poll::Ready(true),
+        std::task::Poll::Ready(_) => std::task::Poll::Ready(false),
+    })
+    .await;
+    let native_callback_started_before_ready = transport.native_lifecycle_pending();
+
+    tokio::time::pause();
+    tokio::time::advance(MODULE_INIT_DEADLINE).await;
+    let timed_out_before_ready = reinitializing.await.is_err();
+
+    release_setup_tx.send(()).unwrap();
+    let first_call_result = tokio::time::timeout(Duration::from_secs(2), first_call)
+        .await
+        .expect("the original business call is released by readiness")
+        .unwrap();
+    let reinitialize_after_ready = transport
+        .reinitialize(crate::Secret::new(br#"{"route":"after-ready"}"#.to_vec()))
+        .await;
+    let setup_attempts = setup_count.load(Ordering::Acquire);
+    let stopped = transport.stop(Duration::from_secs(2)).await;
+
+    assert!(
+        pending_before_ready,
+        "reconfiguration must wait for host.ready"
+    );
+    assert!(
+        timed_out_before_ready,
+        "readiness wait keeps the original deadline"
+    );
+    assert!(
+        !native_callback_started_before_ready,
+        "the SDK callback returns TB_CLOSED until setup publishes its connection"
+    );
+    first_call_result.unwrap();
+    reinitialize_after_ready.unwrap();
+    assert_eq!(setup_attempts, 2, "replacement setup runs after readiness");
+    assert_eq!(stopped.unwrap(), TB_OK);
+}
+
 #[tokio::test]
 async fn a_failed_initializer_is_reported_to_callers() {
     let (transport, host) =
