@@ -685,6 +685,20 @@ fn bundled_directory_lookup_skips_missing_higher_precedence_candidates() {
 }
 
 #[test]
+fn bundled_directory_lookup_reads_the_explicit_environment_variable_name() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let from_env = root.path().join("environment");
+    std::fs::create_dir_all(&from_env).unwrap();
+    let env_var = "TINYBUS_TEST_BUNDLED_RELEASES";
+    unsafe { std::env::set_var(env_var, &from_env) };
+
+    let resolved = resolve_bundled_dir(env_var);
+    unsafe { std::env::remove_var(env_var) };
+
+    assert_eq!(resolved, Some(from_env));
+}
+
+#[test]
 fn linked_registry_replaces_factories_and_returns_the_last_registration() {
     fn first_factory() -> crate::Result<LinkedModule> {
         Err(crate::Error::failed("first factory"))
