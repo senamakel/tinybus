@@ -23,11 +23,7 @@ impl crate::Interface for HostObjectValue {
     }
 }
 
-async fn wait_for_owner(
-    connection: &Connection,
-    name: &str,
-    expected: Option<crate::BusName>,
-) {
+async fn wait_for_owner(connection: &Connection, name: &str, expected: Option<crate::BusName>) {
     for _ in 0..1_000 {
         if connection.name_owner(name).await.unwrap() == expected {
             return;
@@ -68,11 +64,8 @@ async fn a_failing_setup_fails_the_start() {
     let result = ModuleRuntime::start(&RuntimeNames::default(), Some(setup));
     assert!(result.is_err());
     let connection = captured.lock().unwrap().take().unwrap();
-    let closed = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        connection.list_names(),
-    )
-    .await;
+    let closed =
+        tokio::time::timeout(std::time::Duration::from_secs(1), connection.list_names()).await;
     assert!(closed.is_ok_and(|result| result.is_err()));
 }
 
@@ -123,7 +116,11 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
     drop(first);
     let old_guard_proxy = runtime
         .connection()
-        .proxy(name.as_str(), first_path.as_str(), "org.example.ModuleRuntimeHostObject")
+        .proxy(
+            name.as_str(),
+            first_path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
         .unwrap();
     let replaced: serde_json::Value = old_guard_proxy.call("Value", ()).await.unwrap();
     assert_eq!(replaced, serde_json::json!("new"));
@@ -137,7 +134,11 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
     drop(second);
     let remaining_proxy = runtime
         .connection()
-        .proxy(name.as_str(), second_path.as_str(), "org.example.ModuleRuntimeHostObject")
+        .proxy(
+            name.as_str(),
+            second_path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
         .unwrap();
     let remaining: serde_json::Value = remaining_proxy.call("Value", ()).await.unwrap();
     assert_eq!(remaining, serde_json::json!("second"));
@@ -165,7 +166,11 @@ async fn dropping_a_host_object_guard_preserves_a_name_owned_before_registration
     let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
     let name: crate::BusName = "ai.tinyhumans.test.PreownedHostObject".parse().unwrap();
     let path: crate::ObjectPath = "/runtime/preowned".parse().unwrap();
-    runtime.connection().request_name(name.as_str()).await.unwrap();
+    runtime
+        .connection()
+        .request_name(name.as_str())
+        .await
+        .unwrap();
     let owner = runtime.connection().unique_name();
     let guard = runtime
         .serve_host_object(name.clone(), path, HostObjectValue("value"))
@@ -200,7 +205,11 @@ async fn a_name_collision_leaves_no_host_object_registration_behind() {
     wait_for_owner(runtime.connection(), name.as_str(), owner).await;
     let proxy = runtime
         .connection()
-        .proxy(name.as_str(), path.as_str(), "org.example.ModuleRuntimeHostObject")
+        .proxy(
+            name.as_str(),
+            path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
         .unwrap();
     let leaked: crate::Result<serde_json::Value> = proxy.call("Value", ()).await;
     assert!(leaked.is_err());

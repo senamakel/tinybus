@@ -185,11 +185,7 @@ impl crate::Interface for LinkedSetupValue {
         vec!["Value".parse().unwrap()]
     }
 
-    async fn call(
-        &self,
-        _: &crate::MemberName,
-        _: serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    async fn call(&self, _: &crate::MemberName, _: serde_json::Value) -> Result<serde_json::Value> {
         Ok(serde_json::json!(self.0))
     }
 }
@@ -268,7 +264,9 @@ async fn concurrent_linked_setup_keeps_each_export_bound_to_its_own_host_connect
     let broker = Broker::new();
     let broker_task = broker.spawn(bus.clone());
     let host = ModuleHost::new(broker);
-    let setups = Arc::new(StdMutex::new(Vec::<(String, &'static str, Connection)>::new()));
+    let setups = Arc::new(StdMutex::new(
+        Vec::<(String, &'static str, Connection)>::new(),
+    ));
 
     let setup_a = setups.clone();
     let mut manifest_a = named_manifest("linked-a", "LinkedA");
