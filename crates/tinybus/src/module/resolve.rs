@@ -413,7 +413,11 @@ impl Resolver {
     ///
     /// Whatever the host's provider returns when the runtime cannot start.
     pub async fn runtime(&self) -> crate::Result<&'static ModuleRuntime> {
-        (self.inner.runtime)().await
+        let runtime = (self.inner.runtime)().await?;
+        runtime
+            .host()
+            .configure_search_path_config(self.inner.search_paths.clone());
+        Ok(runtime)
     }
 
     /// Report a terminal outcome for `record`, once per process.
@@ -663,7 +667,7 @@ impl Resolver {
                     .await;
             }
             Some(ModuleSource::Linked) => {
-                let factory = self.inner.linked.get(record.id).copied();
+                let factory = self.inner.linked.get(record.id);
                 let module_config = (self.inner.module_config)(record.id);
                 return self
                     .blocking(move || Self::load_linked(runtime, record, factory, module_config))
