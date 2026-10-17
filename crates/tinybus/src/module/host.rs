@@ -375,6 +375,9 @@ impl ModuleHost {
     /// connection. The module remains available while its setup function
     /// applies the new values; a rejected configuration leaves the runtime
     /// running with whatever state its setup function had already committed.
+    /// If a lazy module is still resolved and has not started initialization,
+    /// the replacement becomes its initialization configuration; its first
+    /// method call then starts the module with those values.
     pub async fn reinitialize(
         &self,
         name: impl AsRef<str>,
@@ -1607,7 +1610,11 @@ impl ModuleControl for ModuleHostInner {
                     "module lifecycle operation is already running",
                 ));
             }
-            if !matches!(state, ModuleState::Ready | ModuleState::Serving) {
+            let deferred_initialization = matches!(state, ModuleState::Resolved)
+                && module.transport.has_deferred_initializer();
+            if !matches!(state, ModuleState::Ready | ModuleState::Serving)
+                && !deferred_initialization
+            {
                 return Err(Error::ModuleUnavailable {
                     module: module.info.name.clone(),
                     state: state_name(&state).to_string(),

@@ -14,7 +14,7 @@ use crate::message::codec::MAX_FRAME_LEN;
 use crate::message::{Message, MessageKind};
 use crate::module::abi::{
     TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
-    TB_TIMEOUT, TbHostVtable, TbModuleVtable,
+    TB_TIMEOUT, TbHostVtable, TbModuleVtable, TbSlice,
 };
 use crate::ports::Transport;
 
@@ -799,6 +799,49 @@ impl ModuleTransport {
         self.context.ready.load(Ordering::Acquire) && !self.is_faulted() && !self.is_stopped()
     }
 
+    /// Whether a lazy initializer is still available for a pre-init config update.
+    pub(crate) fn has_deferred_initializer(&self) -> bool {
+        let state = self.context.physical.lock().expect("physical state lock");
+        !self.admission_closed()
+            && !self.is_faulted()
+            && state.init == InitState::Deferred
+            && state.cleanup == CleanupState::Idle
+            && self
+                .initializer
+                .lock()
+                .expect("module initializer lock")
+                .is_some()
+    }
+
+    /// Replace the configuration a deferred initializer will read, if it has
+    /// not been scheduled. The physical-state lock is held through pointer
+    /// replacement so `schedule_initializer` cannot take the old host vtable.
+    fn replace_deferred_config(&self, bytes: &crate::Secret) -> Result<bool> {
+        let state = self.context.physical.lock().expect("physical state lock");
+        if self.admission_closed() || self.is_faulted() {
+            return Err(Error::ConnectionClosed);
+        }
+        if state.init != InitState::Deferred || state.cleanup != CleanupState::Idle {
+            return Ok(false);
+        }
+        let mut initializer = self.initializer.lock().expect("module initializer lock");
+        let Some(initializer) = initializer.as_mut() else {
+            return Ok(false);
+        };
+        let replacement = bytes.expose_secret().to_vec();
+        let mut config = self.context.config.lock().expect("module config lock");
+        config.fill(0);
+        *config = replacement;
+        initializer.host.config = TbSlice {
+            ptr: config.as_ptr(),
+            len: config.len(),
+        };
+        if self.admission_closed() || self.is_faulted() {
+            return Err(Error::ConnectionClosed);
+        }
+        Ok(true)
+    }
+
     pub(crate) fn clear_config(&self) {
         let mut config = self.context.config.lock().expect("module config lock");
         config.fill(0);
@@ -811,7 +854,7 @@ impl ModuleTransport {
             return Err(Error::ConnectionClosed);
         }
         let started = std::time::Instant::now();
-        let lifecycle =
+        let mut lifecycle =
             tokio::time::timeout(MODULE_INIT_DEADLINE, self.lifecycle.clone().lock_owned())
                 .await
                 .map_err(|_| Error::Timeout {
@@ -821,6 +864,47 @@ impl ModuleTransport {
                 })?;
         if self.admission_closed() || self.is_faulted() {
             return Err(Error::ConnectionClosed);
+        }
+        if self.replace_deferred_config(&bytes)? {
+            return Ok(());
+        }
+        if self.module.lock().expect("module vtable lock").is_none() {
+            let initialization_in_progress = matches!(
+                self.context
+                    .physical
+                    .lock()
+                    .expect("physical state lock")
+                    .init,
+                InitState::Scheduled | InitState::Entered
+            );
+            if !initialization_in_progress {
+                return Err(Error::transport("module is not initialized"));
+            }
+            // An ordinary bus call may have scheduled lazy initialization
+            // before this reconfiguration acquired the lifecycle lock. Let the
+            // physical initializer run without holding either lifecycle or
+            // physical-state locks, then use only the original deadline for
+            // reacquisition and the native callback.
+            drop(lifecycle);
+            let remaining = MODULE_INIT_DEADLINE.saturating_sub(started.elapsed());
+            tokio::time::timeout(remaining, self.ensure_initialized())
+                .await
+                .map_err(|_| Error::Timeout {
+                    member: crate::MemberName::new("ReinitializeModule")
+                        .expect("static member name is valid"),
+                    timeout_ms: MODULE_INIT_DEADLINE.as_millis() as u64,
+                })??;
+            let remaining = MODULE_INIT_DEADLINE.saturating_sub(started.elapsed());
+            lifecycle = tokio::time::timeout(remaining, self.lifecycle.clone().lock_owned())
+                .await
+                .map_err(|_| Error::Timeout {
+                    member: crate::MemberName::new("ReinitializeModule")
+                        .expect("static member name is valid"),
+                    timeout_ms: MODULE_INIT_DEADLINE.as_millis() as u64,
+                })?;
+            if self.admission_closed() || self.is_faulted() {
+                return Err(Error::ConnectionClosed);
+            }
         }
         let module = self
             .module

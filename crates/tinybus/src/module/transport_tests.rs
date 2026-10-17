@@ -349,6 +349,127 @@ async fn deferred_initialization_waits_for_ready_then_delivers_pending_calls() {
 }
 
 #[tokio::test]
+async fn deferred_reinitialize_replaces_the_initializer_config_slice() {
+    let original = br#"{"token":"old-sensitive-value"}"#;
+    let replacement = br#"{"route":"new"}"#;
+    let (transport, host) = ModuleTransport::new("deferred-config".into(), original.to_vec());
+    let original_pointer = host.config.ptr;
+    let observed = Arc::new(StdMutex::new(None));
+    let observed_by_init = observed.clone();
+    transport.defer_initializer(host, move |host| {
+        if host.config.ptr.is_null() && host.config.len != 0 {
+            return Err("configuration pointer is null".to_owned());
+        }
+        let config = serde_json::from_slice(unsafe {
+            std::slice::from_raw_parts(host.config.ptr, host.config.len)
+        })
+        .map_err(|_| "configuration is invalid".to_owned())?;
+        *observed_by_init.lock().expect("observed config lock") = Some(config);
+        let mut module = TbModuleVtable::default();
+        let code = unsafe { initialize_ok(&host, &mut module) };
+        if code == TB_OK {
+            Ok(module)
+        } else {
+            Err("module initialization failed".to_owned())
+        }
+    });
+
+    transport
+        .reinitialize(crate::Secret::new(replacement.to_vec()))
+        .await
+        .unwrap();
+    {
+        let config = transport.context.config.lock().expect("module config lock");
+        let initializer = transport
+            .initializer
+            .lock()
+            .expect("module initializer lock");
+        let host = &initializer.as_ref().unwrap().host;
+        assert_ne!(config.as_ptr(), original_pointer);
+        assert_eq!(config.as_slice(), replacement);
+        assert_eq!(host.config.ptr, config.as_ptr());
+        assert_eq!(host.config.len, config.len());
+        assert!(
+            !config
+                .windows(b"old-sensitive-value".len())
+                .any(|window| window == b"old-sensitive-value")
+        );
+    }
+
+    transport.ensure_initialized().await.unwrap();
+    assert_eq!(
+        observed.lock().unwrap().as_ref(),
+        Some(&serde_json::json!({ "route": "new" }))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canceling_reconfiguration_waiting_for_started_lazy_init_keeps_initializer_owned() {
+    let _lock = VTABLE_TEST_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    REINITIALIZE_CODE.store(TB_OK, Ordering::Release);
+    REINITIALIZE_ENTERED.store(false, Ordering::Release);
+    let (transport, host) = ModuleTransport::new("lazy-reinitialize-race".into(), b"{}".to_vec());
+    let (worker_started_tx, worker_started_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_worker_tx, release_worker_rx) = std::sync::mpsc::sync_channel(1);
+    *transport
+        .before_worker_lock
+        .lock()
+        .expect("worker test hook lock") = Some(Box::new(move || {
+        let _ = worker_started_tx.send(());
+        let _ = release_worker_rx.recv();
+    }));
+    transport.defer_initialize(initialize_ok, host);
+
+    let initializing_transport = transport.clone();
+    let initializing =
+        tokio::spawn(async move { initializing_transport.ensure_initialized().await });
+    tokio::task::spawn_blocking(move || worker_started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        transport
+            .context
+            .physical
+            .lock()
+            .expect("physical state lock")
+            .init,
+        InitState::Scheduled
+    );
+
+    let (attempted_tx, attempted_rx) = tokio::sync::oneshot::channel();
+    let reconfiguring_transport = transport.clone();
+    let reconfiguring = tokio::spawn(async move {
+        let _ = attempted_tx.send(());
+        reconfiguring_transport
+            .reinitialize(crate::Secret::new(br#"{"route":"replacement"}"#.to_vec()))
+            .await
+    });
+    attempted_rx.await.unwrap();
+    tokio::task::yield_now().await;
+    assert!(
+        !transport.lifecycle_is_owned_for_test(),
+        "waiting for a scheduled initializer must not retain the lifecycle lock"
+    );
+    reconfiguring.abort();
+    assert!(reconfiguring.await.unwrap_err().is_cancelled());
+
+    release_worker_tx.send(()).unwrap();
+    initializing.await.unwrap().unwrap();
+    assert!(!transport.is_faulted());
+    assert!(!REINITIALIZE_ENTERED.load(Ordering::Acquire));
+
+    transport
+        .reinitialize(crate::Secret::new(br#"{"route":"after-init"}"#.to_vec()))
+        .await
+        .unwrap();
+    assert!(REINITIALIZE_ENTERED.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn a_failed_initializer_is_reported_to_callers() {
     let (transport, host) =
         ModuleTransport::new("fails-init".to_string(), br#"{"secret":"value"}"#.to_vec());
