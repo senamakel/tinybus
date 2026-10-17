@@ -3,7 +3,7 @@ use crate::module::service_slot::ModuleServiceSlot;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::oneshot;
 
 type ShutdownHook = Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
@@ -31,10 +31,12 @@ async fn the_same_key_reuses_the_service_and_allows_mutating_operations() {
                 drop(service);
                 Ok(())
             },
-            |service| Box::pin(async move {
-                *service += 1;
-                Ok::<_, crate::Error>(*service)
-            }),
+            |service| {
+                Box::pin(async move {
+                    *service += 1;
+                    Ok::<_, crate::Error>(*service)
+                })
+            },
         )
         .await
         .expect("first operation should open and use the service");
@@ -54,10 +56,12 @@ async fn the_same_key_reuses_the_service_and_allows_mutating_operations() {
                 drop(service);
                 Ok(())
             },
-            |service| Box::pin(async move {
-                *service += 1;
-                Ok::<_, crate::Error>(*service)
-            }),
+            |service| {
+                Box::pin(async move {
+                    *service += 1;
+                    Ok::<_, crate::Error>(*service)
+                })
+            },
         )
         .await
         .expect("matching key should reuse the installed service");
@@ -103,7 +107,10 @@ async fn changing_the_key_closes_the_installed_service_before_opening_its_replac
     .await
     .expect("replacement open should determine the result after a close error");
 
-    assert_eq!(*events.lock().unwrap(), ["open alice", "close alice", "open bob"]);
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["open alice", "close alice", "open bob"]
+    );
 }
 
 #[tokio::test]
@@ -139,15 +146,16 @@ async fn explicit_close_returns_its_error_and_clears_the_slot() {
 #[tokio::test]
 async fn a_failed_open_leaves_the_slot_empty() {
     let slot = slot::<u8, u8>();
-    assert!(slot
-        .with(
+    assert!(
+        slot.with(
             1,
             || async { Err(crate::Error::failed("open failed")) },
             |_| async { Ok(()) },
             |_| Box::pin(async { Ok::<_, crate::Error>(()) }),
         )
         .await
-        .is_err());
+        .is_err()
+    );
 
     let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let observed = opens.clone();
@@ -177,15 +185,19 @@ async fn close_waits_for_the_current_operation_to_finish() {
                 1,
                 || async { Ok::<_, crate::Error>(7) },
                 |_| async { Ok(()) },
-                move |_| Box::pin(async move {
-                    let _ = entered_tx.send(());
-                    let _ = release_rx.await;
-                    Ok::<_, crate::Error>(())
-                }),
+                move |_| {
+                    Box::pin(async move {
+                        let _ = entered_tx.send(());
+                        let _ = release_rx.await;
+                        Ok::<_, crate::Error>(())
+                    })
+                },
             )
             .await
     });
-    entered_rx.await.expect("operation should enter before close");
+    entered_rx
+        .await
+        .expect("operation should enter before close");
 
     let (close_started_tx, close_started_rx) = oneshot::channel();
     let closing_slot = slot.clone();
@@ -195,14 +207,20 @@ async fn close_waits_for_the_current_operation_to_finish() {
     });
     close_started_rx.await.expect("close task should start");
     tokio::task::yield_now().await;
-    assert!(!close.is_finished(), "close must wait for the locked operation");
+    assert!(
+        !close.is_finished(),
+        "close must wait for the locked operation"
+    );
 
     let _ = release_tx.send(());
     operation
         .await
         .expect("operation task should finish")
         .expect("operation should succeed");
-    close.await.expect("close task should finish").expect("close should succeed");
+    close
+        .await
+        .expect("close task should finish")
+        .expect("close should succeed");
 }
 
 #[tokio::test]
@@ -222,12 +240,20 @@ async fn shutdown_registration_is_idempotent_and_can_be_repeated_after_cleanup_e
     slot.on_shutdown(move |hook| registered.lock().unwrap().push(hook));
     let registered = hooks.clone();
     slot.on_shutdown(move |hook| registered.lock().unwrap().push(hook));
-    assert_eq!(hooks.lock().unwrap().len(), 1, "registration should be idempotent");
+    assert_eq!(
+        hooks.lock().unwrap().len(),
+        1,
+        "registration should be idempotent"
+    );
 
     let hook = hooks.lock().unwrap().remove(0);
     hook().await;
 
     let registered = hooks.clone();
     slot.on_shutdown(move |hook| registered.lock().unwrap().push(hook));
-    assert_eq!(hooks.lock().unwrap().len(), 1, "cleanup error must reset registration");
+    assert_eq!(
+        hooks.lock().unwrap().len(),
+        1,
+        "cleanup error must reset registration"
+    );
 }
