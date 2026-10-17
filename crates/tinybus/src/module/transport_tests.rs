@@ -601,6 +601,7 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
         .reinitialize(crate::Secret::new(br#"{"route":"after-ready"}"#.to_vec()))
         .await;
     let callback_calls_after_ready = state.calls.load(Ordering::Acquire);
+    tokio::time::resume();
     let stopped = transport.stop(Duration::from_secs(2)).await;
 
     assert!(
