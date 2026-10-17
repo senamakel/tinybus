@@ -523,7 +523,7 @@ async fn lazy_fixture(
 }
 
 #[tokio::test]
-async fn connection_wire_errors_preserve_initializing_and_unavailable_as_closed_codes() {
+async fn reinitialize_rejects_initializing_but_updates_deferred_lazy_config() {
     let _test_guard = FIXTURE_LOCK.lock().await;
     let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
@@ -559,15 +559,19 @@ async fn connection_wire_errors_preserve_initializing_and_unavailable_as_closed_
     drop(host);
 
     let (host, connection, broker_task) = lazy_fixture(false).await;
-    let unavailable = connection
+    let resolved = connection
         .reinitialize_module(ID, serde_json::json!({ "route": "new" }))
         .await
-        .unwrap_err();
-    assert!(matches!(
-        unavailable,
-        crate::Error::MethodFailed { ref name, .. }
-            if name == crate::Error::MODULE_UNAVAILABLE
-    ));
+        .unwrap();
+    assert_eq!(resolved.state, ModuleState::Resolved);
+    let proxy = connection.proxy(BUS, PATH, BUS).unwrap();
+    assert_eq!(
+        proxy
+            .call::<serde_json::Value>("ReadConfig", ())
+            .await
+            .unwrap(),
+        serde_json::json!({ "route": "new" })
+    );
     broker_task.abort();
     drop(host);
 }
