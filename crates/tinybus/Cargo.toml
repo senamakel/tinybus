@@ -75,6 +75,8 @@ cli = [
     "tokio/rt-multi-thread",
     "tokio/signal",
     "uds",
+    "dep:flate2",
+    "dep:tar",
 ]
 
 # Load trusted, in-process cdylib modules. Off by default because a loaded

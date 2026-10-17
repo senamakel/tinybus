@@ -57,6 +57,38 @@ async fn broker_with_module_host() -> (tempfile::TempDir, PathBuf, ModuleHost) {
 }
 
 #[test]
+fn checksum_manifest_keeps_archive_hash_and_adds_its_library_hash() {
+    let directory = tempfile::tempdir().unwrap();
+    let archive_path = directory.path().join("clock-linux.tar.gz");
+    let library = b"verified library bytes";
+    let library_path = directory.path().join("library.so");
+    std::fs::write(&library_path, library).unwrap();
+    let file = std::fs::File::create(&archive_path).unwrap();
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(library.len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+    archive
+        .append_data(&mut header, "libclock.so", &library[..])
+        .unwrap();
+    archive.into_inner().unwrap().finish().unwrap();
+
+    let manifest_path = directory.path().join("checksum.toml");
+    write_checksum_manifest(std::slice::from_ref(&archive_path), Some(&manifest_path)).unwrap();
+    let manifest = std::fs::read_to_string(manifest_path).unwrap();
+    let archive_sha256 = tinybus::module::sha256_file(&archive_path).unwrap();
+    assert!(manifest.contains("[sha256]"));
+    assert!(manifest.contains(&format!("\"clock-linux.tar.gz\" = \"{archive_sha256}\"")));
+    assert!(manifest.contains("[library_sha256]"));
+    assert!(manifest.contains(&format!(
+        "\"clock-linux.tar.gz\" = \"{}\"",
+        tinybus::module::sha256_file(library_path).unwrap()
+    )));
+}
+
+#[test]
 fn the_cli_parses_its_declared_commands_and_uses_explicit_addresses() {
     let cli = Cli::try_parse_from([
         "tinybus",
