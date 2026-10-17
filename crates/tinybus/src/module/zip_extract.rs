@@ -72,6 +72,7 @@ fn extract_with_limits(
     let mut seen_paths = HashSet::new();
     let mut seen_components = HashMap::<String, String>::new();
     let mut hinted_expanded_total = 0u64;
+    let mut local_header_buffer = vec![0; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
     let mut entries = archive.entries(&mut buffer);
     while let Some(entry) = entries
         .next_entry()
@@ -112,13 +113,17 @@ fn extract_with_limits(
         let flags = entry.flags();
         validate_flags(flags, method)?;
         if method != CompressionMethod::STORE && method != CompressionMethod::DEFLATE {
-            return Err(refused("release archive uses an unsupported compression method"));
+            return Err(refused(
+                "release archive uses an unsupported compression method",
+            ));
         }
 
         let compressed_size = entry.compressed_size_hint();
         let expanded_size = entry.uncompressed_size_hint();
         if expanded_size > max_entry_bytes {
-            return Err(refused("release archive entry exceeds the extraction limit"));
+            return Err(refused(
+                "release archive entry exceeds the extraction limit",
+            ));
         }
         if is_dir && expanded_size != 0 {
             return Err(refused("release archive directory entry is not empty"));
@@ -141,7 +146,6 @@ fn extract_with_limits(
         {
             return Err(refused("release archive contains invalid entry offsets"));
         }
-        let mut local_header_buffer = vec![0; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
         let local_header = local
             .local_header(&mut local_header_buffer)
             .map_err(|_| refused("release archive is invalid"))?;
@@ -211,8 +215,7 @@ fn extract_with_limits(
             fs::create_dir_all(&target)
                 .map_err(|_| refused("release archive extraction failed"))?;
         } else if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|_| refused("release archive extraction failed"))?;
+            fs::create_dir_all(parent).map_err(|_| refused("release archive extraction failed"))?;
         }
         let mut output: Box<dyn Write> = if plan.is_dir {
             Box::new(io::sink())
@@ -253,7 +256,11 @@ fn extract_with_limits(
                     &mut actual,
                 )?;
             }
-            _ => return Err(refused("release archive uses an unsupported compression method")),
+            _ => {
+                return Err(refused(
+                    "release archive uses an unsupported compression method",
+                ));
+            }
         }
         if actual != plan.expanded_size {
             return Err(refused("release archive entry size is inconsistent"));
@@ -272,8 +279,8 @@ fn copy_bounded(
     actual: &mut u64,
 ) -> Result<()> {
     let mut limited = input.take(remaining.saturating_add(1));
-    *actual = io::copy(&mut limited, output)
-        .map_err(|_| refused("release archive extraction failed"))?;
+    *actual =
+        io::copy(&mut limited, output).map_err(|_| refused("release archive extraction failed"))?;
     if *actual > remaining {
         return Err(refused("release archive exceeds the extraction limit"));
     }
@@ -332,7 +339,9 @@ impl<R: Read> Read for StrictDeflate<R> {
                         flate2::FlushDecompress::None
                     },
                 )
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid DEFLATE stream"))?;
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid DEFLATE stream")
+                })?;
             let consumed = (self.decoder.total_in() - before_in) as usize;
             let produced = (self.decoder.total_out() - before_out) as usize;
             self.position += consumed;
@@ -364,7 +373,13 @@ fn validate_flags(flags: rawzip::EntryFlags, method: CompressionMethod) -> Resul
     if flags.is_encrypted() || flags.has_strong_encryption() || flags.is_masked() {
         return Err(refused("release archive contains encrypted entries"));
     }
-    let allowed: u16 = 1 << 3 | 1 << 11 | if method == CompressionMethod::DEFLATE { 0b110 } else { 0 };
+    let allowed: u16 = 1 << 3
+        | 1 << 11
+        | if method == CompressionMethod::DEFLATE {
+            0b110
+        } else {
+            0
+        };
     if flags.bits() & !allowed != 0 {
         return Err(refused("release archive contains unsupported entry flags"));
     }
@@ -378,7 +393,9 @@ fn checked_path(original: &str) -> Result<(PathBuf, String, bool)> {
         || original.starts_with('/')
         || original.contains('\\')
         || original.contains(':')
-        || original.chars().any(|ch| ch.is_control() || "<>|?*\"".contains(ch))
+        || original
+            .chars()
+            .any(|ch| ch.is_control() || "<>|?*\"".contains(ch))
     {
         return Err(refused("release archive contains an unsafe path"));
     }
@@ -389,7 +406,11 @@ fn checked_path(original: &str) -> Result<(PathBuf, String, bool)> {
         original
     };
     let parts: Vec<_> = body.split('/').collect();
-    if parts.is_empty() || parts.iter().any(|part| part.is_empty() || *part == "." || *part == "..") {
+    if parts.is_empty()
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == "..")
+    {
         return Err(refused("release archive contains an unsafe path"));
     }
     for part in &parts {
@@ -409,7 +430,10 @@ fn checked_path(original: &str) -> Result<(PathBuf, String, bool)> {
     for part in &parts {
         path.push(part);
     }
-    if path.components().any(|component| !matches!(component, Component::Normal(_))) {
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
         return Err(refused("release archive contains an unsafe path"));
     }
     let portable_key = parts.join("/").to_lowercase();

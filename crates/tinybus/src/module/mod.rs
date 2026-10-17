@@ -13,14 +13,14 @@ pub mod failure;
 mod first_admitted;
 #[cfg(feature = "modules")]
 mod github;
-#[cfg(feature = "modules")]
-mod zip_extract;
 mod hash;
 pub mod manifest;
 pub mod platform;
 mod release;
 #[cfg(feature = "modules")]
 pub mod resolution;
+#[cfg(feature = "modules")]
+mod zip_extract;
 
 #[cfg(feature = "modules")]
 pub(crate) mod host;

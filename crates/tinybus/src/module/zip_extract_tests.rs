@@ -6,24 +6,24 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
     let destination = root.path().join("staging");
     fs::create_dir(&destination).unwrap();
     let bytes: &[u8] = match name {
-            "compat_store.zip" => include_bytes!("fixtures/compat_store.zip"),
-            "compat_deflate_descriptor.zip" => {
-                include_bytes!("fixtures/compat_deflate_descriptor.zip")
-            }
-            "unsafe_parent.zip" => include_bytes!("fixtures/unsafe_parent.zip"),
-            "windows_drive.zip" => include_bytes!("fixtures/windows_drive.zip"),
-            "windows_backslash.zip" => include_bytes!("fixtures/windows_backslash.zip"),
-            "unix_link_mode.zip" => include_bytes!("fixtures/unix_link_mode.zip"),
-            "suid_mode.zip" => include_bytes!("fixtures/suid_mode.zip"),
-            "duplicate.zip" => include_bytes!("fixtures/duplicate.zip"),
-            "archive_collision.zip" => include_bytes!("fixtures/archive_collision.zip"),
-            "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
-            "compat_zip64_local.zip" => include_bytes!("fixtures/compat_zip64_local.zip"),
-            "encrypted.zip" => include_bytes!("fixtures/encrypted.zip"),
-            "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
-            "overlap.zip" => include_bytes!("fixtures/overlap.zip"),
-            _ => panic!("unknown test fixture"),
-        };
+        "compat_store.zip" => include_bytes!("fixtures/compat_store.zip"),
+        "compat_deflate_descriptor.zip" => {
+            include_bytes!("fixtures/compat_deflate_descriptor.zip")
+        }
+        "unsafe_parent.zip" => include_bytes!("fixtures/unsafe_parent.zip"),
+        "windows_drive.zip" => include_bytes!("fixtures/windows_drive.zip"),
+        "windows_backslash.zip" => include_bytes!("fixtures/windows_backslash.zip"),
+        "unix_link_mode.zip" => include_bytes!("fixtures/unix_link_mode.zip"),
+        "suid_mode.zip" => include_bytes!("fixtures/suid_mode.zip"),
+        "duplicate.zip" => include_bytes!("fixtures/duplicate.zip"),
+        "archive_collision.zip" => include_bytes!("fixtures/archive_collision.zip"),
+        "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
+        "compat_zip64_local.zip" => include_bytes!("fixtures/compat_zip64_local.zip"),
+        "encrypted.zip" => include_bytes!("fixtures/encrypted.zip"),
+        "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
+        "overlap.zip" => include_bytes!("fixtures/overlap.zip"),
+        _ => panic!("unknown test fixture"),
+    };
     fs::write(&archive, bytes).unwrap();
     let result = extract(&archive, &destination);
     (root, destination, result)
@@ -47,7 +47,10 @@ fn extract_through_cache_staging(bytes: &[u8]) -> (tempfile::TempDir, Result<()>
 fn extracts_independent_stored_and_deflated_archives() {
     let (_root, destination, result) = extract_fixture("compat_store.zip");
     result.unwrap();
-    assert_eq!(fs::read(destination.join("folder/module.so")).unwrap(), b"module-payload");
+    assert_eq!(
+        fs::read(destination.join("folder/module.so")).unwrap(),
+        b"module-payload"
+    );
     assert_eq!(fs::read(destination.join("empty")).unwrap(), b"");
 
     let (_root, destination, result) = extract_fixture("compat_deflate_descriptor.zip");
@@ -137,14 +140,20 @@ fn link_and_special_mode_metadata_never_create_links_or_privileges() {
     result.unwrap();
     let link = fs::symlink_metadata(destination.join("link")).unwrap();
     assert!(link.file_type().is_file());
-    assert_eq!(fs::read(destination.join("link")).unwrap(), b"../outside.txt");
+    assert_eq!(
+        fs::read(destination.join("link")).unwrap(),
+        b"../outside.txt"
+    );
 
     let (_root, destination, result) = extract_fixture("suid_mode.zip");
     result.unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(destination.join("module.so")).unwrap().permissions().mode();
+        let mode = fs::metadata(destination.join("module.so"))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & (libc::S_ISUID | libc::S_ISGID), 0);
     }
 }
@@ -245,8 +254,11 @@ fn data_descriptor_must_match_the_central_directory() {
 
 #[test]
 fn an_incomplete_deflate_stream_is_not_accepted_as_eof() {
-    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder.write_all(b"payload whose final DEFLATE marker matters").unwrap();
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(b"payload whose final DEFLATE marker matters")
+        .unwrap();
     let mut compressed = encoder.finish().unwrap();
     compressed.pop();
 
@@ -257,7 +269,10 @@ fn an_incomplete_deflate_stream_is_not_accepted_as_eof() {
 
 fn set_member_crc(bytes: &mut [u8], name: &str, crc: u32) {
     let mut offset = 0;
-    while let Some(relative) = bytes[offset..].windows(4).position(|sig| sig == b"PK\x03\x04") {
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x03\x04")
+    {
         let local = offset + relative;
         let name_len = u16::from_le_bytes([bytes[local + 26], bytes[local + 27]]) as usize;
         let name_start = local + 30;
@@ -269,7 +284,10 @@ fn set_member_crc(bytes: &mut [u8], name: &str, crc: u32) {
     }
 
     let mut offset = 0;
-    while let Some(relative) = bytes[offset..].windows(4).position(|sig| sig == b"PK\x01\x02") {
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x01\x02")
+    {
         let central = offset + relative;
         let name_len = u16::from_le_bytes([bytes[central + 28], bytes[central + 29]]) as usize;
         let name_start = central + 46;
