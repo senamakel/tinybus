@@ -97,6 +97,7 @@ pub struct ModuleRuntime {
 }
 
 struct HostObjectRegistry {
+    broker: Broker,
     connection: Connection,
     names: std::collections::HashMap<crate::BusName, HostNameLease>,
     #[cfg(test)]
@@ -151,7 +152,9 @@ impl Drop for HostObjectGuard {
                 false
             };
             if release {
-                let _ = state.connection.release_name(name.as_str()).await;
+                if let Some(unique) = state.connection.unique_name() {
+                    let _ = state.broker.release_host_name(&unique, &name);
+                }
             }
         });
     }
@@ -288,50 +291,28 @@ async fn serve_host_object_transaction(
     interface: impl Interface,
 ) -> crate::Result<HostObjectGuard> {
     let mut state = registry.lock().await;
-    let owner = state.connection.name_owner(name.as_str()).await?;
     let own_unique = state.connection.unique_name();
-    let release_when_empty = match owner {
-        Some(owner) if own_unique.as_ref() == Some(&owner) => state
+    let unique = own_unique
+        .as_ref()
+        .ok_or(crate::Error::ConnectionClosed)?;
+    #[cfg(test)]
+    if let Some(barrier) = state.before_name_request.clone() {
+        barrier.entered.add_permits(1);
+        let _permit = barrier
+            .release
+            .acquire()
+            .await
+            .expect("name-request barrier");
+    }
+    let newly_claimed = state
+        .broker
+        .claim_host_name(unique, name.clone())
+        .map_err(|_| crate::Error::failed("host object bus name is already owned"))?;
+    let release_when_empty = newly_claimed
+        || state
             .names
             .get(&name)
-            .is_some_and(|lease| lease.release_when_empty),
-        Some(_) => {
-            return Err(crate::Error::failed(
-                "host object bus name is already owned",
-            ));
-        }
-        None => {
-            #[cfg(test)]
-            if let Some(barrier) = state.before_name_request.clone() {
-                barrier.entered.add_permits(1);
-                let _permit = barrier
-                    .release
-                    .acquire()
-                    .await
-                    .expect("name-request barrier");
-            }
-            if let Err(error) = state.connection.request_name(name.as_str()).await {
-                // A lost reply can make the RPC report failure after the broker
-                // committed the claim. Check the authoritative owner before
-                // returning, and roll it back only when no helper guard owns it.
-                let owner_after = state
-                    .connection
-                    .name_owner(name.as_str())
-                    .await
-                    .ok()
-                    .flatten();
-                if own_unique.as_ref() == owner_after.as_ref() {
-                    if let Some(lease) = state.names.get_mut(&name) {
-                        lease.release_when_empty = true;
-                    } else {
-                        let _ = state.connection.release_name(name.as_str()).await;
-                    }
-                }
-                return Err(error);
-            }
-            true
-        }
-    };
+            .is_some_and(|lease| lease.release_when_empty);
     #[cfg(test)]
     if let Some(barrier) = state.after_name_claim.clone() {
         barrier.entered.add_permits(1);
@@ -363,7 +344,9 @@ async fn serve_host_object_transaction(
                 if let Some(lease) = state.names.get_mut(&name) {
                     lease.release_when_empty = true;
                 } else {
-                    let _ = state.connection.release_name(name.as_str()).await;
+                    if let Some(unique) = state.connection.unique_name() {
+                        let _ = state.broker.release_host_name(&unique, &name);
+                    }
                 }
             }
             return Err(error);
@@ -391,9 +374,10 @@ async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
     // transport disappears faults and cannot be reloaded without a restart.
     broker.spawn(transport.clone());
 
-    let host = ModuleHost::new(broker);
+    let host = ModuleHost::new(broker.clone());
     let connection = Connection::connect(transport.connect().await?).await?;
     let host_objects = std::sync::Arc::new(tokio::sync::Mutex::new(HostObjectRegistry {
+        broker,
         connection: connection.clone(),
         names: std::collections::HashMap::new(),
         #[cfg(test)]
