@@ -2,7 +2,7 @@ use super::*;
 use crate::message::{Message, MessageKind};
 use crate::ports::{Listener, Transport};
 use crate::transport::memory::MemoryTransport;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 
@@ -21,20 +21,26 @@ impl HeldMetadataBus {
         }
     }
 
-    async fn connect(&self, held_member: Option<&'static str>) -> (crate::Connection, Arc<Notify>) {
+    async fn connect(
+        &self,
+        held_member: Option<&'static str>,
+    ) -> (crate::Connection, Arc<Notify>, Arc<StdMutex<Vec<String>>>) {
         let (client, broker) = MemoryTransport::pair();
         let held = Arc::new(Notify::new());
+        let observed = Arc::new(StdMutex::new(Vec::new()));
         self.accepted
             .send(Box::new(HoldMetadataRequest {
                 inner: broker,
                 held_member,
                 held: held.clone(),
+                observed: observed.clone(),
             }))
             .await
             .unwrap();
         (
             crate::Connection::connect(Box::new(client)).await.unwrap(),
             held,
+            observed,
         )
     }
 }
@@ -54,6 +60,7 @@ struct HoldMetadataRequest {
     inner: MemoryTransport,
     held_member: Option<&'static str>,
     held: Arc<Notify>,
+    observed: Arc<StdMutex<Vec<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -67,6 +74,12 @@ impl Transport for HoldMetadataRequest {
             let Some((message, _)) = self.inner.recv_with_provenance().await? else {
                 return Ok(None);
             };
+            if let Some(member) = message.header.member.as_ref() {
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .push(member.as_str().to_string());
+            }
             let is_held_query = self.held_member.is_some_and(|member| {
                 message.header.kind == MessageKind::MethodCall
                     && message
@@ -100,13 +113,14 @@ async fn client_waiting_on_metadata(
     Arc<Notify>,
     Arc<Mutex<Vec<serde_json::Value>>>,
     Arc<Recording>,
+    Arc<StdMutex<Vec<String>>>,
     tokio::task::JoinHandle<crate::Result<()>>,
 ) {
     let bus = HeldMetadataBus::new();
     let broker = crate::broker::Broker::new();
     let broker_task = broker.spawn(bus.clone());
-    let (service, _) = bus.connect(None).await;
-    let (caller, held) = bus.connect(Some(member)).await;
+    let (service, _, _) = bus.connect(None).await;
+    let (caller, held, observed) = bus.connect(Some(member)).await;
     let record = strict_record();
     let calls = Arc::new(Mutex::new(Vec::new()));
     service
@@ -129,11 +143,12 @@ async fn client_waiting_on_metadata(
         preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let client = ModuleClient::new(access).with_timeout(Duration::from_millis(5));
-    (client, record, held, calls, sink, broker_task)
+    (client, record, held, calls, sink, observed, broker_task)
 }
 
 async fn stalled_metadata_call_is_bounded(member: &'static str) {
-    let (client, record, held, calls, sink, broker_task) = client_waiting_on_metadata(member).await;
+    let (client, record, held, calls, sink, observed, broker_task) =
+        client_waiting_on_metadata(member).await;
     let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let serializations_for_call = serializations.clone();
     let held_request = held.notified();
@@ -149,7 +164,7 @@ async fn stalled_metadata_call_is_bounded(member: &'static str) {
     let held_result = tokio::time::timeout(Duration::from_millis(100), async {
         tokio::select! {
             _ = held_request => true,
-            joined = &mut call => panic!("client returned before the selected metadata query was held: {:?}", joined),
+            joined = &mut call => panic!("client returned before the selected metadata query was held: {:?}; observed={:?}", joined, observed.lock().unwrap()),
         }
     })
     .await
