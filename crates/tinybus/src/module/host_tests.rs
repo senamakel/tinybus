@@ -2999,26 +2999,6 @@ impl tracing::Subscriber for PanickingStagedStartSubscriber {
 
 #[tokio::test]
 async fn a_staged_start_unwind_removes_its_exact_published_peer() {
-    const CHILD: &str = "TINYBUS_STAGED_START_PANIC_TEST_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "module::host::tests::a_staged_start_unwind_removes_its_exact_published_peer",
-                "--test-threads=1",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success() && stdout.contains("1 passed;"),
-            "isolated staged-start unwind assertion failed or was not selected: {}{}",
-            stdout,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        return;
-    }
     let bus = MemoryBus::new();
     let broker = Broker::new();
     let broker_task = broker.spawn(bus.clone());
@@ -3036,6 +3016,7 @@ async fn a_staged_start_unwind_removes_its_exact_published_peer() {
             peer: peer.clone(),
         },
         || {
+            tracing::callsite::rebuild_interest_cache();
             host.attach_linked_with_config(
                 LinkedModule {
                     descriptor: TbAbiDescriptor::current("staged-start-panic", "0.1.0"),
