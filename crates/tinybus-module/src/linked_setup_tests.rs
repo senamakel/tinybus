@@ -6,7 +6,7 @@ use std::time::Duration;
 use tinybus::broker::Broker;
 use tinybus::module::{LinkedModule, ModuleHost, ModuleState};
 use tinybus::transport::memory::MemoryBus;
-use tinybus::{Connection, Interface, ModuleId};
+use tinybus::{Connection, Interface};
 
 static DEFAULT_SETUP_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -18,7 +18,7 @@ mod export {
         Err(tinybus::Error::failed("default setup must be replaced"))
     }
 
-    tinybus_module::module_export_static! {
+    crate::module_export_static! {
         setup = default_setup,
         worker_threads = 1,
         provides = ["ai.tinyhumans.test.LinkedSetup"],
@@ -88,7 +88,7 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
 
     let setup_a = setups.clone();
     let first = host.attach_linked_with_setup(
-        linked_export("linked-a"),
+        linked_export("linked_a"),
         serde_json::json!({}),
         move |connection| async move {
             let peer = connection.unique_name().expect("connected module peer");
@@ -98,14 +98,14 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
             setup_a
                 .lock()
                 .unwrap()
-                .push(("linked-a".to_string(), peer.to_string(), connection));
+                .push(("linked_a".to_string(), peer.to_string(), connection));
             Ok(())
         },
     );
 
     let setup_b = setups.clone();
     let second = host.attach_linked_with_setup(
-        linked_export("linked-b"),
+        linked_export("linked_b"),
         serde_json::json!({}),
         move |connection| async move {
             let peer = connection.unique_name().expect("connected module peer");
@@ -115,7 +115,7 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
             setup_b
                 .lock()
                 .unwrap()
-                .push(("linked-b".to_string(), peer.to_string(), connection));
+                .push(("linked_b".to_string(), peer.to_string(), connection));
             Ok(())
         },
     );
@@ -142,7 +142,7 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
         );
 
         let attestation = observer
-            .attestation(&format!("ai.tinyhumans.test.{expected}"))
+            .attestation(format!("ai.tinyhumans.test.{expected}").parse().unwrap())
             .await
             .unwrap()
             .expect("stateful linked setup keeps executable attestation");
@@ -164,7 +164,7 @@ async fn a_failing_stateful_setup_faults_and_releases_its_module_peer() {
     let observer = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let module = linked_export("linked-failure");
+    let module = linked_export("linked_failure");
     let bus_name = module.manifest.bus_name.clone();
     let result = host
         .attach_linked_with_setup(module, serde_json::json!({}), |connection| async move {
@@ -186,7 +186,7 @@ async fn a_failing_stateful_setup_faults_and_releases_its_module_peer() {
 async fn linked_setup_admission_rejects_unmet_dependencies_before_running_the_callback() {
     let broker = Broker::new();
     let host = ModuleHost::new(broker);
-    let mut module = linked_export("linked-requires-missing");
+    let mut module = linked_export("linked_requires_missing");
     module
         .manifest
         .requires
