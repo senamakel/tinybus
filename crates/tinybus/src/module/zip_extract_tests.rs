@@ -143,10 +143,13 @@ fn path_policy_rejects_unportable_or_ambiguous_names_before_normalization() {
         r"\\server\share\escape",
         "a:stream",
         "NUL.txt",
+        "COM1",
+        "LPT9.log",
         "trailing.",
         "trailing ",
         "a//b",
         "./file",
+        "a\u{0001}b",
         "",
     ] {
         assert!(
@@ -154,6 +157,7 @@ fn path_policy_rejects_unportable_or_ambiguous_names_before_normalization() {
             "accepted {name:?}"
         );
     }
+    assert!(checked_path(&"a".repeat(MAX_NAME_BYTES + 1), MAX_PATH_DEPTH).is_err());
     let (root, _destination, result) = extract_fixture("unsafe_parent.zip");
     assert!(result.is_err());
     assert!(!root.path().join("outside.txt").exists());
