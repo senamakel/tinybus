@@ -916,7 +916,15 @@ impl ModuleHost {
                 if let Some(manifest) = read_lazy_manifest(&path)? {
                     Ok(PendingModule::Lazy(Box::new(manifest)))
                 } else {
-                    loader::load(&path, self.inner.strict.load(Ordering::Acquire))
+                    let library_pin = allowlisted_hash(
+                        &path,
+                        std::fs::File::open(&path).map_err(Error::from)?,
+                    )?;
+                    loader::load_verified(
+                        &path,
+                        self.inner.strict.load(Ordering::Acquire),
+                        library_pin.as_deref(),
+                    )
                         .map(|artifact| PendingModule::Loaded(Box::new(artifact)))
                 }
             });
@@ -1067,7 +1075,15 @@ impl ModuleHost {
                     let info = provisional_info(&path, &manifest)?;
                     Ok((PendingModule::Lazy(Box::new(manifest)), info))
                 } else {
-                    let artifact = loader::load(&path, self.inner.strict.load(Ordering::Acquire))?;
+                    let library_pin = allowlisted_hash(
+                        &path,
+                        std::fs::File::open(&path).map_err(Error::from)?,
+                    )?;
+                    let artifact = loader::load_verified(
+                        &path,
+                        self.inner.strict.load(Ordering::Acquire),
+                        library_pin.as_deref(),
+                    )?;
                     let info = self.validate(&path, &artifact.descriptor, &artifact.manifest)?;
                     Ok((PendingModule::Loaded(Box::new(artifact)), info))
                 }
@@ -1301,6 +1317,7 @@ impl ModuleHost {
         // value is carried down instead. Linked code carries the executable
         // digest through the same field. Without one of these sources there is
         // no attestation.
+        let archive_is_pinned = activation.pinned_sha256.is_some();
         let vouched = match activation.pinned_sha256 {
             Some(pinned) => Some(pinned),
             None => std::fs::File::open(path)
@@ -1309,13 +1326,18 @@ impl ModuleHost {
                 .ok()
                 .flatten(),
         };
-        if let Some(sha256) = vouched {
+        let library_sha256 = activation.pinned_library_sha256;
+        let library_matches_vouch = archive_is_pinned
+            || library_sha256
+                .as_ref()
+                .is_none_or(|library| vouched.as_ref() == Some(library));
+        if let (Some(sha256), true) = (vouched, library_matches_vouch) {
             self.inner.broker.attest_module(
                 &unique,
                 crate::attest::Attestation {
                     name: admitted.manifest.bus_name.clone(),
                     sha256,
-                    library_sha256: activation.pinned_library_sha256,
+                    library_sha256,
                 },
             );
         }

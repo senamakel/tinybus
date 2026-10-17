@@ -39,6 +39,10 @@ impl ModuleAccess for Resolver {
         Box::pin(Resolver::ensure_loaded(self, id))
     }
 
+    fn prepare_attested<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(Resolver::prepare_attested(self, id))
+    }
+
     fn proxy<'a>(
         &'a self,
         bus_name: &'a str,

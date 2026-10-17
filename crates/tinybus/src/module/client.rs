@@ -50,6 +50,13 @@ pub trait ModuleAccess: Send + Sync {
     /// A message fit for a user or a model when the module cannot be loaded.
     fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>>;
 
+    /// Perform host-owned readiness work before a strict recipient-attestation
+    /// query. The default refuses because generic accessors cannot prove that
+    /// a lazy native initializer has run without sending a business call.
+    fn prepare_attested<'a>(&'a self, _id: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("strict recipient preparation is unsupported".to_string()) })
+    }
+
     /// A proxy for `object_path` on the serving module at `bus_name`.
     ///
     /// # Errors
@@ -278,6 +285,98 @@ impl ModuleClient {
         args: impl Serialize,
     ) -> Result<R, ModuleCallError> {
         self.invoke(module, member, args, true).await
+    }
+
+    /// Execute a confidential member only when the host registry pins both the
+    /// release archive and extracted library and the same unique peer proves
+    /// that exact pair. Lazy readiness is established without a business call,
+    /// before this method queries the broker or serializes `args`.
+    ///
+    /// # Errors
+    ///
+    /// A sanitized [`ModuleCallError`]. Missing or mismatched proofs fail
+    /// closed and are never retried through ordinary delivery.
+    pub async fn call_attested<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallError> {
+        let record = self.record(module)?;
+        let asset = crate::module::platform::host_candidates()
+            .iter()
+            .find_map(|host| record.asset_for(host))
+            .filter(|asset| {
+                valid_sha256(asset.sha256)
+                    && asset.library_sha256.is_some_and(valid_sha256)
+            });
+        let Some(asset) = asset else {
+            report(&*self.access, record, Reason::ModuleUnavailable);
+            return Err(ModuleCallError::Unavailable);
+        };
+        if self.fixture.is_some()
+            || self.access.prepare_attested(record.id).await.is_err()
+        {
+            report(&*self.access, record, Reason::ModuleUnavailable);
+            return Err(ModuleCallError::Unavailable);
+        }
+
+        let name_proxy = self.load_proxy(record, record.object_path).await?;
+        let owner = match name_proxy
+            .connection()
+            .name_owner(record.bus_name)
+            .await
+        {
+            Ok(Some(owner)) if owner.is_unique() => owner,
+            Ok(_) => {
+                report(&*self.access, record, Reason::ModuleUnavailable);
+                return Err(ModuleCallError::Unavailable);
+            }
+            Err(error) => {
+                return Err(report_proxy_failure(
+                    self.access.reporter(),
+                    record,
+                    &error,
+                ));
+            }
+        };
+        let unique_proxy = name_proxy
+            .connection()
+            .proxy(owner.as_str(), record.object_path, record.bus_name)
+            .map_err(|_| {
+                report(&*self.access, record, Reason::IncompatibleContract);
+                ModuleCallError::IncompatibleContract
+            })?;
+        let attestation = match unique_proxy.attestation().await {
+            Ok(Some(attestation)) => attestation,
+            Ok(None) => {
+                report(&*self.access, record, Reason::ModuleUnavailable);
+                return Err(ModuleCallError::Unavailable);
+            }
+            Err(error) => {
+                return Err(report_proxy_failure(
+                    self.access.reporter(),
+                    record,
+                    &error,
+                ));
+            }
+        };
+        let expected_name = crate::name::BusName::new(record.bus_name)
+            .expect("a release registry carries a validated bus name");
+        let expected_library = asset.library_sha256.expect("filtered library pin");
+        if attestation.name != expected_name
+            || !attestation.sha256.eq_ignore_ascii_case(asset.sha256)
+            || !attestation
+                .library_sha256
+                .as_deref()
+                .is_some_and(|digest| digest.eq_ignore_ascii_case(expected_library))
+        {
+            report(&*self.access, record, Reason::ModuleUnavailable);
+            return Err(ModuleCallError::Unavailable);
+        }
+
+        let unique_proxy = self.with_deadline(unique_proxy);
+        invoke_proxy(&*self.access, record, &unique_proxy, member, args, true).await
     }
 
     /// Call a member that returns a JSON-encoded string and deserialise that
@@ -619,6 +718,10 @@ pub fn classify(error: &Error) -> (ModuleCallError, Reason) {
 #[must_use]
 pub fn wire_kind(error: &Error) -> ModuleCallError {
     classify(error).0
+}
+
+fn valid_sha256(digest: &str) -> bool {
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

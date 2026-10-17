@@ -344,6 +344,25 @@ impl Resolver {
             .map_err(LoadError::into_message)
     }
 
+    /// Resolve, initialize and wait for a module without sending a business
+    /// message. Strict attested calls use this host-owned barrier before
+    /// querying the broker for a recipient proof.
+    pub async fn prepare_attested(&self, id: &str) -> Result<(), String> {
+        self.ensure_loaded(id).await?;
+        let record = self
+            .find(id)
+            .ok_or_else(|| "module is unavailable".to_string())?;
+        let runtime = self
+            .runtime()
+            .await
+            .map_err(|_| "module bus is unavailable".to_string())?;
+        runtime
+            .host()
+            .ensure_ready(record.bus_name)
+            .await
+            .map_err(|_| "module did not reach READY".to_string())
+    }
+
     /// [`Self::ensure_loaded`] with a bound on how long this caller waits.
     ///
     /// The bound is on the *wait*, never on the resolution: a caller that gives
