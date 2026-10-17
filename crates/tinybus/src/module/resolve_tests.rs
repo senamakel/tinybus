@@ -381,10 +381,15 @@ mod resolver {
             allow_download: false,
             bundled_dir: None,
             sources,
-            linked: HashMap::from([(
-                record.id.to_string(),
-                (|| Err(crate::Error::Transport("secret path /home/x".into()))) as LinkedFactory,
-            )]),
+            linked: {
+                fn failing_factory() -> crate::Result<LinkedModule> {
+                    Err(crate::Error::Transport("secret path /home/x".into()))
+                }
+                let registry = Arc::new(LinkedRegistry::new());
+                registry.register(record.id, failing_factory);
+                registry
+            },
+            search_paths: None,
             search_skip: Vec::new(),
             gate: None,
             on_resolved: None,
@@ -449,13 +454,16 @@ mod resolver {
         let record = record("resolver-linked-impostor");
         let sources = HashMap::from([(record.id.to_string(), ModuleSource::Linked)]);
         let mut f = fixture(record, true, sources.clone(), None);
+        let linked = Arc::new(LinkedRegistry::new());
+        linked.register(record.id, impostor);
         f.resolver = Resolver::new(ResolverInputs {
             enabled: true,
             install_dir: None,
             allow_download: false,
             bundled_dir: None,
             sources,
-            linked: HashMap::from([(record.id.to_string(), impostor as LinkedFactory)]),
+            linked,
+            search_paths: None,
             search_skip: Vec::new(),
             gate: None,
             on_resolved: None,
