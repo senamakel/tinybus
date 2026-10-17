@@ -96,7 +96,7 @@ pub struct ModuleRuntime {
     host_objects: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
 }
 
-struct HostObjectRegistry {
+pub(super) struct HostObjectRegistry {
     broker: Broker,
     connection: Connection,
     names: std::collections::HashMap<crate::BusName, HostNameLease>,
@@ -281,9 +281,15 @@ impl ModuleRuntime {
         });
         result.await.map_err(|_| crate::Error::ConnectionClosed)?
     }
+
+    pub(super) fn lease_host_object_registry(
+        &self,
+    ) -> std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>> {
+        self.host_objects.clone()
+    }
 }
 
-async fn serve_host_object_transaction(
+pub(super) async fn serve_host_object_transaction(
     registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
     handle: tokio::runtime::Handle,
     name: crate::BusName,

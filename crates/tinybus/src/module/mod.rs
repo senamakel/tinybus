@@ -16,6 +16,8 @@ mod github;
 mod hash;
 #[cfg(feature = "modules")]
 pub mod lease;
+#[cfg(feature = "modules")]
+pub use lease::{LeaseError, LeasePhase, LeaseReport, LeaseReportOutcome, RetryPolicy, RetryPolicyError, RuntimeLease, RuntimeLeaseDriver};
 pub mod manifest;
 pub mod platform;
 #[cfg(feature = "modules")]
