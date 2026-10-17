@@ -292,8 +292,6 @@ impl Error {
     /// The dotted error name for a member that requires confidential delivery.
     pub const CONFIDENTIALITY_REQUIRED: &'static str =
         "ai.tinyhumans.tinybus.Error.ConfidentialityRequired";
-    /// Stable wire name for a module that is still initializing.
-    pub const MODULE_INITIALIZING: &'static str = "ai.tinyhumans.tinybus.Error.ModuleInitializing";
     /// Stable wire name for a module that cannot currently serve calls.
     pub const MODULE_UNAVAILABLE: &'static str = "ai.tinyhumans.tinybus.Error.ModuleUnavailable";
 
@@ -413,9 +411,6 @@ impl Error {
             Self::Timeout { .. } => "ai.tinyhumans.tinybus.Error.Timeout",
             Self::IncompatibleVersion { .. } => "ai.tinyhumans.tinybus.Error.IncompatibleVersion",
             Self::ModuleRefused { .. } => "ai.tinyhumans.tinybus.Error.ModuleRefused",
-            Self::ModuleUnavailable { state, .. } if state.eq_ignore_ascii_case("initializing") => {
-                Self::MODULE_INITIALIZING
-            }
             Self::ModuleUnavailable { .. } => Self::MODULE_UNAVAILABLE,
             Self::Path { .. } => "ai.tinyhumans.tinybus.Error.Path",
             Self::UnknownStream { .. } => "ai.tinyhumans.tinybus.Error.UnknownStream",
