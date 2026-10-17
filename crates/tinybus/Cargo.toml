@@ -38,7 +38,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 ureq = { version = "3.3", optional = true }
 flate2 = { version = "1", optional = true }
 tar = { version = "0.4", optional = true }
-zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+rawzip = { version = "0.5.2", optional = true }
 tempfile = { version = "3", optional = true }
 toml = { version = "1", optional = true }
 
@@ -77,7 +77,7 @@ cli = [
 
 # Load trusted, in-process cdylib modules. Off by default because a loaded
 # module shares the host's address space and full privileges.
-modules = ["tokio/rt-multi-thread", "dep:ureq", "dep:flate2", "dep:tar", "dep:zip", "dep:tempfile", "dep:toml", "dep:libc"]
+modules = ["tokio/rt-multi-thread", "dep:ureq", "dep:flate2", "dep:tar", "dep:rawzip", "dep:tempfile", "dep:toml", "dep:libc"]
 
 # Shared helpers for integration suites that load a built module cdylib.
 test-support = ["modules", "macros"]
