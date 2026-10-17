@@ -369,6 +369,10 @@ fn fixture_manifest() -> ModuleManifest {
 }
 
 async fn fixture() -> FixtureAccess {
+    fixture_with_sink(Arc::new(Quiet)).await
+}
+
+async fn fixture_with_sink(sink: Arc<dyn FailureSink>) -> FixtureAccess {
     let bus = MemoryBus::new();
     let broker = Broker::new();
     let broker_task = broker.spawn(bus.clone());
@@ -389,7 +393,7 @@ async fn fixture() -> FixtureAccess {
         _host: host,
         connection,
         broker_task,
-        reporter: FailureReporter::new(Arc::new(Quiet)),
+        reporter: FailureReporter::new(sink),
         registered: true,
         enabled: true,
         unattested_service: None,

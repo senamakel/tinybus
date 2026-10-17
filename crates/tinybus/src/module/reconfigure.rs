@@ -41,6 +41,14 @@ pub enum Reconfigure {
 }
 
 /// Coordinates configuration-sensitive access to one registered module.
+///
+/// For [`Reconfigure::Member`], a failed, canceled, or timed-out remote
+/// configuration call leaves its completion uncertain: TinyBus stops waiting,
+/// but cannot cancel a handler already running in the module. The coordinator
+/// then refuses further access, even for the same fingerprint, until the host
+/// has independently established that the module restarted and constructs a
+/// new coordinator. This fail-closed behavior prevents a late handler from
+/// overwriting a newer configuration.
 pub struct ReconfigurableModule {
     access: Box<dyn ModuleAccess>,
     module_id: &'static str,
@@ -109,6 +117,10 @@ impl ReconfigurableModule {
     }
 
     /// Forget which configuration the module currently holds.
+    ///
+    /// This does not clear an uncertain member transition. Only an acknowledged
+    /// member configuration call or a new coordinator after an established
+    /// module restart can reopen access.
     pub fn invalidate(&self) {
         self.loaded_state().fingerprint = None;
     }
