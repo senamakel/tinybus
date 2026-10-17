@@ -46,6 +46,19 @@ fn extract_fixture_bytes(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, Result<()
     (root, destination, result)
 }
 
+fn extract_fixture_bytes_with_limits(
+    bytes: &[u8],
+    limits: ExtractionLimits,
+) -> (tempfile::TempDir, PathBuf, Result<()>) {
+    let root = tempfile::tempdir().unwrap();
+    let archive = root.path().join("fixture.zip");
+    let destination = root.path().join("staging");
+    fs::create_dir(&destination).unwrap();
+    fs::write(&archive, bytes).unwrap();
+    let result = extract_with_limits(&archive, &destination, limits);
+    (root, destination, result)
+}
+
 fn extract_through_cache_staging(bytes: &[u8]) -> (tempfile::TempDir, Result<()>) {
     let root = tempfile::tempdir().unwrap();
     let cache_dir = root.path().join("cache");
@@ -145,6 +158,8 @@ fn path_policy_rejects_unportable_or_ambiguous_names_before_normalization() {
         "NUL.txt",
         "COM1",
         "LPT9.log",
+        "COM¹.log",
+        "LPT³",
         "trailing.",
         "trailing ",
         "a//b",
@@ -299,6 +314,51 @@ fn path_component_budget_is_checked_before_trie_insertion() {
 }
 
 #[test]
+fn entry_count_and_expanded_bytes_limits_fail_before_extracting() {
+    for limits in [
+        ExtractionLimits {
+            entries: 0,
+            ..DEFAULT_LIMITS
+        },
+        ExtractionLimits {
+            entry_bytes: 1,
+            ..DEFAULT_LIMITS
+        },
+        ExtractionLimits {
+            total_bytes: 1,
+            ..DEFAULT_LIMITS
+        },
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("fixture.zip");
+        let destination = root.path().join("staging");
+        fs::create_dir(&destination).unwrap();
+        fs::write(&archive, include_bytes!("fixtures/one_module.zip")).unwrap();
+
+        assert!(extract_with_limits(&archive, &destination, limits).is_err());
+        assert!(fs::read_dir(destination).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn an_entry_limit_applies_to_the_observed_count_not_only_the_eocd_hint() {
+    let mut bytes = include_bytes!("fixtures/compat_store.zip").to_vec();
+    let eocd = bytes
+        .windows(4)
+        .position(|signature| signature == b"PK\x05\x06")
+        .unwrap();
+    bytes[eocd + 10..eocd + 12].copy_from_slice(&1u16.to_le_bytes());
+    let (_root, _destination, result) = extract_fixture_bytes_with_limits(
+        &bytes,
+        ExtractionLimits {
+            entries: 1,
+            ..DEFAULT_LIMITS
+        },
+    );
+    assert!(result.is_err());
+}
+
+#[test]
 fn corrupt_central_crc_is_refused_without_promoting_partial_output() {
     let root = tempfile::tempdir().unwrap();
     let archive = root.path().join("fixture.zip");
@@ -333,6 +393,35 @@ fn central_and_local_names_must_agree() {
         .unwrap();
     let name = central + 46;
     bytes[name..name + 9].copy_from_slice(b"module.xx");
+    let (_root, _destination, result) = extract_fixture_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
+fn central_compressed_size_must_match_the_local_data_range() {
+    let mut bytes = include_bytes!("fixtures/one_module.zip").to_vec();
+    set_central_compressed_size(&mut bytes, "module.so", 8);
+    let (_root, _destination, result) = extract_fixture_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
+fn local_headers_must_match_central_metadata() {
+    let mut ordinary = include_bytes!("fixtures/one_module.zip").to_vec();
+    set_local_crc(&mut ordinary, "module.so", 1);
+    let (_root, _destination, result) = extract_fixture_bytes(&ordinary);
+    assert!(result.is_err());
+
+    let mut streaming = include_bytes!("fixtures/compat_deflate_descriptor.zip").to_vec();
+    set_local_crc(&mut streaming, "folder/module.so", 1);
+    let (_root, _destination, result) = extract_fixture_bytes(&streaming);
+    assert!(result.is_err());
+}
+
+#[test]
+fn reserved_flags_are_refused() {
+    let mut bytes = include_bytes!("fixtures/one_module.zip").to_vec();
+    set_member_flags(&mut bytes, "module.so", 0x10);
     let (_root, _destination, result) = extract_fixture_bytes(&bytes);
     assert!(result.is_err());
 }
@@ -442,6 +531,75 @@ fn set_member_size(bytes: &mut [u8], name: &str, size: u32) {
         let name_start = central + 46;
         if &bytes[name_start..name_start + name_len] == name.as_bytes() {
             bytes[central + 24..central + 28].copy_from_slice(&size.to_le_bytes());
+            return;
+        }
+        offset = name_start + name_len;
+    }
+    panic!("fixture entry not found: {name}");
+}
+
+fn set_local_crc(bytes: &mut [u8], name: &str, crc: u32) {
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x03\x04")
+    {
+        let local = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[local + 26], bytes[local + 27]]) as usize;
+        let name_start = local + 30;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[local + 14..local + 18].copy_from_slice(&crc.to_le_bytes());
+            return;
+        }
+        offset = name_start + name_len;
+    }
+    panic!("fixture entry not found: {name}");
+}
+
+fn set_central_compressed_size(bytes: &mut [u8], name: &str, size: u32) {
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x01\x02")
+    {
+        let central = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[central + 28], bytes[central + 29]]) as usize;
+        let name_start = central + 46;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[central + 20..central + 24].copy_from_slice(&size.to_le_bytes());
+            return;
+        }
+        offset = name_start + name_len;
+    }
+    panic!("fixture entry not found: {name}");
+}
+
+fn set_member_flags(bytes: &mut [u8], name: &str, flags: u16) {
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x03\x04")
+    {
+        let local = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[local + 26], bytes[local + 27]]) as usize;
+        let name_start = local + 30;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[local + 6..local + 8].copy_from_slice(&flags.to_le_bytes());
+            break;
+        }
+        offset = name_start + name_len;
+    }
+
+    let mut offset = 0;
+    while let Some(relative) = bytes[offset..]
+        .windows(4)
+        .position(|sig| sig == b"PK\x01\x02")
+    {
+        let central = offset + relative;
+        let name_len = u16::from_le_bytes([bytes[central + 28], bytes[central + 29]]) as usize;
+        let name_start = central + 46;
+        if &bytes[name_start..name_start + name_len] == name.as_bytes() {
+            bytes[central + 8..central + 10].copy_from_slice(&flags.to_le_bytes());
             return;
         }
         offset = name_start + name_len;

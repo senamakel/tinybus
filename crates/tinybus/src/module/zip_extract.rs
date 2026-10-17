@@ -405,12 +405,19 @@ fn checked_path(original: &str, max_depth: usize) -> Result<(PathBuf, bool, usiz
 }
 
 fn is_windows_device_name(component: &str) -> bool {
-    let stem = component.split('.').next().unwrap_or_default();
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(|ch| ch == '.' || ch == ' ');
     let upper = stem.to_ascii_uppercase();
     matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || ["COM", "LPT"].iter().any(|prefix| {
             upper.strip_prefix(prefix).is_some_and(|number| {
-                number.len() == 1 && matches!(number.as_bytes()[0], b'1'..=b'9')
+                matches!(
+                    number,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
             })
         })
 }
