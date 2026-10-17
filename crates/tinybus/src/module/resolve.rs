@@ -293,8 +293,8 @@ impl ModuleAccess for Resolver {
         })
     }
 
-    fn mark_faulted(&self, id: &str, reason: String) {
-        resolution::global().mark_faulted(id, reason);
+    fn mark_faulted(&self, id: &str) {
+        resolution::global().mark_faulted(id, "module reconfiguration failed".to_owned());
     }
 }
 

@@ -204,10 +204,7 @@ impl ReconfigurableModule {
             Err(ReconfigureFailure::Unavailable | ReconfigureFailure::Initializing)
         ) && self.mark_faulted
         {
-            self.access.mark_faulted(
-                self.module_id,
-                "module reconfiguration left it unavailable".into(),
-            );
+            self.access.mark_faulted(self.module_id);
         }
         Err(match outcome {
             Err(ReconfigureFailure::Unavailable | ReconfigureFailure::Initializing) => {

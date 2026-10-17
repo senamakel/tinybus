@@ -76,7 +76,7 @@ pub trait ModuleAccess: Send + Sync {
     /// Record that reinitialization left a module unusable. Resolver-backed
     /// access makes this terminal for the current process; other accessors may
     /// leave it as a no-op.
-    fn mark_faulted(&self, _id: &str, _reason: String) {}
+    fn mark_faulted(&self, _id: &str) {}
 }
 
 /// Sanitized lifecycle result used by configuration reconciliation.
