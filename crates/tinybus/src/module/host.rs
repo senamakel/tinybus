@@ -1075,7 +1075,11 @@ impl ModuleHost {
             if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
                 paths.push(PathBuf::from(path).join(&config.app_dir));
             } else if let Some(path) = std::env::var_os("HOME") {
-                paths.push(PathBuf::from(path).join(".local/share").join(&config.app_dir));
+                paths.push(
+                    PathBuf::from(path)
+                        .join(".local/share")
+                        .join(&config.app_dir),
+                );
             }
             paths.push(PathBuf::from("/usr/lib").join(&config.app_dir));
         }
@@ -1091,10 +1095,7 @@ impl ModuleHost {
     /// Load every existing directory in [`ModuleHost::search_paths`] order.
     pub fn load_search_paths(&self) -> Vec<Result<ModuleInfo>> {
         let mut outcomes = Vec::new();
-        for path in self.search_paths()
-            .into_iter()
-            .filter(|path| path.is_dir())
-        {
+        for path in self.search_paths().into_iter().filter(|path| path.is_dir()) {
             match self.load_dir(path) {
                 Ok(results) => outcomes.extend(results),
                 Err(error) => outcomes.push(Err(error)),
@@ -1111,10 +1112,7 @@ impl ModuleHost {
     /// [`Self::load_dir`] loads them.
     pub fn load_search_paths_except(&self, skip: &[String]) -> Vec<Result<ModuleInfo>> {
         let mut outcomes = Vec::new();
-        for directory in self.search_paths()
-            .into_iter()
-            .filter(|path| path.is_dir())
-        {
+        for directory in self.search_paths().into_iter().filter(|path| path.is_dir()) {
             match self.load_dir_inner(&directory, None, skip) {
                 Ok(results) => outcomes.extend(results),
                 Err(error) => outcomes.push(Err(error)),
@@ -1875,10 +1873,13 @@ impl ModuleControl for ModuleHostInner {
                 .expect("module directory lock")
                 .clone();
             if configured.is_empty() {
-                ModuleHost { inner: Arc::clone(&self) }.search_paths()
-                    .into_iter()
-                    .filter(|path| path.is_dir())
-                    .collect()
+                ModuleHost {
+                    inner: Arc::clone(&self),
+                }
+                .search_paths()
+                .into_iter()
+                .filter(|path| path.is_dir())
+                .collect()
             } else {
                 configured
             }

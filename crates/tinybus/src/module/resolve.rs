@@ -29,12 +29,12 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::module::LinkedModule;
+use crate::module::SearchPathConfig;
 use crate::module::failure::{FailureReporter, Reason};
 use crate::module::manifest::ModuleManifest;
 use crate::module::platform::host_candidates;
 use crate::module::resolution::{self, Claim, Resolution, ResolutionState, Waited};
 use crate::module::runtime::ModuleRuntime;
-use crate::module::SearchPathConfig;
 use crate::module::{
     ReleaseAsset, ReleasePlan, ReleaseRecord, load_first_admitted, prune_stale_versions,
 };

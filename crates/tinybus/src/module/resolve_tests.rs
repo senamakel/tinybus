@@ -742,6 +742,12 @@ fn linked_registry_replaces_factories_and_returns_the_last_registration() {
     );
 }
 
+struct ResolverSearchSink;
+
+impl crate::module::FailureSink for ResolverSearchSink {
+    fn capture(&self, _: &crate::module::FailureReport<'_>) {}
+}
+
 #[tokio::test]
 async fn resolver_inputs_configure_the_runtime_host_search_paths() {
     let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
@@ -750,11 +756,7 @@ async fn resolver_inputs_configure_the_runtime_host_search_paths() {
     let env_var = "TINYBUS_TEST_RESOLVER_SEARCH_PATH";
     unsafe { std::env::set_var(env_var, &search_dir) };
     let runtime = Box::leak(Box::new(
-        crate::module::ModuleRuntime::start(
-            &crate::module::RuntimeNames::default(),
-            None,
-        )
-        .unwrap(),
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap(),
     ));
     let resolver = Resolver::new(ResolverInputs {
         enabled: true,
@@ -771,7 +773,7 @@ async fn resolver_inputs_configure_the_runtime_host_search_paths() {
         terminal_marker: String::new(),
         runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
         module_config: Arc::new(|_| serde_json::Value::Null),
-        reporter: Arc::new(FailureReporter::new(Arc::new(Quiet))),
+        reporter: Arc::new(FailureReporter::new(Arc::new(ResolverSearchSink))),
     });
 
     let resolved_runtime = resolver.runtime().await.unwrap();

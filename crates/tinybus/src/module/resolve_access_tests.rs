@@ -46,7 +46,7 @@ fn resolver(runtime_ready: bool) -> Resolver {
         bundled_dir: None,
         sources: HashMap::new(),
         linked: Arc::new(LinkedRegistry::new()),
-            search_paths: None,
+        search_paths: None,
         search_skip: Vec::new(),
         gate: None,
         on_resolved: None,

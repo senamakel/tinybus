@@ -61,7 +61,7 @@ pub(super) fn fixture(
         bundled_dir: None,
         sources,
         linked: Arc::new(LinkedRegistry::new()),
-            search_paths: None,
+        search_paths: None,
         search_skip: Vec::new(),
         gate: None,
         on_resolved: None,
