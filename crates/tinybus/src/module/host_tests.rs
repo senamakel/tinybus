@@ -2313,7 +2313,7 @@ async fn a_module_from_a_pinned_release_becomes_an_attested_recipient_without_an
     broker.spawn(bus.clone());
     let host = ModuleHost::new(broker.clone());
     let info = host
-        .load_file_pinned(&staged, serde_json::json!({}), Some(pinned.clone()))
+        .load_file_pinned(&staged, serde_json::json!({}), Some(pinned.clone()), None)
         .unwrap();
 
     let client = Connection::connect(bus.connect().await.unwrap())
@@ -3174,6 +3174,7 @@ fn attach_controlled_native(
             lazy_load: false,
             descriptor_info: None,
             pinned_sha256: None,
+            pinned_library_sha256: None,
         },
     )
 }

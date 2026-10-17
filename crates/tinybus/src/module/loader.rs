@@ -69,6 +69,7 @@ struct DescriptorPrefix {
     descriptor_size: u32,
 }
 
+#[allow(dead_code)] // Legacy unverified load remains available to internal fixtures.
 pub(crate) fn load(path: &Path, strict: bool) -> Result<LoadedArtifact> {
     load_verified(path, strict, None)
 }

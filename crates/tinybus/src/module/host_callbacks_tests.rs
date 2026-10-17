@@ -575,6 +575,7 @@ async fn rollback_after_attach_releases_the_actual_initialization_observer() {
             lazy_load: false,
             descriptor_info: None,
             pinned_sha256: None,
+            pinned_library_sha256: None,
         },
     )
     .unwrap();
