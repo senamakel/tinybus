@@ -63,6 +63,11 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     archive.into_inner().unwrap().finish().unwrap();
     let archive_sha256 = crate::module::sha256_file(&archive_path).unwrap();
     crate::module::cache::write_digest_marker(&cache_dir, archive_name, &archive_sha256).unwrap();
+    assert!(
+        crate::module::cache::find_verified(&cache_dir, archive_name, Some(&archive_sha256))
+            .is_some(),
+        "fixture archive must be recognized by the release cache"
+    );
 
     let assets = Box::leak(
         vec![crate::module::ReleaseAsset {
