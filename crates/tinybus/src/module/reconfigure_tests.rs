@@ -208,7 +208,7 @@ struct FixtureAccess {
     use_unattested_proxy: bool,
     /// The retry scenario holds a concurrent first call inside initialization.
     skip_ready_wait: bool,
-    member_proxy_timeout: Option<Duration>,
+    member_proxy_timeout: StdMutex<Option<Duration>>,
     forced_reinitialize_failure: Option<ReconfigureFailure>,
     proxy_failure: Option<ProxyFailure>,
     initializing_left: StdMutex<usize>,
@@ -274,6 +274,9 @@ impl ModuleAccess for FixtureAccess {
                 .map_err(|_| ProxyFailure::Contract)?;
             Ok(self
                 .member_proxy_timeout
+                .lock()
+                .expect("member proxy timeout lock")
+                .take()
                 .map_or(proxy.clone(), |timeout| proxy.with_timeout(timeout)))
         })
     }
@@ -392,7 +395,7 @@ async fn fixture() -> FixtureAccess {
         unattested_service: None,
         use_unattested_proxy: false,
         skip_ready_wait: false,
-        member_proxy_timeout: None,
+        member_proxy_timeout: StdMutex::new(None),
         forced_reinitialize_failure: None,
         proxy_failure: None,
         initializing_left: StdMutex::new(0),
@@ -428,7 +431,10 @@ async fn blocked_member_fixture(
     ModuleAccess::ensure_loaded(&access, ID)
         .await
         .expect("linked fixture reaches serving before the controlled call");
-    access.member_proxy_timeout = timeout;
+    *access
+        .member_proxy_timeout
+        .lock()
+        .expect("member proxy timeout lock") = timeout;
     let connection = access.connection.clone();
     let module = Arc::new(
         ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure")),
@@ -556,7 +562,7 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
         unattested_service: None,
         use_unattested_proxy: false,
         skip_ready_wait: true,
-        member_proxy_timeout: None,
+        member_proxy_timeout: StdMutex::new(None),
         forced_reinitialize_failure: None,
         proxy_failure: None,
         initializing_left: StdMutex::new(0),
@@ -646,7 +652,7 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
             unattested_service: Some(unattested_service),
             use_unattested_proxy: true,
             skip_ready_wait: false,
-            member_proxy_timeout: None,
+            member_proxy_timeout: StdMutex::new(None),
             forced_reinitialize_failure: None,
             proxy_failure: None,
             initializing_left: StdMutex::new(0),
