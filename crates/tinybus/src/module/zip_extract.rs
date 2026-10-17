@@ -166,12 +166,11 @@ pub(super) fn library_sha256(archive_path: &Path) -> Result<String> {
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| matches!(extension, "so" | "dylib" | "dll"))
+                && library.replace(path).is_some()
             {
-                if library.replace(path).is_some() {
-                    return Err(refused(
-                        "checksum ZIP contains more than one module library",
-                    ));
-                }
+                return Err(refused(
+                    "checksum ZIP contains more than one module library",
+                ));
             }
         }
     }
