@@ -718,7 +718,7 @@ mod resolver {
             );
         }
     }
-    #[path = "resolve_attested_tests.rs"]
+    #[path = "../resolve_attested_tests.rs"]
     mod attested_tests;
 
 }
