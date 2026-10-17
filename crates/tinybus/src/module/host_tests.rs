@@ -2795,12 +2795,14 @@ async fn eager_native_setup_callbacks_are_bound_before_ready_and_failures_rollba
             .unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
         let guard = binding.guard();
+        let sender_lookup = modules.sender_lookup();
         binding
             .serve_at(
                 "/callback".parse().unwrap(),
                 BoundNativeCallback {
                     calls: calls.clone(),
                     guard: guard.clone(),
+                    sender_lookup,
                 },
             )
             .await
@@ -2881,6 +2883,7 @@ async fn eager_native_setup_callbacks_are_bound_before_ready_and_failures_rollba
 struct BoundNativeCallback {
     calls: Arc<AtomicUsize>,
     guard: crate::module::HostCallbackGuard,
+    sender_lookup: crate::module::ModuleSenderLookup,
 }
 #[async_trait::async_trait]
 impl crate::Interface for BoundNativeCallback {
@@ -2910,6 +2913,12 @@ impl crate::Interface for BoundNativeCallback {
         assert!(
             self.guard.authorizes(context),
             "peer must be pinned before eager callback"
+        );
+        assert!(
+            self.sender_lookup
+                .module_for_sender(context.authenticated_sender().expect("authenticated sender"))
+                .is_some(),
+            "the admitted module identity must be published before its eager setup callback"
         );
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(serde_json::json!(context.authenticated_sender().unwrap()))
