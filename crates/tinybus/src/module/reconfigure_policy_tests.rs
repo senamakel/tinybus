@@ -19,7 +19,9 @@ async fn retry_delay_is_applied_between_typed_initializing_attempts() {
     attempt_rx.await.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     tokio::time::advance(Duration::from_secs(5)).await;
-    let _proxy = retrying.await.unwrap().unwrap();
+    let proxy = retrying.await.unwrap().unwrap();
+    tokio::time::resume();
+    assert_eq!(read_config(&proxy).await, config);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
