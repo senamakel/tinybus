@@ -117,6 +117,12 @@ fn checksum_manifest_reads_a_windows_library_from_zip_on_unix() {
 }
 
 #[test]
+fn checksum_reader_refuses_module_sizes_above_its_expansion_limit() {
+    let error = sha256_reader(&b""[..], 8, 4).unwrap_err();
+    assert!(error.to_string().contains("checksum module exceeds its size limit"));
+}
+
+#[test]
 fn the_cli_parses_its_declared_commands_and_uses_explicit_addresses() {
     let cli = Cli::try_parse_from([
         "tinybus",

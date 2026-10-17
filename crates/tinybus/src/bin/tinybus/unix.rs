@@ -21,6 +21,9 @@ use tinybus::router::MatchRule;
 use tinybus::transport::unix::{UnixListenerAdapter, UnixTransport};
 use tinybus::{Error, Result};
 
+const MAX_CHECKSUM_ARCHIVE_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_CHECKSUM_MODULE_BYTES: u64 = 1024 * 1024 * 1024;
+
 #[derive(Parser)]
 #[command(name = "tinybus", version, about, long_about = None)]
 struct Cli {
@@ -516,20 +519,24 @@ fn library_sha256_in_archive(path: &Path) -> Result<Option<String>> {
     } else {
         return Ok(None);
     };
-    let mut archive = tar::Archive::new(reader);
+    let mut bounded_reader = reader.take(MAX_CHECKSUM_ARCHIVE_EXPANDED_BYTES + 1);
+    let mut archive = tar::Archive::new(&mut bounded_reader);
     let mut digest = None;
     for entry in archive
         .entries()
         .map_err(|_| Error::failed("checksum archive could not be read"))?
     {
         let mut entry = entry.map_err(|_| Error::failed("checksum archive entry is invalid"))?;
-        let path = entry
-            .path()
-            .map_err(|_| Error::failed("checksum archive entry path is invalid"))?;
-        if !matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("so" | "dylib" | "dll")
-        ) {
+        let is_library = {
+            let path = entry
+                .path()
+                .map_err(|_| Error::failed("checksum archive entry path is invalid"))?;
+            matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("so" | "dylib" | "dll")
+            )
+        };
+        if !is_library {
             continue;
         }
         if digest.is_some() {
@@ -537,24 +544,49 @@ fn library_sha256_in_archive(path: &Path) -> Result<Option<String>> {
                 "checksum archive contains more than one module library",
             ));
         }
-        digest = Some(sha256_reader(&mut entry)?);
+        let size = entry
+            .header()
+            .size()
+            .map_err(|_| Error::failed("checksum archive module header is invalid"))?;
+        digest = Some(sha256_reader(
+            &mut entry,
+            size,
+            MAX_CHECKSUM_MODULE_BYTES,
+        )?);
+    }
+    drop(archive);
+    if bounded_reader.limit() == 0 {
+        return Err(Error::failed("checksum archive exceeds its expanded-size limit"));
     }
     digest
         .map(Some)
         .ok_or_else(|| Error::failed("checksum archive contains no module library"))
 }
 
-fn sha256_reader(mut reader: impl Read) -> Result<String> {
+fn sha256_reader(mut reader: impl Read, expected_size: u64, max_size: u64) -> Result<String> {
     use sha2::Digest as _;
 
+    if expected_size > max_size {
+        return Err(Error::failed("checksum module exceeds its size limit"));
+    }
     let mut hasher = sha2::Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
+    let mut total = 0u64;
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
         }
+        total = total
+            .checked_add(read as u64)
+            .ok_or_else(|| Error::failed("checksum module exceeds its size limit"))?;
+        if total > expected_size || total > max_size {
+            return Err(Error::failed("checksum module size is inconsistent"));
+        }
         hasher.update(&buffer[..read]);
+    }
+    if total != expected_size {
+        return Err(Error::failed("checksum module size is inconsistent"));
     }
     Ok(hasher
         .finalize()
