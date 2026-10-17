@@ -144,7 +144,14 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     });
     let response: std::result::Result<String, ModuleCallError> =
         client.call_attested(record.id, "Now", ()).await;
-    assert!(response.is_ok(), "{response:?}");
+    assert!(
+        response.is_ok(),
+        "{response:?}; preparations={}, state={:?}, config_calls={}, runtime_calls={}",
+        preparations.load(Ordering::SeqCst),
+        fixture.resolver.state_of(record.id),
+        fixture.config_calls.load(Ordering::SeqCst),
+        fixture.runtime_calls.load(Ordering::SeqCst),
+    );
     assert_eq!(preparations.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.resolver.state_of(record.id), Availability::Ready);
 }
