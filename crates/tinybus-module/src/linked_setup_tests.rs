@@ -211,6 +211,129 @@ async fn a_failing_stateful_setup_faults_and_releases_its_module_peer() {
 }
 
 #[tokio::test]
+async fn canceling_pending_linked_setup_denies_late_ready_and_releases_the_name() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.clone().spawn(bus.clone());
+    let host = Arc::new(ModuleHost::new(broker));
+    let observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let module = linked_export("linked_cancel_pending");
+    let bus_name = module.manifest.bus_name.clone();
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let setup_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let release_setup = release.clone();
+    let returned = setup_returned.clone();
+    let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+    let attaching_host = host.clone();
+    let attaching = tokio::spawn(async move {
+        attaching_host
+            .attach_linked_with_setup(
+                module,
+                serde_json::json!({}),
+                move |connection| async move {
+                    let peer = connection.unique_name().expect("module peer");
+                    let _ = peer_tx.send(peer);
+                    let _permit = release_setup
+                        .acquire()
+                        .await
+                        .expect("release pending setup");
+                    connection
+                        .serve_at("/linked/pending".parse().unwrap(), SetupValue("late"))
+                        .await?;
+                    returned.store(true, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .await
+    });
+
+    let peer = tokio::time::timeout(Duration::from_secs(2), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        host.module_for_sender(&peer)
+            .as_ref()
+            .map(tinybus::module::ModuleId::as_str),
+        Some("linked_cancel_pending")
+    );
+    attaching.abort();
+    assert!(matches!(attaching.await, Err(error) if error.is_cancelled()));
+    assert!(host.module_for_sender(&peer).is_none());
+    release.add_permits(1);
+    wait_for_owner(&observer, bus_name.as_str(), None).await;
+    assert!(!setup_returned.load(Ordering::Acquire));
+    assert!(host.list().iter().all(|module| {
+        module.manifest.bus_name != bus_name
+            || !matches!(module.state, ModuleState::Ready | ModuleState::Serving)
+    }));
+    broker_task.abort();
+}
+
+#[tokio::test]
+async fn timed_out_linked_setup_denies_late_ready_and_releases_the_name() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.clone().spawn(bus.clone());
+    let host = Arc::new(ModuleHost::new(broker));
+    let observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let module = linked_export("linked_timeout_pending");
+    let bus_name = module.manifest.bus_name.clone();
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let setup_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let release_setup = release.clone();
+    let returned = setup_returned.clone();
+    let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+    let attaching_host = host.clone();
+    let attaching = tokio::spawn(async move {
+        attaching_host
+            .attach_linked_with_setup(
+                module,
+                serde_json::json!({}),
+                move |connection| async move {
+                    let peer = connection.unique_name().expect("module peer");
+                    let _ = peer_tx.send(peer);
+                    let _permit = release_setup
+                        .acquire()
+                        .await
+                        .expect("release pending setup");
+                    connection
+                        .serve_at("/linked/pending".parse().unwrap(), SetupValue("late"))
+                        .await?;
+                    returned.store(true, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .await
+    });
+
+    let peer = tokio::time::timeout(Duration::from_secs(2), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        host.module_for_sender(&peer)
+            .as_ref()
+            .map(tinybus::module::ModuleId::as_str),
+        Some("linked_timeout_pending")
+    );
+    assert!(attaching.await.unwrap().is_err());
+    assert!(host.module_for_sender(&peer).is_none());
+    release.add_permits(1);
+    wait_for_owner(&observer, bus_name.as_str(), None).await;
+    assert!(!setup_returned.load(Ordering::Acquire));
+    assert!(host.list().iter().all(|module| {
+        module.manifest.bus_name != bus_name
+            || !matches!(module.state, ModuleState::Ready | ModuleState::Serving)
+    }));
+    broker_task.abort();
+}
+
+#[tokio::test]
 async fn linked_setup_admission_rejects_unmet_dependencies_before_running_the_callback() {
     let broker = Broker::new();
     let host = ModuleHost::new(broker);
