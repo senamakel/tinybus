@@ -156,6 +156,11 @@ struct SlotLease {
     admission: Weak<Admission>,
     index: usize,
 }
+#[cfg(test)]
+pub(super) struct AnchorRemovalGate {
+    pub(super) entered: std::sync::Barrier,
+    pub(super) release: std::sync::Barrier,
+}
 impl Drop for SlotLease {
     fn drop(&mut self) {
         if let Some(admission) = self.admission.upgrade() {
@@ -302,6 +307,8 @@ pub(super) struct TerminalState {
     startup_failure_stage: AtomicU8,
     #[cfg(any(test, feature = "__native-fixture-support"))]
     transport_drop_thread: StdMutex<Option<String>>,
+    #[cfg(test)]
+    before_anchor_removal: StdMutex<Option<Arc<AnchorRemovalGate>>>,
     lease: SlotLease,
     token: usize,
 }
@@ -402,6 +409,8 @@ impl TerminalState {
             startup_failure_stage: AtomicU8::new(0),
             #[cfg(any(test, feature = "__native-fixture-support"))]
             transport_drop_thread: StdMutex::new(None),
+            #[cfg(test)]
+            before_anchor_removal: StdMutex::new(None),
             lease: SlotLease {
                 admission: Arc::downgrade(admission),
                 index,
@@ -773,6 +782,18 @@ impl TerminalState {
             drop(anchor);
         }
     }
+    #[cfg(test)]
+    fn pause_before_anchor_removal_for_test(&self) {
+        let gate = self
+            .before_anchor_removal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(gate) = gate {
+            gate.entered.wait();
+            gate.release.wait();
+        }
+    }
     pub fn empty_factory_failure(self: &Arc<Self>) {
         // No callable/controller was transferred. Retained views still hold the permit.
         self.commit(TerminalReason::SetupFailed);
@@ -892,6 +913,8 @@ impl TerminalState {
         }
         self.changed.notify_all();
         if completion == TerminalCompletion::PhysicallyStopped {
+            #[cfg(test)]
+            self.pause_before_anchor_removal_for_test();
             self.remove_anchor();
         }
     }
