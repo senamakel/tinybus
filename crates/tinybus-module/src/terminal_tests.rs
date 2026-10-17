@@ -143,9 +143,12 @@ fn physical_completion_is_published_only_after_anchor_retirement() {
     );
     assert!(TerminalState::lookup_in(&admission, state.context().addr()).is_none());
     assert!(admission.slots.lock().unwrap()[state.context().addr() & 0xff].reserved);
-    drop(view);
     drop(state);
-    assert!(!admission.slots.lock().unwrap()[0].reserved);
+    assert!(
+        admission.slots.lock().unwrap()[0].reserved,
+        "the retained liveness view keeps the instance permit occupied"
+    );
+    drop(view);
 }
 
 #[test]
