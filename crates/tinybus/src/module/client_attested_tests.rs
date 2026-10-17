@@ -432,6 +432,7 @@ async fn call_with_attestation_failure(
 ) -> (
     Result<String, ModuleCallFailure>,
     Result<String, ModuleCallError>,
+    Arc<Recording>,
 ) {
     let bus = crate::transport::memory::MemoryBus::new();
     let broker = crate::broker::Broker::new();
@@ -459,10 +460,11 @@ async fn call_with_attestation_failure(
             library_sha256: record.assets[0].library_sha256.map(str::to_string),
         },
     );
+    let sink = Arc::new(Recording::default());
     let access = PreparedAccess {
         record,
         connection: caller,
-        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        reporter: FailureReporter::new(sink.clone()),
         preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let client = ModuleClient::new(access);
@@ -471,13 +473,13 @@ async fn call_with_attestation_failure(
         .await;
     let sanitized = client.call_attested(record.id, "Consume", ()).await;
     broker_task.abort();
-    (detailed, sanitized)
+    (detailed, sanitized, sink)
 }
 
 #[cfg(feature = "modules")]
 #[tokio::test]
 async fn strict_attested_detailed_calls_preserve_remote_input_refusals() {
-    let (failure, sanitized) = call_with_attestation_failure(
+    let (failure, sanitized, sink) = call_with_attestation_failure(
         "ai.tinyhumans.tinywallet.Error.InvalidInput",
         "wallet address secret is invalid",
     )
@@ -492,12 +494,20 @@ async fn strict_attested_detailed_calls_preserve_remote_input_refusals() {
     assert_eq!(sanitized, Err(ModuleCallError::ModuleFault));
     assert!(!format!("{failure:?}").contains("wallet address secret"));
     assert!(!failure.to_string().contains("wallet address secret"));
+    let reports = sink.0.lock().unwrap();
+    assert_eq!(reports.len(), 2);
+    assert!(
+        reports
+            .iter()
+            .all(|(_, reason)| *reason == Reason::ModuleFault)
+    );
+    assert!(!format!("{reports:?}").contains("wallet address secret"));
 }
 
 #[cfg(feature = "modules")]
 #[tokio::test]
 async fn strict_attested_detailed_calls_preserve_remote_chain_refusals() {
-    let (failure, sanitized) = call_with_attestation_failure(
+    let (failure, sanitized, sink) = call_with_attestation_failure(
         "ai.tinyhumans.tinywallet.Error.UnsupportedChain",
         "private configured chain is unsupported",
     )
@@ -512,6 +522,14 @@ async fn strict_attested_detailed_calls_preserve_remote_chain_refusals() {
     assert_eq!(sanitized, Err(ModuleCallError::ModuleFault));
     assert!(!format!("{failure:?}").contains("private configured chain"));
     assert!(!failure.to_string().contains("private configured chain"));
+    let reports = sink.0.lock().unwrap();
+    assert_eq!(reports.len(), 2);
+    assert!(
+        reports
+            .iter()
+            .all(|(_, reason)| *reason == Reason::ModuleFault)
+    );
+    assert!(!format!("{reports:?}").contains("private configured chain"));
 }
 
 #[async_trait::async_trait]
