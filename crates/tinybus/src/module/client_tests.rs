@@ -281,6 +281,9 @@ async fn a_fixture_proxy_is_classified_and_reported_when_the_call_fails() {
     );
 }
 
+const REMOTE_DETAIL: &str =
+    "fixture-only credential-like value: not-a-real-credential-token-7391";
+
 struct DetailedFailure;
 
 #[async_trait::async_trait]
@@ -300,15 +303,13 @@ impl crate::Interface for DetailedFailure {
     ) -> crate::Result<serde_json::Value> {
         Err(Error::MethodFailed {
             name: "com.example.PrivateFailure".to_string(),
-            message: "private remote detail".to_string(),
+            message: REMOTE_DETAIL.to_string(),
         })
     }
 }
 
 #[tokio::test]
 async fn detailed_call_preserves_remote_failure_without_rendering_it() {
-    const REMOTE_DETAIL: &str =
-        "fixture-only credential-like value: not-a-real-credential-token-7391";
     let sink = Arc::new(Recording::default());
     let transport = crate::transport::memory::MemoryBus::new();
     let _broker = crate::broker::Broker::new().spawn(transport.clone());
