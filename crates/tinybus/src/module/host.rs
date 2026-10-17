@@ -453,6 +453,37 @@ impl ModuleHost {
         modules
     }
 
+    /// Resolve a broker-authenticated unique peer to its exact admitted module
+    /// identifier.
+    ///
+    /// Well-known names are routing aliases and never identify a module
+    /// sender. This is a local lookup over the admission table; it performs no
+    /// broker request and accepts initialization-time callbacks while the
+    /// admitted transport remains live.
+    #[must_use]
+    pub fn module_for_sender(&self, sender: &BusName) -> Option<ModuleId> {
+        if !sender.is_unique() {
+            return None;
+        }
+        let loaded = self.inner.loaded.lock().expect("module list lock");
+        let module = loaded.iter().find(|module| &module.unique_name == sender)?;
+        if module.transport.is_faulted()
+            || module.transport.init_failed()
+            || module.transport.is_stopped()
+            || module.transport.admission_closed()
+        {
+            return None;
+        }
+        matches!(
+            module.snapshot().state,
+            ModuleState::Resolved
+                | ModuleState::Initializing
+                | ModuleState::Ready
+                | ModuleState::Serving
+        )
+        .then(|| module.module_id.clone())
+    }
+
     /// Initialize a loaded module and wait for its host lifecycle readiness.
     ///
     /// This host-owned preparation carries no business message. It is the
@@ -1559,6 +1590,7 @@ impl ModuleHost {
             .expect("module list lock")
             .push(LoadedModule {
                 info: admitted.clone(),
+                module_id: ModuleId::new(manifest.module.name.clone()),
                 transport,
                 unique_name: unique,
                 transition_from: None,
