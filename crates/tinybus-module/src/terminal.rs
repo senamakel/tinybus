@@ -906,17 +906,20 @@ impl TerminalState {
         } else {
             completed
         };
+        if completion == TerminalCompletion::PhysicallyStopped {
+            // A waiter may observe completion without waiting for the notification.
+            // Retire callback authority first so every published physical result
+            // also guarantees that the registry can no longer resolve this token.
+            #[cfg(test)]
+            self.pause_before_anchor_removal_for_test();
+            self.remove_anchor();
+        }
         {
             let mut control = self.lock();
             control.finish_state = FinishState::Complete;
             control.completion = Some(completion);
         }
         self.changed.notify_all();
-        if completion == TerminalCompletion::PhysicallyStopped {
-            #[cfg(test)]
-            self.pause_before_anchor_removal_for_test();
-            self.remove_anchor();
-        }
     }
     fn settle_execution(self: &Arc<Self>) -> bool {
         let (initial, handle) = {
