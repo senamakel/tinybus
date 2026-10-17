@@ -408,11 +408,17 @@ impl crate::Interface for AttestedReceiver {
     }
 }
 
+struct AttestedCallObservation {
+    result: Result<String, ModuleCallError>,
+    serialized_arguments: usize,
+    receiver_calls: usize,
+}
+
 async fn call_with_attestation(
     record: &'static ReleaseRecord,
     archive_sha256: &str,
     library_sha256: &str,
-) -> Result<String, ModuleCallError> {
+) -> AttestedCallObservation {
     let bus = crate::transport::memory::MemoryBus::new();
     let broker = crate::broker::Broker::new();
     let broker_task = broker.spawn(bus.clone());
@@ -422,12 +428,13 @@ async fn call_with_attestation(
     let caller = crate::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
+    let receiver_calls = Arc::new(Mutex::new(Vec::new()));
     service
         .serve_at(
             crate::ObjectPath::new(record.object_path).unwrap(),
             AttestedReceiver {
                 label: "attested",
-                calls: Arc::new(Mutex::new(Vec::new())),
+                calls: receiver_calls.clone(),
             },
         )
         .await
@@ -447,11 +454,20 @@ async fn call_with_attestation(
         reporter: FailureReporter::new(Arc::new(Recording::default())),
         preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
+    let serialized_arguments = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let result = ModuleClient::new(access)
-        .call_attested(record.id, "Consume", ())
+        .call_attested(
+            record.id,
+            "Consume",
+            SerializeCounter(serialized_arguments.clone()),
+        )
         .await;
     broker_task.abort();
-    result
+    AttestedCallObservation {
+        result,
+        serialized_arguments: serialized_arguments.load(std::sync::atomic::Ordering::SeqCst),
+        receiver_calls: receiver_calls.lock().unwrap().len(),
+    }
 }
 
 #[tokio::test]
@@ -459,14 +475,17 @@ async fn attested_calls_accept_a_verified_compatible_fallback_asset_pair() {
     let candidates = crate::module::platform::host_candidates();
     let first_key = Box::leak(candidates[0].clone().into_boxed_str());
     let fallback_key = Box::leak(candidates.last().unwrap().clone().into_boxed_str());
+    // A one-key host models two byte pairs for one compatible target; hosts
+    // with ordered fallback candidates exercise the real later candidate.
     let first = attested_asset(first_key, "preferred", 'a', 'b');
     let fallback = attested_asset(fallback_key, "fallback", 'c', 'd');
     let record = strict_record_with_assets(vec![first, fallback]);
 
-    assert_eq!(
-        call_with_attestation(record, fallback.sha256, fallback.library_sha256.unwrap()).await,
-        Ok("attested".to_string())
-    );
+    let observed =
+        call_with_attestation(record, fallback.sha256, fallback.library_sha256.unwrap()).await;
+    assert_eq!(observed.result, Ok("attested".to_string()));
+    assert_eq!(observed.serialized_arguments, 1);
+    assert_eq!(observed.receiver_calls, 1);
 }
 
 #[tokio::test]
@@ -478,10 +497,11 @@ async fn attested_calls_reject_archive_and_library_digests_crossed_between_asset
     let fallback = attested_asset(fallback_key, "fallback", 'c', 'd');
     let record = strict_record_with_assets(vec![first, fallback]);
 
-    assert_eq!(
-        call_with_attestation(record, first.sha256, fallback.library_sha256.unwrap()).await,
-        Err(ModuleCallError::Unavailable)
-    );
+    let observed =
+        call_with_attestation(record, first.sha256, fallback.library_sha256.unwrap()).await;
+    assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
+    assert_eq!(observed.serialized_arguments, 0);
+    assert_eq!(observed.receiver_calls, 0);
 }
 
 #[tokio::test]
@@ -495,10 +515,11 @@ async fn attested_calls_reject_a_valid_pair_for_an_unrelated_platform() {
     let unrelated = attested_asset("unrelated-platform-key", "unrelated", 'c', 'd');
     let record = strict_record_with_assets(vec![compatible, unrelated]);
 
-    assert_eq!(
-        call_with_attestation(record, unrelated.sha256, unrelated.library_sha256.unwrap()).await,
-        Err(ModuleCallError::Unavailable)
-    );
+    let observed =
+        call_with_attestation(record, unrelated.sha256, unrelated.library_sha256.unwrap()).await;
+    assert_eq!(observed.result, Err(ModuleCallError::Unavailable));
+    assert_eq!(observed.serialized_arguments, 0);
+    assert_eq!(observed.receiver_calls, 0);
 }
 
 struct HandoverArgs {
