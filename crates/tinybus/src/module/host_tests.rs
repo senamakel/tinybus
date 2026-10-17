@@ -2918,8 +2918,10 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
         release: release_rx,
     });
     let config = serde_json::json!({ "host": binding.unique_name(), "fail": false });
-    let loading_modules = modules.clone();
-    let loading_binding = binding.clone();
+    let loading_modules = ModuleHost {
+        inner: modules.inner.clone(),
+    };
+    let loading_binding = binding;
     let loading = tokio::spawn(async move {
         loading_modules
             .load_file_with_host_callbacks(artifact, config, &loading_binding)
