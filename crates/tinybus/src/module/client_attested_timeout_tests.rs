@@ -146,9 +146,15 @@ async fn stalled_metadata_call_is_bounded(member: &'static str) {
             )
             .await
     });
-    tokio::time::timeout(Duration::from_millis(100), held_request)
-        .await
-        .expect("the selected metadata request should reach the holding transport");
+    let held_result = tokio::time::timeout(Duration::from_millis(100), async {
+        tokio::select! {
+            _ = held_request => true,
+            joined = &mut call => panic!("client returned before the selected metadata query was held: {:?}", joined),
+        }
+    })
+    .await
+    .expect("the selected metadata request should reach the holding transport");
+    assert!(held_result);
     tokio::time::advance(Duration::from_millis(5)).await;
     let result = match tokio::time::timeout(Duration::from_millis(100), &mut call).await {
         Ok(joined) => joined.unwrap(),
