@@ -4,7 +4,7 @@ use crate::module::abi::{TB_BAD_ARGUMENT, TB_OK, TbAbiDescriptor, TbHostVtable, 
 use crate::module::failure::{FailureReporter, FailureSink};
 use crate::module::host::ModuleHost;
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
-use crate::module::{AccessFuture, ModuleInfo, ModuleState, ReleaseRecord};
+use crate::module::{AccessFuture, ReleaseRecord};
 use crate::name::{BusName, ObjectPath};
 use crate::transport::memory::MemoryBus;
 use crate::{Connection, Message, Proxy};
@@ -30,11 +30,7 @@ struct FixtureState {
     config: Arc<StdMutex<serde_json::Value>>,
 }
 
-unsafe extern "C" fn fixture_deliver(
-    ctx: *mut c_void,
-    ptr: *const u8,
-    len: usize,
-) -> i32 {
+unsafe extern "C" fn fixture_deliver(ctx: *mut c_void, ptr: *const u8, len: usize) -> i32 {
     if ctx.is_null() || ptr.is_null() {
         return crate::module::abi::TB_BAD_ARGUMENT;
     }
@@ -47,11 +43,7 @@ unsafe extern "C" fn fixture_deliver(
     }
 }
 
-unsafe extern "C" fn fixture_reinitialize(
-    ctx: *mut c_void,
-    ptr: *const u8,
-    len: usize,
-) -> i32 {
+unsafe extern "C" fn fixture_reinitialize(ctx: *mut c_void, ptr: *const u8, len: usize) -> i32 {
     if ctx.is_null() || (ptr.is_null() && len != 0) {
         return TB_BAD_ARGUMENT;
     }
@@ -75,10 +67,7 @@ unsafe extern "C" fn fixture_shutdown(_: *mut c_void, _: u64) -> i32 {
     TB_OK
 }
 
-unsafe extern "C" fn fixture_init(
-    host: *const TbHostVtable,
-    out: *mut TbModuleVtable,
-) -> i32 {
+unsafe extern "C" fn fixture_init(host: *const TbHostVtable, out: *mut TbModuleVtable) -> i32 {
     if host.is_null() || out.is_null() {
         return TB_BAD_ARGUMENT;
     }
@@ -186,7 +175,7 @@ impl ModuleAccess for FixtureAccess {
             if self
                 .initializing_left
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                    (left > 0).then_some(left - 1)
+                    if left > 0 { Some(left - 1) } else { None }
                 })
                 .is_ok()
             {
@@ -260,7 +249,10 @@ fn fingerprints_retain_only_a_digest() {
     let fingerprint = ConfigFingerprint::of(&config).unwrap();
     assert_eq!(fingerprint.0.len(), 32);
     assert_eq!(fingerprint, ConfigFingerprint::of(&config).unwrap());
-    assert_ne!(fingerprint, ConfigFingerprint::of(&serde_json::json!({})).unwrap());
+    assert_ne!(
+        fingerprint,
+        ConfigFingerprint::of(&serde_json::json!({})).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -273,8 +265,14 @@ async fn changed_configuration_reinitializes_and_equal_configuration_does_not() 
     let proxy = module.proxy(&first).await.unwrap();
     assert_eq!(read_config(&proxy).await, first);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let same = module.proxy(&serde_json::json!({ "route": "one" })).await.unwrap();
-    assert_eq!(read_config(&same).await, serde_json::json!({ "route": "one" }));
+    let same = module
+        .proxy(&serde_json::json!({ "route": "one" }))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_config(&same).await,
+        serde_json::json!({ "route": "one" })
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let changed = serde_json::json!({ "route": "two" });
     let proxy = module.proxy(&changed).await.unwrap();
@@ -291,7 +289,10 @@ async fn a_failed_change_forgets_the_old_fingerprint_before_a_revert() {
     let original = serde_json::json!({ "route": "original" });
     module.proxy(&original).await.unwrap();
     let rejected = serde_json::json!({ "reject": true });
-    assert_eq!(module.proxy(&rejected).await.unwrap_err(), ModuleCallError::ModuleFault);
+    assert_eq!(
+        module.proxy(&rejected).await.unwrap_err(),
+        ModuleCallError::ModuleFault
+    );
     let reverted = module.proxy(&original).await.unwrap();
     assert_eq!(read_config(&reverted).await, original);
     assert_eq!(calls.load(Ordering::SeqCst), 3);
@@ -303,8 +304,7 @@ async fn typed_initializing_results_are_retried_with_the_config() {
     let mut access = fixture().await;
     access.initializing_left.store(2, Ordering::SeqCst);
     let calls = access.reinitialize_calls.clone();
-    let module = ReconfigurableModule::new(access, ID)
-        .retry_while_initializing(3, Duration::ZERO);
+    let module = ReconfigurableModule::new(access, ID).retry_while_initializing(3, Duration::ZERO);
     let config = serde_json::json!({ "route": "ready" });
     let proxy = module.proxy(&config).await.unwrap();
     assert_eq!(read_config(&proxy).await, config);
@@ -316,7 +316,8 @@ async fn member_strategy_applies_config_through_the_linked_fixture_bus() {
     let _test_guard = FIXTURE_LOCK.lock().await;
     let access = fixture().await;
     let calls = access.reinitialize_calls.clone();
-    let module = ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure"));
+    let module =
+        ReconfigurableModule::new(access, ID).with_strategy(Reconfigure::Member("Configure"));
     let config = serde_json::json!({ "route": "member" });
     let proxy = module.proxy(&config).await.unwrap();
     assert_eq!(read_config(&proxy).await, config);
@@ -344,13 +345,11 @@ async fn an_exclusive_guard_keeps_the_config_stable_until_the_bus_call_finishes(
     proxy_ready_rx.await.unwrap();
     let second_module = module.clone();
     let second_config = second.clone();
-    let second_task = tokio::spawn(async move { second_module.proxy(&second_config).await.unwrap() });
+    let second_task =
+        tokio::spawn(async move { second_module.proxy(&second_config).await.unwrap() });
     tokio::task::yield_now().await;
     release_tx.send(()).unwrap();
     assert_eq!(first_task.await.unwrap(), first);
     let second_proxy = second_task.await.unwrap();
     assert_eq!(read_config(&second_proxy).await, second);
 }
-
-#[allow(dead_code)]
-fn _module_state_fixture_typechecks(_: ModuleState, _: ModuleInfo) {}

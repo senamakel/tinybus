@@ -145,7 +145,8 @@ impl ReconfigurableModule {
             .await
             .map_err(|_| ModuleCallError::Unavailable)?;
 
-        let fingerprint = ConfigFingerprint::of(config).map_err(|_| ModuleCallError::ModuleFault)?;
+        let fingerprint =
+            ConfigFingerprint::of(config).map_err(|_| ModuleCallError::ModuleFault)?;
         let current = self
             .loaded
             .lock()
@@ -173,7 +174,11 @@ impl ReconfigurableModule {
         let mut outcome = ReconfigureFailure::Failed;
         for attempt in 0..self.retry_attempts {
             outcome = match self.strategy {
-                Reconfigure::Lifecycle => self.access.reinitialize(self.module_id, config.clone()).await,
+                Reconfigure::Lifecycle => {
+                    self.access
+                        .reinitialize(self.module_id, config.clone())
+                        .await
+                }
                 Reconfigure::Member(member) => {
                     match self.member_reconfigure(member, config.clone()).await {
                         Ok(()) => Ok(()),
@@ -194,9 +199,15 @@ impl ReconfigurableModule {
                 Err(_) => break,
             }
         }
-        if outcome == Err(ReconfigureFailure::Unavailable) && self.mark_faulted {
-            self.access
-                .mark_faulted(self.module_id, "module reconfiguration left it unavailable".into());
+        if matches!(
+            outcome,
+            Err(ReconfigureFailure::Unavailable | ReconfigureFailure::Initializing)
+        ) && self.mark_faulted
+        {
+            self.access.mark_faulted(
+                self.module_id,
+                "module reconfiguration left it unavailable".into(),
+            );
         }
         Err(match outcome {
             Err(ReconfigureFailure::Unavailable | ReconfigureFailure::Initializing) => {
@@ -213,7 +224,10 @@ impl ReconfigurableModule {
         member: &'static str,
         config: serde_json::Value,
     ) -> Result<(), ModuleCallError> {
-        let record = self.access.find(self.module_id).ok_or(ModuleCallError::Unavailable)?;
+        let record = self
+            .access
+            .find(self.module_id)
+            .ok_or(ModuleCallError::Unavailable)?;
         if !self.access.enabled() {
             return Err(ModuleCallError::Unavailable);
         }

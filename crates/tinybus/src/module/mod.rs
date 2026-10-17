@@ -16,11 +16,11 @@ mod github;
 mod hash;
 pub mod manifest;
 pub mod platform;
+#[cfg(feature = "modules")]
+pub mod reconfigure;
 mod release;
 #[cfg(feature = "modules")]
 pub mod resolution;
-#[cfg(feature = "modules")]
-pub mod reconfigure;
 
 #[cfg(feature = "modules")]
 pub(crate) mod host;
@@ -43,8 +43,6 @@ pub use client::{
     AccessFuture, ModuleAccess, ModuleCallError, ModuleClient, ModuleObjectClient, ProxyFailure,
     ReconfigureFailure, classify,
 };
-#[cfg(feature = "modules")]
-pub use reconfigure::{ConfigFingerprint, Reconfigure, ReconfigureGuard, ReconfigurableModule};
 pub use failure::{FailureReport, FailureReporter, FailureSink, Reason};
 #[cfg(feature = "modules")]
 pub use first_admitted::{ReleasePlan, load_first_admitted};
@@ -57,6 +55,8 @@ pub use host::callbacks::{
 };
 #[cfg(feature = "modules")]
 pub use host::{ModuleHost, ModuleInfo, ModuleState};
+#[cfg(feature = "modules")]
+pub use reconfigure::{ConfigFingerprint, ReconfigurableModule, Reconfigure, ReconfigureGuard};
 pub use release::{ReleaseAsset, ReleaseRecord};
 #[cfg(feature = "modules")]
 pub use resolve::{
