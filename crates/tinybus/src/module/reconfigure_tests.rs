@@ -427,7 +427,7 @@ async fn blocked_member_fixture(
         finished: finished_tx,
     });
     MEMBER_CONFIG_CALLS.store(0, Ordering::SeqCst);
-    let mut access = fixture().await;
+    let access = fixture().await;
     ModuleAccess::ensure_loaded(&access, ID)
         .await
         .expect("linked fixture reaches serving before the controlled call");
