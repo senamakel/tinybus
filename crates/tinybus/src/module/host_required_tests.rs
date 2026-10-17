@@ -208,6 +208,9 @@ async fn a_real_required_artifact_is_refused_then_admitted_and_serves_confidenti
     let host = ModuleHost::new(broker);
     let address = BusName::new("ai.tinyhumans.openhuman.Clock").unwrap();
     let path = ObjectPath::new("/ai/tinyhumans/openhuman/Clock").unwrap();
+    let accepted_interface_versions = Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("package version is a valid interface version")
+        .compatible_series();
     let required_for = |method| {
         ModuleRequirements::new(
             "tinybus",
@@ -216,7 +219,7 @@ async fn a_real_required_artifact_is_refused_then_admitted_and_serves_confidenti
             vec![
                 RequiredInterface::new(
                     InterfaceName::new(address.as_str()).unwrap(),
-                    VersionRange::new(Version::new(0, 1, 0), Some(Version::new(0, 2, 0))),
+                    accepted_interface_versions.clone(),
                     vec![MemberName::new(method).unwrap()],
                 )
                 .unwrap(),
