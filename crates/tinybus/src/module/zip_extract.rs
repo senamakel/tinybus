@@ -10,7 +10,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
+use icu_casemap::CaseMapper;
 use rawzip::{CompressionMethod, ZipArchive, ZipArchiveEntryWayfinder};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::error::Result;
 use crate::module::github::refused;
@@ -25,6 +27,9 @@ const MAX_ENTRY_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
 /// archive leaves room for substantial decompression while bounding disk use.
 const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 4096;
+/// NFC plus full case-fold may expand a component; keep even the transient key
+/// bounded by a fixed multiple of the existing archive-name limit.
+const MAX_PATH_KEY_COMPONENT_BYTES: usize = MAX_NAME_BYTES * 16;
 const MAX_PATH_DEPTH: usize = 128;
 const MAX_PATH_METADATA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PATH_COMPONENTS: usize = 250_000;
@@ -60,32 +65,56 @@ struct PathChild {
 }
 
 impl PathNode {
-    fn insert(&mut self, path: &Path, is_dir: bool) -> bool {
+    fn insert(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        path_metadata_bytes: &mut usize,
+        max_path_metadata_bytes: usize,
+    ) -> Result<bool> {
         let mut node = self;
         for component in path.components() {
             if node.explicit_entry == Some(false) {
-                return false;
+                return Ok(false);
             }
             let Component::Normal(name) = component else {
-                return false;
+                return Ok(false);
             };
-            let spelling = name.to_string_lossy();
-            let folded = spelling.to_lowercase();
+            let spelling = name
+                .to_str()
+                .ok_or_else(|| refused("release archive contains an unsafe path"))?;
+            let folded = collision_key_component(spelling)?;
+            *path_metadata_bytes = path_metadata_bytes
+                .checked_add(folded.len())
+                .ok_or_else(|| refused("release archive path metadata exceeds its limit"))?;
+            if *path_metadata_bytes > max_path_metadata_bytes {
+                return Err(refused("release archive path metadata exceeds its limit"));
+            }
             let child = node.children.entry(folded).or_insert_with(|| PathChild {
-                spelling: spelling.to_string(),
+                spelling: spelling.to_owned(),
                 node: PathNode::default(),
             });
-            if child.spelling != spelling.as_ref() {
-                return false;
+            if child.spelling != spelling {
+                return Ok(false);
             }
             node = &mut child.node;
         }
         if node.explicit_entry.is_some() || (!is_dir && !node.children.is_empty()) {
-            return false;
+            return Ok(false);
         }
         node.explicit_entry = Some(is_dir);
-        true
+        Ok(true)
     }
+}
+
+fn collision_key_component(component: &str) -> Result<String> {
+    let normalized: String = component.nfc().collect();
+    let folded = CaseMapper::new().fold_string(&normalized);
+    let key: String = folded.nfc().collect();
+    if key.is_empty() || key.len() > MAX_PATH_KEY_COMPONENT_BYTES {
+        return Err(refused("release archive path key exceeds its limit"));
+    }
+    Ok(key)
 }
 
 #[derive(Clone)]
@@ -155,7 +184,12 @@ fn extract_with_limits(
         if path_component_count > limits.path_components {
             return Err(refused("release archive path metadata exceeds its limit"));
         }
-        if !path_trie.insert(&path, is_dir) {
+        if !path_trie.insert(
+            &path,
+            is_dir,
+            &mut path_metadata_bytes,
+            limits.path_metadata_bytes,
+        )? {
             return Err(refused(
                 "release archive contains duplicate or case-colliding paths",
             ));
