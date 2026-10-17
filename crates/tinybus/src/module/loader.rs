@@ -87,7 +87,7 @@ pub(crate) fn load_verified(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let actual_sha256 = crate::module::hash::file_hex(
         std::fs::File::open(path)
-            .map_err(|_| Error::module_refused(path, "module library could not be opened"))?,
+            .map_err(|_| Error::module_refused(path, "dynamic loader rejected the artifact"))?,
     )
     .map_err(|_| Error::module_refused(path, "module library could not be hashed"))?;
     if let Some(expected) = expected_library_sha256 {
