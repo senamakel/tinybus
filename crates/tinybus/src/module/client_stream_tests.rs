@@ -502,7 +502,7 @@ async fn argument_serialization_failure_aborts_before_delivering_the_business_me
 async fn module_client_timeout_bounds_a_stalled_method_reply() {
     let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
     let resume = Arc::new(tokio::sync::Notify::new());
-    let fixture = fixture(Behavior::Stall {
+    let mut fixture = fixture(Behavior::Stall {
         entered: entered_tx,
         resume: resume.clone(),
     })
@@ -511,13 +511,14 @@ async fn module_client_timeout_bounds_a_stalled_method_reply() {
         .client
         .clone()
         .with_timeout(Duration::from_millis(100));
+    let bytes = vec![0x22; crate::stream::MAX_CHUNK_LEN * 10];
     let call = tokio::spawn(async move {
         client
             .call_with_stream_detailed::<Value, _, _>(
                 RECORD.id,
                 "Stall",
                 |stream| serde_json::json!([stream]),
-                &[],
+                &bytes,
             )
             .await
     });
@@ -532,6 +533,10 @@ async fn module_client_timeout_bounds_a_stalled_method_reply() {
         .unwrap()
         .unwrap_err();
     assert_eq!(failure.kind, ModuleCallError::TransportFailed);
+    tokio::time::timeout(Duration::from_secs(10), fixture.aborts.recv())
+        .await
+        .expect("timeout dropped the unfinished stream writer")
+        .expect("the abort observer remained connected");
     resume.notify_one();
 }
 
