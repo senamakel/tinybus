@@ -773,9 +773,17 @@ async fn actual_linked_rejected_physical_spawn_retains_received_resources_withou
     // Poll is sent from inside SetupFuture::poll, while TerminalSetupPoll has
     // temporarily taken the future out of its storage slot.
     poll_gate.wait();
+    assert!(!future_was_stored_before_its_poll_returned);
+    view.inner.wait_initial_future_restored_for_test().await;
     assert!(
-        future_was_stored_before_its_poll_returned,
-        "the Poll event proves the future has been stored"
+        view.inner
+            .resources
+            .lock()
+            .unwrap()
+            .initial_future
+            .lock()
+            .unwrap()
+            .is_some()
     );
     let context = view.inner.context();
     view.inner.reject_worker_spawn_for_test();

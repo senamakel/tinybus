@@ -1460,10 +1460,16 @@ impl Future for TerminalSetupPoll {
                 |future| future.as_mut().poll(cx),
             )
         }));
-        *self
-            .slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = future;
+        {
+            *self
+                .slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = future;
+        }
+        #[cfg(test)]
+        if matches!(self.kind, terminal::PayloadKind::Initial) {
+            self.state.initial_future_restored_for_test();
+        }
         match outcome {
             Ok(std::task::Poll::Ready(Err(error))) => {
                 self.state.signal(TerminalReason::SetupFailed);
