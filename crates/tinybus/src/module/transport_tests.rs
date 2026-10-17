@@ -2355,6 +2355,10 @@ async fn actual_native_reinitializer_fault_denies_before_c_returns_and_joins_onc
     transport.defer_initialize(init, host);
     transport.ensure_initialized().await.unwrap();
     barrier.entered.notified().await;
+    // This raw-controls fixture does not request Ready from its native init
+    // entry point. Publish readiness through the real ABI before exercising
+    // the reinitializer, whose SDK connection slot is installed at that edge.
+    unsafe { (host.ready)(host.host_ctx) };
     {
         let mut state = barrier.state.lock().unwrap();
         state.1 = false;
@@ -2363,7 +2367,9 @@ async fn actual_native_reinitializer_fault_denies_before_c_returns_and_joins_onc
         let transport = transport.clone();
         async move { transport.reinitialize(crate::Secret::new(vec![])).await }
     });
-    barrier.entered.notified().await;
+    tokio::time::timeout(Duration::from_secs(2), barrier.entered.notified())
+        .await
+        .expect("native reinitializer enters after host readiness");
     unsafe {
         (host.fault)(host.host_ctx, std::ptr::null(), 0);
     }
