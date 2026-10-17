@@ -68,6 +68,27 @@ fn the_manifest_digest_must_agree_with_the_host_pin() {
 }
 
 #[test]
+fn a_library_digest_is_correlated_to_its_archive_and_host_pin() {
+    let archive = "a".repeat(64);
+    let library = "b".repeat(64);
+    let located = Located {
+        manifest_name: "checksum.toml".to_string(),
+        manifest: format!(
+            "[sha256]\n\"module.tar.gz\" = \"{archive}\"\n\
+             [library_sha256]\n\"module.tar.gz\" = \"{library}\"\n"
+        )
+        .into_bytes(),
+        archive_url: String::new(),
+    };
+    assert_eq!(
+        manifest_library_digest(&located, "module.tar.gz", Some(&library)).unwrap(),
+        Some(library.clone())
+    );
+    assert!(manifest_library_digest(&located, "module.tar.gz", Some(&"c".repeat(64))).is_err());
+    assert!(manifest_library_digest(&located, "missing.tar.gz", Some(&library)).is_err());
+}
+
+#[test]
 fn a_cache_miss_with_downloads_disabled_is_refused_without_the_network() {
     let directory = tempfile::tempdir().unwrap();
     let error = acquire_cached(&CachedRelease {
