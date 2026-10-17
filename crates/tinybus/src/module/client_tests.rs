@@ -486,6 +486,7 @@ async fn an_unprepared_custom_access_refuses_before_serializing_confidential_arg
         sink.0.lock().unwrap().as_slice(),
         &[(record.id.to_string(), Reason::ModuleUnavailable)]
     );
+    broker_task.abort();
 }
 
 struct AttestedReceiver {
@@ -534,7 +535,8 @@ impl serde::Serialize for HandoverArgs {
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn a_confidential_call_stays_on_the_attested_unique_peer_after_name_handover() {
     let bus = crate::transport::memory::MemoryBus::new();
-    let _broker = crate::broker::Broker::new().spawn(bus.clone());
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
     let service_a = crate::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
