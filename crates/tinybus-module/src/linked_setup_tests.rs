@@ -256,4 +256,21 @@ async fn linked_setup_admission_rejects_unmet_dependencies_before_running_the_ca
         module.name == "linked_bad_descriptor"
             && matches!(module.state, ModuleState::Rejected { .. })
     }));
+
+    let mut invalid_identity = linked_export("linked_bad_identity");
+    invalid_identity.manifest.module.name.push('\n');
+    let callback_ran = Arc::new(AtomicUsize::new(0));
+    let callback_count = callback_ran.clone();
+    let result = host
+        .attach_linked_with_setup(
+            invalid_identity,
+            serde_json::json!({}),
+            move |_| async move {
+                callback_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(callback_ran.load(Ordering::SeqCst), 0);
 }
