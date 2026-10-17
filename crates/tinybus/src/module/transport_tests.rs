@@ -566,7 +566,17 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
     let mut hello_reply =
         Message::method_return(&hello.header, serde_json::json!(":tinybus.module.1"));
     hello_reply.header.sender = Some(crate::BusName::new(crate::BUS_NAME).unwrap());
-    transport.send(hello_reply).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), transport.send(hello_reply))
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "host reply timed out; init={:?}, result_published={}, module_published={}",
+                transport.context.physical.lock().unwrap().init,
+                transport.context.physical.lock().unwrap().result.is_some(),
+                transport.module.lock().unwrap().is_some(),
+            )
+        })
+        .unwrap();
     let setup_started_result = tokio::time::timeout(Duration::from_secs(2), setup_started_rx).await;
     assert!(
         setup_started_result.is_ok(),
