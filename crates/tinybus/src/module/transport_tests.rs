@@ -510,11 +510,16 @@ async fn reinitialization_waits_for_sdk_setup_after_lazy_vtable_publication() {
         let mut module = TbModuleVtable::default();
         let code =
             unsafe {
+                // The SDK dependency is built against the normal library while
+                // this unit test uses its cfg(test) library copy. Cross only
+                // the frozen repr(C) ABI here; Rust values never cross it.
+                let host_ptr = std::ptr::from_ref(&host).cast();
+                let output_ptr = std::ptr::from_mut(&mut module).cast();
                 tinybus_module::start_linked_reconfigurable_module_with_factory::<
                     serde_json::Value,
                     _,
                     _,
-                >(&host, &mut module, 2, true, factory)
+                >(host_ptr, output_ptr, 2, true, factory)
             };
         if code == TB_OK {
             Ok(module)
