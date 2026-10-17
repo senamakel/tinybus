@@ -611,6 +611,7 @@ impl ModuleHost {
             descriptor,
             manifest,
             init,
+            library_sha256: None,
         };
         // No pin: the caller handed over an already-resolved artifact rather
         // than bytes this host read and hashed, so there is nothing to vouch
@@ -655,6 +656,7 @@ impl ModuleHost {
                 descriptor: module.descriptor,
                 manifest: module.manifest,
                 init: module.init,
+                library_sha256: None,
             },
             config,
             Some(digest),
