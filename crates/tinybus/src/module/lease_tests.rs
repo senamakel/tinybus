@@ -34,7 +34,10 @@ enum DriverCall {
     Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
     Object(Identity, oneshot::Sender<Result<Object, DriverError>>),
     Start(oneshot::Sender<Result<(), DriverError>>),
-    Stop(oneshot::Sender<Result<(), DriverError>>),
+    Stop(
+        std::time::Instant,
+        oneshot::Sender<Result<(), DriverError>>,
+    ),
     Validated,
 }
 
@@ -95,7 +98,9 @@ impl RuntimeLeaseDriver for ControlledDriver {
 
     async fn stop(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
         let (reply, result) = oneshot::channel();
-        self.calls.send(DriverCall::Stop(reply)).unwrap();
+        self.calls
+            .send(DriverCall::Stop(std::time::Instant::now(), reply))
+            .unwrap();
         result.await.unwrap()
     }
 
@@ -238,7 +243,7 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         _ => panic!("start follows callback registration"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Stop(_, reply) => reply.send(Ok(())).unwrap(),
         _ => panic!("a lease whose result was abandoned is rolled back"),
     }
     assert!(harness.callback().await.is_err());
@@ -303,7 +308,9 @@ async fn exhausted_stop_parks_the_callback_until_an_acknowledgement() {
 
     for _ in 0..3 {
         match harness.calls.recv().await.unwrap() {
-            DriverCall::Stop(reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
+            DriverCall::Stop(_, reply) => {
+                reply.send(Err(DriverError("private stop detail"))).unwrap()
+            }
             _ => panic!("bounded retry calls STOP only"),
         }
     }
@@ -321,7 +328,7 @@ async fn a_timed_out_stop_attempt_is_bounded_and_does_not_overlap_its_retry() {
     let lease = harness.opened().await;
     let closing = tokio::spawn(async move { lease.close().await });
     let first_reply = match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(reply) => reply,
+        DriverCall::Stop(_, reply) => reply,
         _ => panic!("close starts one STOP worker"),
     };
 
@@ -333,7 +340,7 @@ async fn a_timed_out_stop_attempt_is_bounded_and_does_not_overlap_its_retry() {
             .expect("the first attempt must time out")
             .unwrap()
         {
-            DriverCall::Stop(reply) => reply,
+            DriverCall::Stop(_, reply) => reply,
             _ => panic!("timeout retry issues only STOP"),
         };
     assert!(
@@ -344,7 +351,9 @@ async fn a_timed_out_stop_attempt_is_bounded_and_does_not_overlap_its_retry() {
         .send(Err(DriverError("private stop detail")))
         .unwrap();
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
+        DriverCall::Stop(_, reply) => {
+            reply.send(Err(DriverError("private stop detail"))).unwrap()
+        }
         _ => panic!("retry sequence remains serialized"),
     }
     assert!(closing.await.unwrap().is_err());
@@ -386,7 +395,9 @@ async fn logical_failure_stops_retrying_without_claiming_acknowledgement() {
     harness.driver.failed.store(true, Ordering::Release);
     let closing = tokio::spawn(async move { lease.close().await });
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(reply) => reply.send(Err(DriverError("private stop detail"))).unwrap(),
+        DriverCall::Stop(_, reply) => {
+            reply.send(Err(DriverError("private stop detail"))).unwrap()
+        }
         _ => panic!("close sends the first STOP before evaluating retry exit"),
     }
     assert!(closing.await.unwrap().is_err());
