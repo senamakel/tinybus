@@ -340,7 +340,12 @@ impl ModuleClient {
         }
 
         let name_proxy = self.load_proxy(record, record.object_path).await?;
-        let owner = match name_proxy.connection().name_owner(record.bus_name).await {
+        let metadata_timeout = self.timeout.unwrap_or(crate::connection::DEFAULT_TIMEOUT);
+        let owner = match name_proxy
+            .connection()
+            .name_owner_with_timeout(record.bus_name, metadata_timeout)
+            .await
+        {
             Ok(Some(owner)) if owner.is_unique() => owner,
             Ok(_) => {
                 report(&*self.access, record, Reason::ModuleUnavailable);
@@ -357,7 +362,11 @@ impl ModuleClient {
                 report(&*self.access, record, Reason::IncompatibleContract);
                 ModuleCallError::IncompatibleContract
             })?;
-        let attestation = match unique_proxy.attestation().await {
+        let attestation = match unique_proxy
+            .connection()
+            .attestation_with_timeout(owner.clone(), metadata_timeout)
+            .await
+        {
             Ok(Some(attestation)) => attestation,
             Ok(None) => {
                 report(&*self.access, record, Reason::ModuleUnavailable);

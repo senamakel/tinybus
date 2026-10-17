@@ -554,10 +554,11 @@ impl ModuleHost {
     /// crate-private so the only caller stays [`super::load_first_admitted`],
     /// which reaches it for the installer-shipped directory alone.
     ///
-    /// The pin is *not* recorded as the attestation: nothing on this path
-    /// hashed bytes that match it, only a marker that claims so. Attestation
-    /// comes from the `modules.toml` beside the library, which this path
-    /// requires and activation re-hashes against the mapped file.
+    /// The marker proves the archive pin only. It is not a library digest
+    /// proof: notarization may have rewritten the extracted library after the
+    /// archive was built. Attestation therefore comes only from the sealed
+    /// `modules.toml` beside the library, which this path requires and
+    /// activation re-hashes against the mapped file.
     ///
     /// # Errors
     ///
@@ -568,7 +569,6 @@ impl ModuleHost {
         dir: &Path,
         asset_name: &str,
         pin: &str,
-        library_sha256: Option<&str>,
         config: serde_json::Value,
     ) -> Result<ModuleInfo> {
         let hit = crate::module::cache::find_marked(dir, asset_name, pin).ok_or_else(|| {
@@ -577,12 +577,7 @@ impl ModuleHost {
                 "bundled digest marker does not match the pin, or the extraction is unusable",
             )
         })?;
-        self.load_file_pinned(
-            &hit.module,
-            config,
-            None,
-            library_sha256.map(str::to_ascii_lowercase),
-        )
+        self.load_file_pinned(&hit.module, config, None, None)
     }
 
     /// Admit and initialize an already-resolved module without calling the

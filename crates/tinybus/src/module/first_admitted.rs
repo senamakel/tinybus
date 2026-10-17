@@ -94,11 +94,13 @@ pub fn load_first_admitted(
                 };
                 host.load_github_release_cached(&release, module_config.clone())
             } else {
+                // The marker records the signed archive, but notarization may
+                // rewrite its library. The bundle's sealed, rehashed local
+                // allowlist is the trust source for the final bytes.
                 host.load_bundled_marked(
                     &cache_dir,
                     asset.archive,
                     asset.sha256,
-                    asset.library_sha256,
                     module_config.clone(),
                 )
             };
