@@ -222,12 +222,13 @@ async fn runtime_setup_can_export_a_weak_sender_lookup_for_linked_setup() {
                 );
                 assert!(lookup_during_setup.module_for_sender(&bus_name).is_none());
                 let unrelated: tinybus::BusName = ":1.999999".parse().unwrap();
-                assert!(lookup_during_setup
-                    .module_for_sender(&unrelated)
-                    .is_none());
+                assert!(lookup_during_setup.module_for_sender(&unrelated).is_none());
                 peer_tx.send(peer).expect("test receiver is alive");
                 connection
-                    .serve_at("/linked/runtime-lookup".parse().unwrap(), SetupValue("ready"))
+                    .serve_at(
+                        "/linked/runtime-lookup".parse().unwrap(),
+                        SetupValue("ready"),
+                    )
                     .await?;
                 Ok(())
             },

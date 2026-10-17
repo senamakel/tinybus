@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -242,6 +242,52 @@ struct ModuleHostInner {
     search_path_config: RwLock<Option<SearchPathConfig>>,
 }
 
+/// Owned, read-only access to a host's admitted unique-peer lookup.
+///
+/// The handle does not keep the host alive. It can be captured by a host
+/// callback that must outlive the borrow used to create it; after the host is
+/// dropped, lookups fail closed. It performs no broker request and grants no
+/// module or attestation authority.
+#[derive(Clone)]
+pub struct ModuleSenderLookup {
+    inner: Weak<ModuleHostInner>,
+}
+
+impl ModuleSenderLookup {
+    /// Resolve a broker-authenticated unique peer to its exact admitted module
+    /// identifier, or return `None` if the host is gone or the peer is no
+    /// longer admitted.
+    #[must_use]
+    pub fn module_for_sender(&self, sender: &BusName) -> Option<ModuleId> {
+        self.inner
+            .upgrade()
+            .and_then(|inner| module_for_sender(&inner, sender))
+    }
+}
+
+fn module_for_sender(inner: &ModuleHostInner, sender: &BusName) -> Option<ModuleId> {
+    if !sender.is_unique() {
+        return None;
+    }
+    let loaded = inner.loaded.lock().expect("module list lock");
+    let module = loaded.iter().find(|module| &module.unique_name == sender)?;
+    if module.transport.is_faulted()
+        || module.transport.init_failed()
+        || module.transport.is_stopped()
+        || module.transport.admission_closed()
+    {
+        return None;
+    }
+    matches!(
+        module.snapshot().state,
+        ModuleState::Resolved
+            | ModuleState::Initializing
+            | ModuleState::Ready
+            | ModuleState::Serving
+    )
+    .then(|| module.module_id.clone())
+}
+
 /// Product configuration for directories that `ModuleHost` scans for modules.
 /// TinyBus has no product-specific default; hosts opt in by naming the
 /// environment variable and application directory they own.
@@ -412,6 +458,19 @@ impl ModuleHost {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
     }
 
+    /// Create an owned weak handle for resolving authenticated module peers.
+    ///
+    /// The returned handle can be stored by runtime setup callbacks without a
+    /// back-reference to the [`ModuleHost`] or a global runtime slot. It uses
+    /// the same local admission table and terminal-state checks as
+    /// [`Self::module_for_sender`].
+    #[must_use]
+    pub fn sender_lookup(&self) -> ModuleSenderLookup {
+        ModuleSenderLookup {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     pub(crate) fn configure_search_path_config(&self, config: Option<SearchPathConfig>) {
         self.set_search_path_config(config);
     }
@@ -486,26 +545,7 @@ impl ModuleHost {
     /// admitted transport remains live.
     #[must_use]
     pub fn module_for_sender(&self, sender: &BusName) -> Option<ModuleId> {
-        if !sender.is_unique() {
-            return None;
-        }
-        let loaded = self.inner.loaded.lock().expect("module list lock");
-        let module = loaded.iter().find(|module| &module.unique_name == sender)?;
-        if module.transport.is_faulted()
-            || module.transport.init_failed()
-            || module.transport.is_stopped()
-            || module.transport.admission_closed()
-        {
-            return None;
-        }
-        matches!(
-            module.snapshot().state,
-            ModuleState::Resolved
-                | ModuleState::Initializing
-                | ModuleState::Ready
-                | ModuleState::Serving
-        )
-        .then(|| module.module_id.clone())
+        module_for_sender(&self.inner, sender)
     }
 
     /// Initialize a loaded module and wait for its host lifecycle readiness.

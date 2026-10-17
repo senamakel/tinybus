@@ -226,7 +226,10 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         .expect("an admitted module resolves from its unique peer");
     assert_eq!(module_id.as_str(), "clock");
     assert_eq!(
-        lookup.module_for_sender(&unique).as_ref().map(ModuleId::as_str),
+        lookup
+            .module_for_sender(&unique)
+            .as_ref()
+            .map(ModuleId::as_str),
         Some("clock")
     );
     assert!(host.module_for_sender(&info.manifest.bus_name).is_none());
