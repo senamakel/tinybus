@@ -297,6 +297,106 @@ async fn a_name_collision_leaves_no_host_object_registration_behind() {
 }
 
 #[tokio::test]
+async fn a_name_claim_race_preserves_the_peer_that_wins_before_registration() {
+    let runtime = Arc::new(ModuleRuntime::start(&RuntimeNames::default(), None).unwrap());
+    let name: crate::BusName = "ai.tinyhumans.test.HostObjectNameRace".parse().unwrap();
+    let path: crate::ObjectPath = "/runtime/name_race".parse().unwrap();
+    let barrier = HostObjectRegistrationBarrier {
+        entered: Arc::new(tokio::sync::Semaphore::new(0)),
+        release: Arc::new(tokio::sync::Semaphore::new(0)),
+    };
+    runtime.host_objects.lock().await.before_name_request = Some(barrier.clone());
+
+    let serving_runtime = runtime.clone();
+    let serving_name = name.clone();
+    let serving_path = path.clone();
+    let serving = tokio::spawn(async move {
+        serving_runtime
+            .serve_host_object(
+                serving_name,
+                serving_path,
+                HostObjectValue("must not register"),
+            )
+            .await
+    });
+    let entered =
+        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.entered.acquire())
+            .await
+            .expect("host registration did not reach the name-request race")
+            .unwrap();
+
+    let manifest = crate::module::manifest::ModuleManifest {
+        schema: crate::module::manifest::MANIFEST_SCHEMA,
+        module: crate::module::manifest::ModuleIdentity {
+            name: "host-object-name-race".to_string(),
+            version: crate::version::Version::new(0, 1, 0),
+            description: String::new(),
+            homepage: None,
+            license: String::new(),
+        },
+        bus_name: name.clone(),
+        object_path: path.clone(),
+        provides: Vec::new(),
+        requires: Vec::new(),
+        environment: Vec::new(),
+        capabilities: Vec::new(),
+        lazy_init: true,
+        worker_threads: 1,
+        on_panic: crate::module::manifest::PanicPolicy::Detach,
+    };
+    runtime
+        .host()
+        .attach_linked_with_config(
+            crate::module::LinkedModule {
+                descriptor: crate::module::abi::TbAbiDescriptor::current(
+                    "host-object-name-race",
+                    "0.1.0",
+                ),
+                manifest,
+                init: collision_module_init,
+                init_with_setup: None,
+            },
+            serde_json::Value::Null,
+        )
+        .unwrap();
+    let winning_owner = runtime
+        .connection()
+        .name_owner(name.as_str())
+        .await
+        .unwrap()
+        .expect("the linked peer should win the name claim");
+
+    barrier.release.add_permits(1);
+    drop(entered);
+    assert!(serving.await.unwrap().is_err());
+    runtime.host_objects.lock().await.before_name_request = None;
+
+    assert_eq!(
+        runtime
+            .connection()
+            .name_owner(name.as_str())
+            .await
+            .unwrap(),
+        Some(winning_owner),
+        "failed host registration must not release the peer's name"
+    );
+    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+    let proxy = runtime
+        .connection()
+        .proxy(
+            runtime.connection().unique_name().unwrap().as_str(),
+            path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
+        .unwrap();
+    let leaked: crate::Result<serde_json::Value> = proxy.call("Value", ()).await;
+    assert!(
+        leaked.is_err(),
+        "the failed registration must not publish an object"
+    );
+}
+
+#[tokio::test]
 async fn interface_name_panic_rolls_back_a_new_host_object_name_claim() {
     let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
     let name: crate::BusName = "ai.tinyhumans.test.PanickingHostObjectName"

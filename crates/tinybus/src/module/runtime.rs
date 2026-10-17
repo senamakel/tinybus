@@ -100,6 +100,8 @@ struct HostObjectRegistry {
     connection: Connection,
     names: std::collections::HashMap<crate::BusName, HostNameLease>,
     #[cfg(test)]
+    before_name_request: Option<HostObjectRegistrationBarrier>,
+    #[cfg(test)]
     after_name_claim: Option<HostObjectRegistrationBarrier>,
 }
 
@@ -299,6 +301,15 @@ async fn serve_host_object_transaction(
             ));
         }
         None => {
+            #[cfg(test)]
+            if let Some(barrier) = state.before_name_request.clone() {
+                barrier.entered.add_permits(1);
+                let _permit = barrier
+                    .release
+                    .acquire()
+                    .await
+                    .expect("name-request barrier");
+            }
             if let Err(error) = state.connection.request_name(name.as_str()).await {
                 // A lost reply can make the RPC report failure after the broker
                 // committed the claim. Check the authoritative owner before
@@ -385,6 +396,8 @@ async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
     let host_objects = std::sync::Arc::new(tokio::sync::Mutex::new(HostObjectRegistry {
         connection: connection.clone(),
         names: std::collections::HashMap::new(),
+        #[cfg(test)]
+        before_name_request: None,
         #[cfg(test)]
         after_name_claim: None,
     }));
