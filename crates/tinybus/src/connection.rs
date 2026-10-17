@@ -1154,13 +1154,13 @@ impl Connection {
     /// caller decides where in its own argument list the handle goes. The call
     /// and the payload are in flight together, which is what keeps a sender
     /// from stalling against its own receiver.
-    pub async fn call_with_stream<R: DeserializeOwned, A: Serialize>(
+    pub async fn call_with_stream<R: DeserializeOwned>(
         &self,
         destination: BusName,
         path: ObjectPath,
         interface: InterfaceName,
         member: MemberName,
-        args: impl FnOnce(&StreamRef) -> A,
+        args: impl FnOnce(&StreamRef) -> Value,
         bytes: &[u8],
     ) -> Result<R> {
         self.call_with_stream_timeout(
@@ -1186,7 +1186,21 @@ impl Connection {
     /// needs more than [`DEFAULT_TIMEOUT`] here, or it fails a call that was
     /// still making progress.
     #[allow(clippy::too_many_arguments)]
-    pub async fn call_with_stream_timeout<R: DeserializeOwned, A: Serialize>(
+    pub async fn call_with_stream_timeout<R: DeserializeOwned>(
+        &self,
+        destination: BusName,
+        path: ObjectPath,
+        interface: InterfaceName,
+        member: MemberName,
+        args: impl FnOnce(&StreamRef) -> Value,
+        bytes: &[u8],
+        timeout: Duration,
+    ) -> Result<R> {
+        self.call_with_stream_serialized(destination, path, interface, member, args, bytes, timeout)
+            .await
+    }
+
+    pub(crate) async fn call_with_stream_serialized<R: DeserializeOwned, A: Serialize>(
         &self,
         destination: BusName,
         path: ObjectPath,

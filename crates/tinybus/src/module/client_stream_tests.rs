@@ -227,7 +227,12 @@ async fn module_calls_stream_empty_and_past_window_payloads() {
 
     let length: usize = fixture
         .client
-        .call_with_stream_detailed(RECORD.id, "Upload", |stream| (stream,), &bytes)
+        .call_with_stream_detailed(
+            RECORD.id,
+            "Upload",
+            |stream| serde_json::json!([stream]),
+            &bytes,
+        )
         .await
         .unwrap();
     assert_eq!(length, bytes.len());
@@ -235,7 +240,12 @@ async fn module_calls_stream_empty_and_past_window_payloads() {
 
     let empty_length: usize = fixture
         .client
-        .call_with_stream_detailed(RECORD.id, "Upload", |stream| (stream,), &[])
+        .call_with_stream_detailed(
+            RECORD.id,
+            "Upload",
+            |stream| serde_json::json!([stream]),
+            &[],
+        )
         .await
         .unwrap();
     assert_eq!(empty_length, 0);
@@ -258,7 +268,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
                     let builder_calls = builder_calls.clone();
                     move |stream: &StreamRef| {
                         builder_calls.fetch_add(1, Ordering::SeqCst);
-                        (stream,)
+                        serde_json::json!([stream])
                     }
                 },
                 b"x",
@@ -284,7 +294,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
                     let builder_calls = builder_calls.clone();
                     move |stream: &StreamRef| {
                         builder_calls.fetch_add(1, Ordering::SeqCst);
-                        (stream,)
+                        serde_json::json!([stream])
                     }
                 },
                 b"x",
@@ -308,7 +318,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
                     let builder_calls = builder_calls.clone();
                     move |stream: &StreamRef| {
                         builder_calls.fetch_add(1, Ordering::SeqCst);
-                        (stream,)
+                        serde_json::json!([stream])
                     }
                 },
                 b"x",
@@ -327,7 +337,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
                     let builder_calls = builder_calls.clone();
                     move |stream: &StreamRef| {
                         builder_calls.fetch_add(1, Ordering::SeqCst);
-                        (stream,)
+                        serde_json::json!([stream])
                     }
                 },
                 b"x",
@@ -347,7 +357,7 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
         .call_with_stream_detailed::<Value, _, _>(
             RECORD.id,
             "InvalidInput",
-            |stream| (stream,),
+            |stream| serde_json::json!([stream]),
             b"untrusted input",
         )
         .await
@@ -399,15 +409,16 @@ async fn method_failure_and_cancellation_abort_a_streamed_upload() {
         failure.wire_name,
         "ai.tinyhumans.tinydocs.Error.InvalidInput"
     );
+    let mut failed_fixture = failed_fixture;
     tokio::time::timeout(Duration::from_secs(10), failed_fixture.aborts.recv())
         .await
         .expect("method failure dropped the unfinished stream writer")
         .expect("the abort observer remained connected");
 
-    let entered = tokio::sync::mpsc::unbounded_channel();
+    let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
     let resume = Arc::new(tokio::sync::Notify::new());
-    let stalled = fixture(Behavior::Stall {
-        entered: entered.0,
+    let mut stalled = fixture(Behavior::Stall {
+        entered: entered_tx,
         resume: resume.clone(),
     })
     .await;
@@ -419,13 +430,13 @@ async fn method_failure_and_cancellation_abort_a_streamed_upload() {
                 .call_with_stream_detailed::<Value, _, _>(
                     RECORD.id,
                     "Stall",
-                    |stream| (stream,),
+                    |stream| serde_json::json!([stream]),
                     &bytes,
                 )
                 .await
         })
     };
-    tokio::time::timeout(Duration::from_secs(10), entered.1.recv())
+    tokio::time::timeout(Duration::from_secs(10), entered_rx.recv())
         .await
         .expect("stalled method was dispatched")
         .expect("the method-entry observer remained connected");

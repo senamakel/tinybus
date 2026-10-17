@@ -376,7 +376,7 @@ impl ModuleClient {
         let proxy = self.with_deadline(proxy);
         proxy
             .connection()
-            .call_with_stream_timeout(
+            .call_with_stream_serialized(
                 proxy.destination().clone(),
                 proxy.path().clone(),
                 proxy.interface().clone(),
