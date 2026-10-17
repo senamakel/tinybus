@@ -365,8 +365,17 @@ fn checked_path(original: &str, max_depth: usize) -> Result<(PathBuf, bool, usiz
     } else {
         original
     };
+    if body.split('/').any(|part| part == "..") {
+        return Err(refused("release archive contains an unsafe path"));
+    }
     if body.split('/').count() > max_depth {
         return Err(refused("release archive path exceeds the depth limit"));
+    }
+    let normalized = rawzip::path::ZipFilePath::from_bytes(original.as_bytes())
+        .try_normalize()
+        .map_err(|_| refused("release archive contains an unsafe path"))?;
+    if normalized.as_ref() != original {
+        return Err(refused("release archive contains an unsafe path"));
     }
     let parts: Vec<_> = body.split('/').collect();
     if parts.is_empty()
@@ -380,13 +389,6 @@ fn checked_path(original: &str, max_depth: usize) -> Result<(PathBuf, bool, usiz
         if part.ends_with('.') || part.ends_with(' ') || is_windows_device_name(part) {
             return Err(refused("release archive contains an unsafe path"));
         }
-    }
-
-    let normalized = rawzip::path::ZipFilePath::from_bytes(original.as_bytes())
-        .try_normalize()
-        .map_err(|_| refused("release archive contains an unsafe path"))?;
-    if normalized.as_ref() != original {
-        return Err(refused("release archive contains an unsafe path"));
     }
 
     let mut path = PathBuf::new();
