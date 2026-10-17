@@ -13,7 +13,6 @@ mod callback_lifecycle_tests;
 static INIT_RAN: AtomicBool = AtomicBool::new(false);
 static LAZY_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FAILED_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
-static LINKED_DEFAULT_SETUP_RAN: AtomicBool = AtomicBool::new(false);
 static FAKE_MODULE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static REINIT_CONFIG: OnceLock<StdMutex<Vec<u8>>> = OnceLock::new();
 static BLOCKING_REINIT_RECEIVER: OnceLock<StdMutex<Option<std::sync::mpsc::Receiver<()>>>> =
@@ -170,41 +169,8 @@ unsafe extern "C" fn init_that_must_not_run(
     TB_OK
 }
 
-unsafe extern "C" fn linked_default_setup_init(
-    host: *const crate::module::abi::TbHostVtable,
-    out: *mut TbModuleVtable,
-) -> i32 {
-    LINKED_DEFAULT_SETUP_RAN.store(true, Ordering::Release);
-    unsafe { lazy_echo_init(host, out) }
-}
-
-unsafe fn linked_init_with_setup(
-    host: *const crate::module::abi::TbHostVtable,
-    out: *mut TbModuleVtable,
-    setup: crate::module::LinkedSetup,
-) -> i32 {
-    unsafe { tinybus_module::start_linked_module(host, out, 1, true, setup) }
-}
-
 pub(super) fn manifest() -> ModuleManifest {
     named_manifest("clock", "Clock")
-}
-
-struct LinkedSetupValue(&'static str);
-
-#[async_trait::async_trait]
-impl crate::Interface for LinkedSetupValue {
-    fn name(&self) -> crate::InterfaceName {
-        "org.example.LinkedSetup".parse().unwrap()
-    }
-
-    fn members(&self) -> Vec<crate::MemberName> {
-        vec!["Value".parse().unwrap()]
-    }
-
-    async fn call(&self, _: &crate::MemberName, _: serde_json::Value) -> Result<serde_json::Value> {
-        Ok(serde_json::json!(self.0))
-    }
 }
 
 fn named_manifest(module_name: &str, surface_name: &str) -> ModuleManifest {
@@ -305,82 +271,6 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
 }
 
 #[tokio::test]
-async fn concurrent_linked_setup_keeps_each_export_bound_to_its_own_host_connection() {
-    let _serial = FAKE_MODULE_TEST_LOCK.lock().await;
-    LINKED_DEFAULT_SETUP_RAN.store(false, Ordering::Release);
-    let bus = MemoryBus::new();
-    let broker = Broker::new();
-    let broker_task = broker.spawn(bus.clone());
-    let host = ModuleHost::new(broker);
-    let setups = Arc::new(StdMutex::new(
-        Vec::<(String, &'static str, Connection)>::new(),
-    ));
-
-    let setup_a = setups.clone();
-    let mut manifest_a = named_manifest("linked-a", "LinkedA");
-    manifest_a.lazy_init = true;
-    let attach_a = host.attach_linked_with_setup(
-        LinkedModule {
-            descriptor: TbAbiDescriptor::current("linked-a", "0.1.0"),
-            manifest: manifest_a,
-            init: linked_default_setup_init,
-            init_with_setup: Some(linked_init_with_setup),
-        },
-        serde_json::json!({"setup": "a"}),
-        move |connection| async move {
-            let unique = connection
-                .unique_name()
-                .expect("each linked setup gets a broker peer")
-                .to_string();
-            connection
-                .serve_at("/linked/setup".parse().unwrap(), LinkedSetupValue("a"))
-                .await?;
-            setup_a.lock().unwrap().push((unique, "a", connection));
-            Ok(())
-        },
-    );
-
-    let setup_b = setups.clone();
-    let mut manifest_b = named_manifest("linked-b", "LinkedB");
-    manifest_b.lazy_init = true;
-    let attach_b = host.attach_linked_with_setup(
-        LinkedModule {
-            descriptor: TbAbiDescriptor::current("linked-b", "0.1.0"),
-            manifest: manifest_b,
-            init: linked_default_setup_init,
-            init_with_setup: Some(linked_init_with_setup),
-        },
-        serde_json::json!({"setup": "b"}),
-        move |connection| async move {
-            let unique = connection
-                .unique_name()
-                .expect("each linked setup gets a broker peer")
-                .to_string();
-            connection
-                .serve_at("/linked/setup".parse().unwrap(), LinkedSetupValue("b"))
-                .await?;
-            setup_b.lock().unwrap().push((unique, "b", connection));
-            Ok(())
-        },
-    );
-
-    let (a, b) = tokio::join!(attach_a, attach_b);
-    assert_eq!(a.unwrap().state, ModuleState::Ready);
-    assert_eq!(b.unwrap().state, ModuleState::Ready);
-    assert!(!LINKED_DEFAULT_SETUP_RAN.load(Ordering::Acquire));
-    let setups = std::mem::take(&mut *setups.lock().unwrap());
-    assert_eq!(setups.len(), 2);
-    assert_ne!(setups[0].0, setups[1].0);
-    for (unique, expected, connection) in setups.iter() {
-        let proxy = connection
-            .proxy(unique.as_str(), "/linked/setup", "org.example.LinkedSetup")
-            .unwrap();
-        let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
-        assert_eq!(value, serde_json::json!(expected));
-    }
-    broker_task.abort();
-}
-
 #[test]
 fn linked_module_with_an_unmet_required_interface_is_refused_before_init() {
     let host = ModuleHost::new(Broker::new());

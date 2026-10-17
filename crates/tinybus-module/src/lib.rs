@@ -1289,6 +1289,10 @@ mod tests;
 mod static_link_tests;
 
 #[cfg(test)]
+#[path = "linked_setup_tests.rs"]
+mod linked_setup_tests;
+
+#[cfg(test)]
 #[path = "lib_setup_factory_tests.rs"]
 mod setup_factory_test;
 
