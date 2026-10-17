@@ -86,6 +86,61 @@ fn retired_anchor_cannot_refund_permit_while_old_view_survives() {
     );
 }
 
+struct AnchorRemovalRelease {
+    gate: Arc<AnchorRemovalGate>,
+    released: bool,
+}
+impl AnchorRemovalRelease {
+    fn release(&mut self) {
+        if !self.released {
+            self.gate.release.wait();
+            self.released = true;
+        }
+    }
+}
+impl Drop for AnchorRemovalRelease {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+#[test]
+fn physical_completion_is_published_only_after_anchor_retirement() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    FLAGS.store(TB_NATIVE_TERMINAL_LIVE, Ordering::Release);
+    let admission = Admission::new();
+    let state = TerminalState::admit_in(&admission, host(), None).unwrap();
+    let view = state.view();
+    let gate = Arc::new(AnchorRemovalGate {
+        entered: std::sync::Barrier::new(2),
+        release: std::sync::Barrier::new(2),
+    });
+    *state.before_anchor_removal.lock().unwrap() = Some(gate.clone());
+    state.register(RuntimeHooks::new(|_| {}, || {
+        TerminalCompletion::PhysicallyStopped
+    }));
+    state.publish();
+    state.signal(TerminalReason::Stop);
+
+    gate.entered.wait();
+    let mut release = AnchorRemovalRelease {
+        gate,
+        released: false,
+    };
+    assert!(TerminalState::lookup_in(&admission, view.context().addr()).is_some());
+    assert_eq!(view.wait(Duration::ZERO), TerminalCompletion::Uncertain);
+
+    release.release();
+    assert_eq!(view.wait(Duration::from_secs(3)), TerminalCompletion::PhysicallyStopped);
+    assert!(TerminalState::lookup_in(&admission, view.context().addr()).is_none());
+    assert!(admission.slots.lock().unwrap()[view.context().addr() & 0xff].reserved);
+    drop(view);
+    drop(state);
+    assert!(!admission.slots.lock().unwrap()[0].reserved);
+}
+
 #[test]
 fn request_primary_payload_is_retained_and_finish_still_attempted_once() {
     let _serial = TEST_LOCK
