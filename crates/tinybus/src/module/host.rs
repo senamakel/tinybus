@@ -745,8 +745,10 @@ impl ModuleHost {
                 "linked module setup did not become ready",
             ));
         }
-        Ok(transport
-            .module_info()
+        Ok(self
+            .list()
+            .into_iter()
+            .find(|module| module.name == info.name)
             .unwrap_or(info))
     }
 
