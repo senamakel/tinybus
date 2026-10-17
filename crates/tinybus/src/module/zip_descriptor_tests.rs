@@ -56,14 +56,5 @@ fn rejects_wrong_fields_truncation_and_out_of_range_offsets() {
     let directory = tempfile::tempdir().unwrap();
     let archive = directory.path().join("descriptor.zip");
     std::fs::write(&archive, &valid).unwrap();
-    assert!(validate_data_descriptor(
-        &archive,
-        1,
-        0,
-        true,
-        0x1234,
-        17,
-        29,
-    )
-    .is_err());
+    assert!(validate_data_descriptor(&archive, 1, 0, true, 0x1234, 17, 29,).is_err());
 }
