@@ -59,18 +59,25 @@ fn extract_fixture_bytes_with_limits(
     (root, destination, result)
 }
 
-fn extract_through_cache_staging(bytes: &[u8]) -> (tempfile::TempDir, Result<()>) {
+fn extract_through_cache_staging(
+    bytes: &[u8],
+) -> (tempfile::TempDir, Result<()>, Option<PathBuf>, bool) {
     let root = tempfile::tempdir().unwrap();
     let cache_dir = root.path().join("cache");
     fs::create_dir(&cache_dir).unwrap();
+    let mut staging_path = None;
+    let mut prior_module_was_extracted = false;
     let result = (|| {
         let staging = crate::module::cache::stage(&cache_dir)?;
+        staging_path = Some(staging.path().to_path_buf());
         let archive = staging.path().join("fixture.zip");
         fs::write(&archive, bytes).map_err(|_| refused("test fixture write failed"))?;
-        extract(&archive, staging.path())?;
+        let extraction = extract(&archive, staging.path());
+        prior_module_was_extracted = staging.path().join("folder/module.so").is_file();
+        extraction?;
         crate::module::cache::commit(staging, &cache_dir)
     })();
-    (root, result)
+    (root, result, staging_path, prior_module_was_extracted)
 }
 
 #[test]
@@ -442,15 +449,13 @@ fn crc_zero_is_still_verified_for_an_empty_file() {
 #[test]
 fn corrupt_crc_never_promotes_partial_cache_staging() {
     let mut bytes = include_bytes!("fixtures/compat_store.zip").to_vec();
-    let central = bytes
-        .windows(4)
-        .position(|window| window == b"PK\x01\x02")
-        .unwrap();
-    bytes[central + 16] ^= 0x80;
-    bytes[14] ^= 0x80;
+    set_member_crc(&mut bytes, "empty", 1);
 
-    let (root, result) = extract_through_cache_staging(&bytes);
+    let (root, result, staging_path, prior_module_was_extracted) =
+        extract_through_cache_staging(&bytes);
     assert!(result.is_err());
+    assert!(prior_module_was_extracted);
+    assert!(!staging_path.unwrap().exists());
     assert_eq!(fs::read_dir(root.path().join("cache")).unwrap().count(), 0);
 }
 
