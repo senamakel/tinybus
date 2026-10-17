@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 
 use rawzip::{CompressionMethod, ZipArchive, ZipArchiveEntryWayfinder};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::module::github::refused;
 
 const MAX_ENTRY_COUNT: u64 = 100_000;
@@ -25,10 +25,8 @@ const MAX_NAME_BYTES: usize = 4096;
 struct EntryPlan {
     wayfinder: ZipArchiveEntryWayfinder,
     path: PathBuf,
-    portable_key: String,
     is_dir: bool,
     method: CompressionMethod,
-    flags: rawzip::EntryFlags,
     compressed_size: u64,
     expanded_size: u64,
     data_range: (u64, u64),
@@ -99,6 +97,9 @@ fn extract_with_limits(
         if expanded_size > max_entry_bytes {
             return Err(refused("release archive entry exceeds the extraction limit"));
         }
+        if is_dir && expanded_size != 0 {
+            return Err(refused("release archive directory entry is not empty"));
+        }
         hinted_expanded_total = hinted_expanded_total
             .checked_add(expanded_size)
             .ok_or_else(|| refused("release archive exceeds the extraction limit"))?;
@@ -157,10 +158,8 @@ fn extract_with_limits(
         plans.push(EntryPlan {
             wayfinder: entry.wayfinder().clone(),
             path,
-            portable_key,
             is_dir,
             method,
-            flags,
             compressed_size,
             expanded_size,
             data_range: range,
@@ -186,17 +185,21 @@ fn extract_with_limits(
         if plan.is_dir {
             fs::create_dir_all(&target)
                 .map_err(|_| refused("release archive extraction failed"))?;
-            continue;
-        }
-        if let Some(parent) = target.parent() {
+        } else if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)
                 .map_err(|_| refused("release archive extraction failed"))?;
         }
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .map_err(|_| refused("release archive extraction failed"))?;
+        let mut output: Box<dyn Write> = if plan.is_dir {
+            Box::new(io::sink())
+        } else {
+            Box::new(
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .map_err(|_| refused("release archive extraction failed"))?,
+            )
+        };
         let local = archive
             .get_entry(plan.wayfinder)
             .map_err(|_| refused("release archive is invalid"))?;
@@ -261,7 +264,7 @@ fn validate_flags(flags: rawzip::EntryFlags, method: CompressionMethod) -> Resul
     if flags.is_encrypted() || flags.has_strong_encryption() || flags.is_masked() {
         return Err(refused("release archive contains encrypted entries"));
     }
-    let allowed = 1 << 3 | 1 << 11 | if method == CompressionMethod::DEFLATE { 0b110 } else { 0 };
+    let allowed: u16 = 1 << 3 | 1 << 11 | if method == CompressionMethod::DEFLATE { 0b110 } else { 0 };
     if flags.bits() & !allowed != 0 {
         return Err(refused("release archive contains unsupported entry flags"));
     }
@@ -323,3 +326,7 @@ fn is_windows_device_name(component: &str) -> bool {
             })
         })
 }
+
+#[cfg(test)]
+#[path = "zip_extract_tests.rs"]
+mod tests;
