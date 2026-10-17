@@ -57,7 +57,9 @@ fn linked_export(id: &str) -> LinkedModule {
     module.descriptor.module_name[..id.len()].copy_from_slice(id.as_bytes());
     module.manifest.module.name = id.to_string();
     module.manifest.bus_name = format!("ai.tinyhumans.test.{id}").parse().unwrap();
-    module.manifest.object_path = format!("/ai/tinyhumans/test/{id}").parse().unwrap();
+    module.manifest.object_path = format!("/ai/tinyhumans/test/{}", id.replace('-', "_"))
+        .parse()
+        .unwrap();
     module
 }
 
@@ -91,7 +93,7 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
     let setup_a = setups.clone();
     let host_a = host.clone();
     let first = host.attach_linked_with_setup(
-        linked_export("linked_a"),
+        linked_export("linked-a"),
         serde_json::json!({}),
         move |connection| async move {
             let peer = connection.unique_name().expect("connected module peer");
@@ -100,13 +102,13 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
                     .module_for_sender(&peer)
                     .as_ref()
                     .map(tinybus::module::ModuleId::as_str),
-                Some("linked_a")
+                Some("linked-a")
             );
             connection
                 .serve_at("/linked/setup".parse().unwrap(), SetupValue("a"))
                 .await?;
             setup_a.lock().unwrap().push((
-                "linked_a".to_string(),
+                "linked-a".to_string(),
                 "a",
                 peer.to_string(),
                 connection,
@@ -118,7 +120,7 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
     let setup_b = setups.clone();
     let host_b = host.clone();
     let second = host.attach_linked_with_setup(
-        linked_export("linked_b"),
+        linked_export("linked-abcdefghijklmnopqrstuvwxy"),
         serde_json::json!({}),
         move |connection| async move {
             let peer = connection.unique_name().expect("connected module peer");
@@ -127,13 +129,13 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
                     .module_for_sender(&peer)
                     .as_ref()
                     .map(tinybus::module::ModuleId::as_str),
-                Some("linked_b")
+                Some("linked-abcdefghijklmnopqrstuvwxy")
             );
             connection
                 .serve_at("/linked/setup".parse().unwrap(), SetupValue("b"))
                 .await?;
             setup_b.lock().unwrap().push((
-                "linked_b".to_string(),
+                "linked-abcdefghijklmnopqrstuvwxy".to_string(),
                 "b",
                 peer.to_string(),
                 connection,

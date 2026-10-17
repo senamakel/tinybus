@@ -1604,7 +1604,7 @@ impl ModuleHost {
         let version = sanitized_field(&descriptor.module_version)
             .ok_or_else(|| refuse("descriptor identity is invalid"))?;
         if manifest.schema != MANIFEST_SCHEMA
-            || sanitize_untrusted(&manifest.module.name) != name
+            || manifest.module.name != name
             || sanitize_untrusted(&manifest.module.version.to_string()) != version
             || manifest.module.name.len() > 64
             || manifest.module.version.to_string().len() > 32
@@ -2222,7 +2222,7 @@ fn loaded_identity(
     let name = sanitized_field(&descriptor.module_name)?;
     let version = sanitized_field(&descriptor.module_version)?;
     (manifest.schema == MANIFEST_SCHEMA
-        && sanitize_untrusted(&manifest.module.name) == name
+        && manifest.module.name == name
         && sanitize_untrusted(&manifest.module.version.to_string()) == version
         && manifest.module.name.len() <= 64
         && manifest.module.version.to_string().len() <= 32)
