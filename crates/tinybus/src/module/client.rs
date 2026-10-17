@@ -905,7 +905,9 @@ pub fn classify(error: &Error) -> (ModuleCallError, Reason) {
         Error::MethodFailed { name, .. }
             if matches!(
                 name.as_str(),
-                Error::NOT_ATTESTED | Error::CONFIDENTIALITY_REQUIRED
+                Error::NOT_ATTESTED
+                    | Error::CONFIDENTIALITY_REQUIRED
+                    | "ai.tinyhumans.tinybus.Error.Protocol"
             ) =>
         {
             (ModuleCallError::TransportFailed, Reason::TransportFailed)
