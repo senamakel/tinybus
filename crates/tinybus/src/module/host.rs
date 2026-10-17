@@ -158,6 +158,7 @@ struct Activation {
     /// records the pinned archive digest; linked code records the host
     /// executable digest. `None` for raw attachments and ordinary local files.
     pinned_sha256: Option<String>,
+    pinned_library_sha256: Option<String>,
 }
 
 impl PendingModule {
@@ -449,6 +450,7 @@ impl ModuleHost {
             &module,
             config,
             expected_sha256.map(str::to_ascii_lowercase),
+            None,
         )?;
         self.inner
             .artifacts
@@ -467,10 +469,8 @@ impl ModuleHost {
     /// maps the library without touching the network, which is what makes a
     /// module cheap to load at every launch rather than once per process.
     ///
-    /// Attestation is the same digest the uncached path records: the archive's,
-    /// checked against the pin before anything is mapped. The extracted library
-    /// is held to the release's own `modules.toml` by the ordinary allowlist
-    /// gate on every load.
+    /// Attestation preserves the archive digest and carries the separately
+    /// verified extracted-library digest when the release pins one.
     ///
     /// Nothing is retained here. The directory outlives the process by design,
     /// so the sibling files a mapped library may resolve stay where they are.
@@ -486,7 +486,12 @@ impl ModuleHost {
         config: serde_json::Value,
     ) -> Result<ModuleInfo> {
         let (module, sha256) = crate::module::github::acquire_cached(release)?;
-        self.load_file_pinned(&module, config, Some(sha256))
+        self.load_file_pinned(
+            &module,
+            config,
+            Some(sha256),
+            release.expected_library_sha256.map(str::to_ascii_lowercase),
+        )
     }
 
     /// Load an installer-bundle entry whose archive was replaced by its digest
@@ -508,6 +513,7 @@ impl ModuleHost {
         dir: &Path,
         asset_name: &str,
         pin: &str,
+        library_sha256: Option<&str>,
         config: serde_json::Value,
     ) -> Result<ModuleInfo> {
         let hit = crate::module::cache::find_marked(dir, asset_name, pin).ok_or_else(|| {
@@ -516,7 +522,12 @@ impl ModuleHost {
                 "bundled digest marker does not match the pin, or the extraction is unusable",
             )
         })?;
-        self.load_file_pinned(&hit.module, config, None)
+        self.load_file_pinned(
+            &hit.module,
+            config,
+            None,
+            library_sha256.map(str::to_ascii_lowercase),
+        )
     }
 
     /// Admit and initialize an already-resolved module without calling the
@@ -658,7 +669,16 @@ impl ModuleHost {
                 "required activation refuses lazy sidecars",
             ));
         }
-        let artifact = loader::load(path, self.inner.strict.load(Ordering::Acquire))?;
+        let allowlisted = allowlisted_hash(
+            path,
+            std::fs::File::open(path)
+                .map_err(|_| Error::module_refused(path, "module library could not be opened"))?,
+        )?;
+        let artifact = loader::load_verified(
+            path,
+            self.inner.strict.load(Ordering::Acquire),
+            allowlisted.as_deref(),
+        )?;
         self.activate_required(path, artifact, config, requirements)
     }
 
@@ -678,7 +698,7 @@ impl ModuleHost {
     /// [`ModuleHost::load_file_with_config`], carrying a digest the caller has
     /// already verified for an artifact that has no `modules.toml` beside it.
     ///
-    /// `pinned_sha256` is recorded as the attestation without being re-checked
+    /// `pinned_sha256` is recorded as the archive attestation without being re-checked
     /// here, because there is nothing left on disk to re-check it against — the
     /// bytes it names are the archive, which was verified and then extracted.
     /// The verification therefore lives entirely in the caller, and this stays
@@ -693,6 +713,7 @@ impl ModuleHost {
         path: impl AsRef<Path>,
         config: serde_json::Value,
         pinned_sha256: Option<String>,
+        pinned_library_sha256: Option<String>,
     ) -> Result<ModuleInfo> {
         let path = path.as_ref();
         let result = (|| {
@@ -704,11 +725,38 @@ impl ModuleHost {
                 })?;
             }
             check_file(path)?;
+            let allowlisted = allowlisted_hash(
+                path,
+                std::fs::File::open(path).map_err(|_| {
+                    Error::module_refused(path, "module library could not be opened")
+                })?,
+            )?;
+            if pinned_library_sha256
+                .as_ref()
+                .zip(allowlisted.as_ref())
+                .is_some_and(|(pinned, local)| !pinned.eq_ignore_ascii_case(local))
+            {
+                return Err(Error::module_refused(
+                    path,
+                    "release library pin disagrees with the local module allowlist",
+                ));
+            }
+            let library_pin = pinned_library_sha256.clone().or(allowlisted);
             if let Some(manifest) = read_lazy_manifest(path)? {
                 self.ensure_dependencies(&manifest, path)?;
-                return self.register_lazy(path, manifest, config, pinned_sha256.clone());
+                return self.register_lazy(
+                    path,
+                    manifest,
+                    config,
+                    pinned_sha256.clone(),
+                    library_pin,
+                );
             }
-            let artifact = loader::load(path, self.inner.strict.load(Ordering::Acquire))?;
+            let artifact = loader::load_verified(
+                path,
+                self.inner.strict.load(Ordering::Acquire),
+                library_pin.as_deref(),
+            )?;
             let rejected_manifest = artifact.manifest.clone();
             if let Err(error) = self.ensure_dependencies(&artifact.manifest, path) {
                 self.record_manifest_rejection(&error, rejected_manifest, RefusalClass::Unresolved);
@@ -1088,6 +1136,7 @@ impl ModuleHost {
         manifest: ModuleManifest,
         config: serde_json::Value,
         pinned_sha256: Option<String>,
+        pinned_library_sha256: Option<String>,
     ) -> Result<ModuleInfo> {
         let _admission = self.inner.admission.lock().expect("module admission lock");
         let admitted = provisional_info(path, &manifest).inspect_err(|error| {
@@ -1114,6 +1163,7 @@ impl ModuleHost {
         let expected = manifest.clone();
         let artifact_path = path.to_path_buf();
         let strict = self.inner.strict.load(Ordering::Acquire);
+        let expected_library = pinned_library_sha256.clone();
         let descriptor_info = Arc::new(Mutex::new(None));
         let loaded_descriptor_info = descriptor_info.clone();
         transport.defer_initializer(host_vtable, move |host| {
@@ -1122,7 +1172,7 @@ impl ModuleHost {
             // replaced after discovery cannot inherit the old hash attestation.
             check_file(&artifact_path)
                 .map_err(|_| "module library no longer passes admission".to_string())?;
-            let artifact = loader::load(&artifact_path, strict)
+            let artifact = loader::load_verified(&artifact_path, strict, expected_library.as_deref())
                 .map_err(|_| "module library could not be loaded".to_string())?;
             let rustc = sanitized_field(&artifact.descriptor.rustc_version);
             if artifact.manifest != expected
@@ -1156,6 +1206,7 @@ impl ModuleHost {
                 lazy_load: true,
                 descriptor_info: Some(descriptor_info),
                 pinned_sha256,
+                pinned_library_sha256,
             },
         )
     }
