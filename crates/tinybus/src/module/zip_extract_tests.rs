@@ -18,6 +18,7 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
             "duplicate.zip" => include_bytes!("fixtures/duplicate.zip"),
             "archive_collision.zip" => include_bytes!("fixtures/archive_collision.zip"),
             "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
+            "compat_zip64_local.zip" => include_bytes!("fixtures/compat_zip64_local.zip"),
             _ => panic!("unknown test fixture"),
         };
     fs::write(&archive, bytes).unwrap();
@@ -51,6 +52,16 @@ fn extracts_independent_stored_and_deflated_archives() {
     assert_eq!(
         fs::read(destination.join("folder/module.so")).unwrap(),
         b"deflated-module-payload".repeat(16)
+    );
+}
+
+#[test]
+fn extracts_a_small_archive_with_zip64_local_size_fields() {
+    let (_root, destination, result) = extract_fixture("compat_zip64_local.zip");
+    result.unwrap();
+    assert_eq!(
+        fs::read(destination.join("module.so")).unwrap(),
+        b"zip64-local-module"
     );
 }
 
