@@ -6,6 +6,47 @@ struct HostObjectValue(&'static str);
 
 struct PanickingHostObjectName;
 
+struct FailRequestNameReply {
+    inner: Box<dyn crate::Transport>,
+    fail_next_request_name_reply: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl crate::Transport for FailRequestNameReply {
+    async fn send(&self, message: crate::Message) -> crate::Result<()> {
+        if message
+            .header
+            .member
+            .as_ref()
+            .is_some_and(|member| member.as_str() == "RequestName")
+        {
+            self.fail_next_request_name_reply
+                .store(true, Ordering::Release);
+        }
+        self.inner.send(message).await
+    }
+
+    async fn recv(&self) -> crate::Result<Option<crate::Message>> {
+        let Some(mut message) = self.inner.recv().await? else {
+            return Ok(None);
+        };
+        if message.header.kind == crate::message::MessageKind::MethodReturn
+            && self
+                .fail_next_request_name_reply
+                .swap(false, Ordering::AcqRel)
+        {
+            message.header.kind = crate::message::MessageKind::Error;
+            message.header.error_name = Some(crate::Error::FAILED.to_string());
+            message.body = serde_json::json!("injected RequestName reply loss");
+        }
+        Ok(Some(message))
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        self.inner.close().await
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::Interface for HostObjectValue {
     fn name(&self) -> crate::InterfaceName {
@@ -394,6 +435,40 @@ async fn a_name_claim_race_preserves_the_peer_that_wins_before_registration() {
         leaked.is_err(),
         "the failed registration must not publish an object"
     );
+}
+
+#[tokio::test]
+async fn request_name_reply_failure_after_commit_rolls_back_the_new_claim() {
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.clone().spawn(bus.clone());
+    let transport = bus.connect().await.unwrap();
+    let connection = Connection::connect(Box::new(FailRequestNameReply {
+        inner: transport,
+        fail_next_request_name_reply: AtomicBool::new(false),
+    }))
+    .await
+    .unwrap();
+    runtime.host_objects.lock().await.connection = connection.clone();
+    let name: crate::BusName = "ai.tinyhumans.test.LostNameReply".parse().unwrap();
+    let path: crate::ObjectPath = "/runtime/lost_name_reply".parse().unwrap();
+
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path, HostObjectValue("must roll back"))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        connection.name_owner(name.as_str()).await.unwrap(),
+        None,
+        "a failed RequestName reply after broker commit must roll back the claim"
+    );
+    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+
+    runtime.host_objects.lock().await.connection = runtime.connection.clone();
+    broker_task.abort();
 }
 
 #[tokio::test]
