@@ -1,4 +1,4 @@
-use super::test_support::{fixture, shared_runtime};
+use super::test_support::fixture;
 use super::*;
 
 #[cfg(unix)]
@@ -6,7 +6,7 @@ use super::*;
 #[ignore = "requires TINYBUS_TEST_MODULE to point at the built module_clock cdylib"]
 async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_probe() {
     use crate::module::{ModuleAccess, ModuleCallError, ModuleClient, ProxyFailure};
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let library_source = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
     let install = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
