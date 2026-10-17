@@ -74,7 +74,8 @@ pub use resolve::{
 };
 #[cfg(feature = "modules")]
 pub use runtime::{
-    LinkedModuleInitWithSetup, LinkedSetup, ModuleRuntime, RuntimeNames, RuntimeSetup,
+    HostObjectGuard, LinkedModuleInitWithSetup, LinkedSetup, ModuleRuntime, RuntimeNames,
+    RuntimeSetup,
 };
 
 /// Stable, validated identifier of one admitted module package.
