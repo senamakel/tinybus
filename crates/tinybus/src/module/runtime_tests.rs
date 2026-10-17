@@ -6,8 +6,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 async fn setup_runs_before_the_runtime_is_handed_out() {
     let ran = Arc::new(AtomicBool::new(false));
     let flag = ran.clone();
-    let setup: RuntimeSetup = Box::new(move |_connection| {
+    let setup: RuntimeSetup = Box::new(move |_connection, host| {
         Box::pin(async move {
+            // Setup runs before the runtime is handed out, but it must already
+            // have access to the loader so it can prepare host services before
+            // module initialization starts.
+            assert!(host.list().is_empty());
             flag.store(true, Ordering::SeqCst);
             Ok(())
         })
@@ -20,10 +24,21 @@ async fn setup_runs_before_the_runtime_is_handed_out() {
 
 #[tokio::test]
 async fn a_failing_setup_fails_the_start() {
-    let setup: RuntimeSetup =
-        Box::new(|_| Box::pin(async { Err(crate::Error::Transport("setup".to_string())) }));
+    let captured = Arc::new(std::sync::Mutex::new(None));
+    let capture = captured.clone();
+    let setup: RuntimeSetup = Box::new(move |connection, _host| {
+        *capture.lock().unwrap() = Some(connection);
+        Box::pin(async { Err(crate::Error::Transport("setup".to_string())) })
+    });
     let result = ModuleRuntime::start(&RuntimeNames::default(), Some(setup));
     assert!(result.is_err());
+    let connection = captured.lock().unwrap().take().unwrap();
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        connection.list_names(),
+    )
+    .await;
+    assert!(closed.is_ok_and(|result| result.is_err()));
 }
 
 #[tokio::test]
