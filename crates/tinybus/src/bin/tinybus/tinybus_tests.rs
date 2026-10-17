@@ -116,6 +116,56 @@ fn checksum_manifest_reads_a_windows_library_from_zip_on_unix() {
     )));
 }
 
+fn write_zip_fixture(path: &Path, files: &[(&str, &[u8])]) {
+    use std::io::Write as _;
+
+    let mut archive = rawzip::ZipArchiveWriter::new(Vec::new());
+    for &(name, bytes) in files {
+        let (mut entry, config) = archive.new_file(name).start().unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(bytes).unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+        entry.finish(descriptor).unwrap();
+    }
+    std::fs::write(path, archive.finish().unwrap()).unwrap();
+}
+
+#[test]
+fn checksum_manifest_rejects_a_zip_without_a_module_library() {
+    let directory = tempfile::tempdir().unwrap();
+    let archive_path = directory.path().join("no-library.zip");
+    write_zip_fixture(&archive_path, &[("README.txt", b"documentation")]);
+
+    let error = write_checksum_manifest(std::slice::from_ref(&archive_path), None).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("checksum ZIP contains no module library"),
+        "{error}"
+    );
+}
+
+#[test]
+fn checksum_manifest_rejects_multiple_module_libraries_in_a_zip() {
+    let directory = tempfile::tempdir().unwrap();
+    let archive_path = directory.path().join("multiple-libraries.zip");
+    write_zip_fixture(
+        &archive_path,
+        &[
+            ("lib/clock.so", b"first library"),
+            ("nested/clock.dll", b"second library"),
+        ],
+    );
+
+    let error = write_checksum_manifest(std::slice::from_ref(&archive_path), None).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("checksum ZIP contains more than one module library"),
+        "{error}"
+    );
+}
+
 #[test]
 fn checksum_reader_refuses_module_sizes_above_its_expansion_limit() {
     let error = sha256_reader(&b""[..], 8, 4).unwrap_err();

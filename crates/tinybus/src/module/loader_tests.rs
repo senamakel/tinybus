@@ -49,6 +49,24 @@ fn one_native_handle_cannot_be_reused_with_a_different_proof() {
     );
 }
 
+#[test]
+fn a_library_pin_is_validated_against_file_bytes_before_mapping() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("not-a-library.so");
+    std::fs::write(&path, b"library bytes with a compiled pin").unwrap();
+
+    let invalid_pin = load_verified(&path, false, Some("not-a-sha256"))
+        .unwrap_err()
+        .to_string();
+    assert!(invalid_pin.contains("library digest pin is invalid"));
+
+    let wrong_pin = "a".repeat(64);
+    let mismatched_pin = load_verified(&path, false, Some(&wrong_pin))
+        .unwrap_err()
+        .to_string();
+    assert!(mismatched_pin.contains("module library hash does not match its pin"));
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_loader_refuses_missing_and_nul_containing_paths() {
