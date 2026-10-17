@@ -171,7 +171,7 @@ impl ReconfigurableModule {
     }
 
     async fn reconfigure(&self, config: serde_json::Value) -> Result<(), ModuleCallError> {
-        let mut outcome = ReconfigureFailure::Failed;
+        let mut outcome = Err(ReconfigureFailure::Failed);
         for attempt in 0..self.retry_attempts {
             outcome = match self.strategy {
                 Reconfigure::Lifecycle => {
@@ -263,7 +263,7 @@ pub struct ReconfigureGuard<'a> {
 impl ReconfigureGuard<'_> {
     /// Reconcile the configuration while retaining exclusive access until this
     /// guard is dropped.
-    pub async fn proxy(&self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
+    pub async fn proxy(&mut self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
         self.module.proxy_locked(config).await
     }
 }

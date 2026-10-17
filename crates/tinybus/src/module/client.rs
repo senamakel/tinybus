@@ -460,7 +460,7 @@ pub fn classify(error: &Error) -> (ModuleCallError, Reason) {
             Reason::IncompatibleContract,
         ),
         Error::MethodFailed { name, .. }
-            if name == "ai.tinyhumans.tinybus.Error.ModuleUnavailable" =>
+            if matches!(name.as_str(), Error::MODULE_UNAVAILABLE | Error::MODULE_INITIALIZING) =>
         {
             (ModuleCallError::Unavailable, Reason::ModuleUnavailable)
         }

@@ -288,6 +288,16 @@ impl ModuleAccess for Resolver {
                 Err(crate::Error::ModuleUnavailable { .. }) => {
                     Err(super::client::ReconfigureFailure::Unavailable)
                 }
+                Err(crate::Error::MethodFailed { ref name, .. })
+                    if name == crate::Error::MODULE_INITIALIZING =>
+                {
+                    Err(super::client::ReconfigureFailure::Initializing)
+                }
+                Err(crate::Error::MethodFailed { ref name, .. })
+                    if name == crate::Error::MODULE_UNAVAILABLE =>
+                {
+                    Err(super::client::ReconfigureFailure::Unavailable)
+                }
                 Err(_) => Err(super::client::ReconfigureFailure::Failed),
             }
         })
