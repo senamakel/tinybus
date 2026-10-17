@@ -704,8 +704,8 @@ mod resolver {
             .and_then(|name| name.to_str())
             .unwrap()
             .to_string();
-        let cache_dir = crate::module::artifact_dir(install.path(), module_id, version, host_key)
-            .unwrap();
+        let cache_dir =
+            crate::module::artifact_dir(install.path(), module_id, version, host_key).unwrap();
         let extraction = cache_dir.join("assets");
         std::fs::create_dir_all(&extraction).unwrap();
         let library_path = extraction.join(&library_name);
@@ -786,7 +786,10 @@ mod resolver {
                 self.resolver.reporter()
             }
 
-            fn ensure_loaded<'a>(&'a self, id: &'a str) -> crate::module::AccessFuture<'a, Result<(), String>> {
+            fn ensure_loaded<'a>(
+                &'a self,
+                id: &'a str,
+            ) -> crate::module::AccessFuture<'a, Result<(), String>> {
                 Box::pin(self.resolver.ensure_loaded(id))
             }
 

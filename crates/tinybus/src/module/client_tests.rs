@@ -111,6 +111,7 @@ fn resolver(enabled: bool) -> (Arc<Recording>, Loaderless) {
 #[tokio::test]
 async fn lifecycle_defaults_keep_loaderless_access_source_compatible() {
     let (_, access) = resolver(true);
+    assert!(access.prepare_attested(RECORD.id).await.is_err());
     assert_eq!(
         access
             .reinitialize(RECORD.id, serde_json::Value::Null)
@@ -274,7 +275,10 @@ async fn a_fixture_proxy_is_classified_and_reported_when_the_call_fails() {
     assert!(client.fixture_proxy().is_some());
     let result: Result<String, _> = client.call(RECORD.id, "Member", ()).await;
     assert!(result.is_err());
-    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::ModuleFault)]
+    );
 }
 
 struct DetailedFailure;
@@ -399,7 +403,8 @@ impl ModuleAccess for PreparedAccess {
     }
 
     fn prepare_attested<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
-        self.preparations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.preparations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async { Ok(()) })
     }
 
@@ -477,7 +482,11 @@ async fn an_unprepared_custom_access_refuses_before_serializing_confidential_arg
     let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let result: Result<String, _> = client
-        .call_attested(record.id, "Consume", SerializeCounter(serializations.clone()))
+        .call_attested(
+            record.id,
+            "Consume",
+            SerializeCounter(serializations.clone()),
+        )
         .await;
     assert_eq!(result, Err(ModuleCallError::Unavailable));
     assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);

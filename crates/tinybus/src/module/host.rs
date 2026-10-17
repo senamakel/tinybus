@@ -916,16 +916,14 @@ impl ModuleHost {
                 if let Some(manifest) = read_lazy_manifest(&path)? {
                     Ok(PendingModule::Lazy(Box::new(manifest)))
                 } else {
-                    let library_pin = allowlisted_hash(
-                        &path,
-                        std::fs::File::open(&path).map_err(Error::from)?,
-                    )?;
+                    let library_pin =
+                        allowlisted_hash(&path, std::fs::File::open(&path).map_err(Error::from)?)?;
                     loader::load_verified(
                         &path,
                         self.inner.strict.load(Ordering::Acquire),
                         library_pin.as_deref(),
                     )
-                        .map(|artifact| PendingModule::Loaded(Box::new(artifact)))
+                    .map(|artifact| PendingModule::Loaded(Box::new(artifact)))
                 }
             });
             match inspected {
@@ -1075,10 +1073,8 @@ impl ModuleHost {
                     let info = provisional_info(&path, &manifest)?;
                     Ok((PendingModule::Lazy(Box::new(manifest)), info))
                 } else {
-                    let library_pin = allowlisted_hash(
-                        &path,
-                        std::fs::File::open(&path).map_err(Error::from)?,
-                    )?;
+                    let library_pin =
+                        allowlisted_hash(&path, std::fs::File::open(&path).map_err(Error::from)?)?;
                     let artifact = loader::load_verified(
                         &path,
                         self.inner.strict.load(Ordering::Acquire),
@@ -1237,8 +1233,9 @@ impl ModuleHost {
             // replaced after discovery cannot inherit the old hash attestation.
             check_file(&artifact_path)
                 .map_err(|_| "module library no longer passes admission".to_string())?;
-            let artifact = loader::load_verified(&artifact_path, strict, expected_library.as_deref())
-                .map_err(|_| "module library could not be loaded".to_string())?;
+            let artifact =
+                loader::load_verified(&artifact_path, strict, expected_library.as_deref())
+                    .map_err(|_| "module library could not be loaded".to_string())?;
             let rustc = sanitized_field(&artifact.descriptor.rustc_version);
             if artifact.manifest != expected
                 || loaded_identity(&artifact.descriptor, &artifact.manifest).is_none()

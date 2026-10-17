@@ -341,7 +341,9 @@ fn manifest_library_digest(
     if let Some(expected) = expected {
         validate_hash(expected)?;
         if !digest.eq_ignore_ascii_case(expected) {
-            return Err(refused("host library checksum disagrees with release checksum"));
+            return Err(refused(
+                "host library checksum disagrees with release checksum",
+            ));
         }
     }
     Ok(Some(digest.to_ascii_lowercase()))
@@ -435,8 +437,7 @@ fn parse_release_url(url: &str) -> Result<(&str, &str, &str)> {
 fn parse_checksums(name: &str, bytes: &[u8]) -> Result<Checksums> {
     if name.ends_with(".toml") {
         let source = std::str::from_utf8(bytes).map_err(|_| refused("checksum.toml is invalid"))?;
-        return toml::from_str(source)
-            .map_err(|_| refused("checksum.toml is invalid"));
+        return toml::from_str(source).map_err(|_| refused("checksum.toml is invalid"));
     }
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| refused("checksum.json is invalid"))?;

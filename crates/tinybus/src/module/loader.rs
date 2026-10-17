@@ -43,9 +43,9 @@ fn record_mapped_image(
         if mapped.file_sha256 != file_sha256 {
             return Err("mapped library bytes differ from the original image");
         }
-        if expected_library_sha256.is_some_and(|expected| {
-            mapped.trusted_library_sha256.as_deref() != Some(expected)
-        }) {
+        if expected_library_sha256
+            .is_some_and(|expected| mapped.trusted_library_sha256.as_deref() != Some(expected))
+        {
             return Err("mapped image has no matching library digest proof");
         }
         return Ok(expected_library_sha256.map(str::to_string));
@@ -92,10 +92,7 @@ pub(crate) fn load_verified(
     .map_err(|_| Error::module_refused(path, "module library could not be hashed"))?;
     if let Some(expected) = expected_library_sha256 {
         if !crate::attest::is_hex_sha256(expected) {
-            return Err(Error::module_refused(
-                path,
-                "library digest pin is invalid",
-            ));
+            return Err(Error::module_refused(path, "library digest pin is invalid"));
         }
         if !actual_sha256.eq_ignore_ascii_case(expected) {
             return Err(Error::module_refused(

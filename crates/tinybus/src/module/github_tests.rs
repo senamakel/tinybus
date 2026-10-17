@@ -16,7 +16,9 @@ fn checksum_manifests_accept_the_documented_toml_and_json_shapes() {
     let expected = "a".repeat(64);
     let toml = format!("[sha256]\n\"module.tar.gz\" = \"{expected}\"\n");
     assert_eq!(
-        parse_checksums("checksum.toml", toml.as_bytes()).unwrap().sha256["module.tar.gz"],
+        parse_checksums("checksum.toml", toml.as_bytes())
+            .unwrap()
+            .sha256["module.tar.gz"],
         expected
     );
     let json = format!(
@@ -24,7 +26,9 @@ fn checksum_manifests_accept_the_documented_toml_and_json_shapes() {
         "b".repeat(64)
     );
     assert_eq!(
-        parse_checksums("checksum.json", json.as_bytes()).unwrap().sha256["module.tar.gz"],
+        parse_checksums("checksum.json", json.as_bytes())
+            .unwrap()
+            .sha256["module.tar.gz"],
         "b".repeat(64)
     );
 }

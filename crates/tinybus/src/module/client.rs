@@ -307,37 +307,26 @@ impl ModuleClient {
             .iter()
             .find_map(|host| record.asset_for(host))
             .filter(|asset| {
-                valid_sha256(asset.sha256)
-                    && asset.library_sha256.is_some_and(valid_sha256)
+                valid_sha256(asset.sha256) && asset.library_sha256.is_some_and(valid_sha256)
             });
         let Some(asset) = asset else {
             report(&*self.access, record, Reason::ModuleUnavailable);
             return Err(ModuleCallError::Unavailable);
         };
-        if self.fixture.is_some()
-            || self.access.prepare_attested(record.id).await.is_err()
-        {
+        if self.fixture.is_some() || self.access.prepare_attested(record.id).await.is_err() {
             report(&*self.access, record, Reason::ModuleUnavailable);
             return Err(ModuleCallError::Unavailable);
         }
 
         let name_proxy = self.load_proxy(record, record.object_path).await?;
-        let owner = match name_proxy
-            .connection()
-            .name_owner(record.bus_name)
-            .await
-        {
+        let owner = match name_proxy.connection().name_owner(record.bus_name).await {
             Ok(Some(owner)) if owner.is_unique() => owner,
             Ok(_) => {
                 report(&*self.access, record, Reason::ModuleUnavailable);
                 return Err(ModuleCallError::Unavailable);
             }
             Err(error) => {
-                return Err(report_proxy_failure(
-                    self.access.reporter(),
-                    record,
-                    &error,
-                ));
+                return Err(report_proxy_failure(self.access.reporter(), record, &error));
             }
         };
         let unique_proxy = name_proxy
@@ -354,11 +343,7 @@ impl ModuleClient {
                 return Err(ModuleCallError::Unavailable);
             }
             Err(error) => {
-                return Err(report_proxy_failure(
-                    self.access.reporter(),
-                    record,
-                    &error,
-                ));
+                return Err(report_proxy_failure(self.access.reporter(), record, &error));
             }
         };
         let expected_name = crate::name::BusName::new(record.bus_name)
@@ -539,9 +524,7 @@ impl ModuleClient {
         args: impl Serialize,
         confidential: bool,
     ) -> Result<R, ModuleCallFailure> {
-        let record = self
-            .record(module)
-            .map_err(ModuleCallFailure::local)?;
+        let record = self.record(module).map_err(ModuleCallFailure::local)?;
         let proxy = if let Some(fixture) = &self.fixture {
             fixture.clone()
         } else {
