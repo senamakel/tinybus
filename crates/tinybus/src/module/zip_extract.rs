@@ -5,7 +5,7 @@
 //! DEFLATE entries, and writes regular files into the host-owned staging
 //! directory without applying archive permissions or creating links.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -26,6 +26,7 @@ const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 4096;
 const MAX_PATH_DEPTH: usize = 128;
 const MAX_PATH_METADATA_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PATH_COMPONENTS: usize = 1_000_000;
 
 #[derive(Clone, Copy)]
 struct ExtractionLimits {
@@ -34,6 +35,7 @@ struct ExtractionLimits {
     entries: u64,
     path_metadata_bytes: usize,
     path_depth: usize,
+    path_components: usize,
 }
 
 const DEFAULT_LIMITS: ExtractionLimits = ExtractionLimits {
@@ -42,7 +44,48 @@ const DEFAULT_LIMITS: ExtractionLimits = ExtractionLimits {
     entries: MAX_ENTRY_COUNT,
     path_metadata_bytes: MAX_PATH_METADATA_BYTES,
     path_depth: MAX_PATH_DEPTH,
+    path_components: MAX_PATH_COMPONENTS,
 };
+
+#[derive(Default)]
+struct PathNode {
+    children: HashMap<String, PathChild>,
+    explicit_entry: Option<bool>,
+}
+
+struct PathChild {
+    spelling: String,
+    node: PathNode,
+}
+
+impl PathNode {
+    fn insert(&mut self, path: &Path, is_dir: bool) -> bool {
+        let mut node = self;
+        for component in path.components() {
+            if node.explicit_entry == Some(false) {
+                return false;
+            }
+            let Component::Normal(name) = component else {
+                return false;
+            };
+            let spelling = name.to_string_lossy();
+            let folded = spelling.to_lowercase();
+            let child = node.children.entry(folded).or_insert_with(|| PathChild {
+                spelling: spelling.to_string(),
+                node: PathNode::default(),
+            });
+            if child.spelling != spelling.as_ref() {
+                return false;
+            }
+            node = &mut child.node;
+        }
+        if node.explicit_entry.is_some() || (!is_dir && !node.children.is_empty()) {
+            return false;
+        }
+        node.explicit_entry = Some(is_dir);
+        true
+    }
+}
 
 #[derive(Clone)]
 struct EntryPlan {
@@ -81,9 +124,10 @@ fn extract_with_limits(
     }
 
     let mut plans = Vec::with_capacity(expected_count as usize);
-    let mut seen_paths = HashSet::new();
     let mut hinted_expanded_total = 0u64;
     let mut path_metadata_bytes = 0usize;
+    let mut path_component_count = 0usize;
+    let mut path_trie = PathNode::default();
     let mut local_header_buffer = vec![0; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
     let mut entries = archive.entries(&mut buffer);
     while let Some(entry) = entries
@@ -103,9 +147,17 @@ fn extract_with_limits(
         if path_metadata_bytes > limits.path_metadata_bytes {
             return Err(refused("release archive path metadata exceeds its limit"));
         }
-        let (path, portable_key, is_dir) = checked_path(original, limits.path_depth)?;
-        if !seen_paths.insert(portable_key.clone()) {
-            return Err(refused("release archive contains duplicate paths"));
+        let (path, is_dir, components) = checked_path(original, limits.path_depth)?;
+        path_component_count = path_component_count
+            .checked_add(components)
+            .ok_or_else(|| refused("release archive path metadata exceeds its limit"))?;
+        if path_component_count > limits.path_components {
+            return Err(refused("release archive path metadata exceeds its limit"));
+        }
+        if !path_trie.insert(&path, is_dir) {
+            return Err(refused(
+                "release archive contains duplicate or case-colliding paths",
+            ));
         }
 
         let method = entry.compression_method();
@@ -390,7 +442,7 @@ fn validate_flags(flags: rawzip::EntryFlags, method: CompressionMethod) -> Resul
     Ok(())
 }
 
-fn checked_path(original: &str, max_depth: usize) -> Result<(PathBuf, String, bool)> {
+fn checked_path(original: &str, max_depth: usize) -> Result<(PathBuf, bool, usize)> {
     if original.is_empty()
         || original.len() > MAX_NAME_BYTES
         || original.as_bytes().contains(&0)
@@ -443,8 +495,7 @@ fn checked_path(original: &str, max_depth: usize) -> Result<(PathBuf, String, bo
     {
         return Err(refused("release archive contains an unsafe path"));
     }
-    let portable_key = parts.join("/").to_lowercase();
-    Ok((path, portable_key, is_dir))
+    Ok((path, is_dir, parts.len()))
 }
 
 fn is_windows_device_name(component: &str) -> bool {

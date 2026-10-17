@@ -86,6 +86,8 @@ with warnings.catch_warnings():
     write("duplicate.zip", stored([("module.so", b"first", None), ("module.so", b"second", None)]))
 write("archive_collision.zip", stored([("fixture.zip", b"must not replace the archive", None)]))
 write("case_collision.zip", stored([("foo/module.so", b"first", None), ("FOO/MODULE.SO", b"second", None)]))
+write("parent_case_collision.zip", stored([("A/one", b"first", None), ("a/two", b"second", None)]))
+write("file_directory_collision.zip", stored([("a", b"file", None), ("a/b", b"child", None)]))
 
 zip64_local = io.BytesIO()
 with zipfile.ZipFile(zip64_local, "w") as writer:

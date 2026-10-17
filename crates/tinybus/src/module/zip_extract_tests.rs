@@ -18,6 +18,8 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
         "duplicate.zip" => include_bytes!("fixtures/duplicate.zip"),
         "archive_collision.zip" => include_bytes!("fixtures/archive_collision.zip"),
         "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
+        "parent_case_collision.zip" => include_bytes!("fixtures/parent_case_collision.zip"),
+        "file_directory_collision.zip" => include_bytes!("fixtures/file_directory_collision.zip"),
         "compat_zip64_local.zip" => include_bytes!("fixtures/compat_zip64_local.zip"),
         "encrypted.zip" => include_bytes!("fixtures/encrypted.zip"),
         "unsupported_method.zip" => include_bytes!("fixtures/unsupported_method.zip"),
@@ -182,6 +184,14 @@ fn case_colliding_paths_are_refused_portably() {
 }
 
 #[test]
+fn implicit_directory_case_collisions_and_file_directory_conflicts_are_refused() {
+    for fixture in ["parent_case_collision.zip", "file_directory_collision.zip"] {
+        let (_root, _destination, result) = extract_fixture(fixture);
+        assert!(result.is_err(), "accepted fixture {fixture}");
+    }
+}
+
+#[test]
 fn link_and_special_mode_metadata_never_create_links_or_privileges() {
     let (_root, destination, result) = extract_fixture("unix_link_mode.zip");
     result.unwrap();
@@ -257,6 +267,26 @@ fn path_metadata_budget_is_checked_before_output_creation() {
         &destination,
         ExtractionLimits {
             path_metadata_bytes: 4,
+            ..DEFAULT_LIMITS
+        },
+    );
+    assert!(result.is_err());
+    assert!(fs::read_dir(destination).unwrap().next().is_none());
+}
+
+#[test]
+fn path_component_budget_is_checked_before_trie_insertion() {
+    let root = tempfile::tempdir().unwrap();
+    let archive = root.path().join("fixture.zip");
+    let destination = root.path().join("staging");
+    fs::create_dir(&destination).unwrap();
+    fs::write(&archive, include_bytes!("fixtures/compat_store.zip")).unwrap();
+
+    let result = extract_with_limits(
+        &archive,
+        &destination,
+        ExtractionLimits {
+            path_components: 1,
             ..DEFAULT_LIMITS
         },
     );
