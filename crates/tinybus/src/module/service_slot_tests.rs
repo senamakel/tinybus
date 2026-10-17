@@ -3,6 +3,7 @@ use crate::module::service_slot::ModuleServiceSlot;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use tokio::sync::oneshot;
 
 type ShutdownHook = Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -28,7 +29,7 @@ async fn the_same_key_reuses_the_service_and_allows_mutating_operations() {
             },
             move |service| async move {
                 first_closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                drop(service);
+                let _ = service;
                 Ok(())
             },
             |service| {
@@ -53,7 +54,7 @@ async fn the_same_key_reuses_the_service_and_allows_mutating_operations() {
             },
             move |service| async move {
                 second_closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                drop(service);
+                let _ = service;
                 Ok(())
             },
             |service| {
@@ -126,6 +127,10 @@ async fn explicit_close_returns_its_error_and_clears_the_slot() {
     .expect("service should install");
 
     assert!(slot.close().await.is_err());
+    assert!(
+        slot.close().await.is_ok(),
+        "an empty slot closes idempotently"
+    );
 
     let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observed = opened.clone();
@@ -199,16 +204,12 @@ async fn close_waits_for_the_current_operation_to_finish() {
         .await
         .expect("operation should enter before close");
 
-    let (close_started_tx, close_started_rx) = oneshot::channel();
     let closing_slot = slot.clone();
-    let close = tokio::spawn(async move {
-        let _ = close_started_tx.send(());
-        closing_slot.close().await
-    });
-    close_started_rx.await.expect("close task should start");
-    tokio::task::yield_now().await;
+    let mut close = Box::pin(closing_slot.close());
+    let first_poll =
+        std::future::poll_fn(|context| Poll::Ready(close.as_mut().poll(context))).await;
     assert!(
-        !close.is_finished(),
+        first_poll.is_pending(),
         "close must wait for the locked operation"
     );
 
@@ -217,10 +218,7 @@ async fn close_waits_for_the_current_operation_to_finish() {
         .await
         .expect("operation task should finish")
         .expect("operation should succeed");
-    close
-        .await
-        .expect("close task should finish")
-        .expect("close should succeed");
+    close.await.expect("close should succeed");
 }
 
 #[tokio::test]
