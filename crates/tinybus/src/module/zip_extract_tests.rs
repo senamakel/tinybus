@@ -88,8 +88,7 @@ fn extracts_a_small_archive_with_zip64_local_size_fields() {
 
 #[test]
 fn accepts_streaming_zip64_local_headers_with_ordinary_central_sizes() {
-    let (_root, destination, result) =
-        extract_fixture("compat_deflate_descriptor_zip64_local.zip");
+    let (_root, destination, result) = extract_fixture("compat_deflate_descriptor_zip64_local.zip");
     result.unwrap();
     assert_eq!(
         fs::read(destination.join("module.so")).unwrap(),
@@ -148,7 +147,10 @@ fn path_policy_rejects_unportable_or_ambiguous_names_before_normalization() {
         "./file",
         "",
     ] {
-        assert!(checked_path(name, MAX_PATH_DEPTH).is_err(), "accepted {name:?}");
+        assert!(
+            checked_path(name, MAX_PATH_DEPTH).is_err(),
+            "accepted {name:?}"
+        );
     }
     let (root, _destination, result) = extract_fixture("unsafe_parent.zip");
     assert!(result.is_err());

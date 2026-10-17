@@ -335,9 +335,7 @@ fn validate_data_descriptor(
                 u64::from(read_u32(&bytes[prefix + 8..prefix + 12])),
             )
         };
-        if crc == expected_crc
-            && compressed == expected_compressed
-            && expanded == expected_expanded
+        if crc == expected_crc && compressed == expected_compressed && expanded == expected_expanded
         {
             return Ok(true);
         }
