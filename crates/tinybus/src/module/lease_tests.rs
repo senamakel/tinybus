@@ -483,7 +483,7 @@ async fn destroying_the_callers_runtime_does_not_cancel_the_dedicated_stop_worke
         harness.callback().await.is_ok(),
         "caller runtime drop is not STOP ACK"
     );
-    stop_reply.send(Ok(())).unwrap();
+    stop_reply.send(StopOutcome::Acknowledged).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             if harness.callback().await.is_err() {
