@@ -134,6 +134,17 @@ impl ReconfigurableModule {
     }
 
     async fn proxy_locked(&self, config: &impl Serialize) -> Result<Proxy, ModuleCallError> {
+        let Some(record) = self.access.find(self.module_id) else {
+            return Err(ModuleCallError::Unavailable);
+        };
+        if !self.access.enabled() {
+            return Err(ModuleCallError::Unavailable);
+        }
+        self.access
+            .ensure_loaded(record.id)
+            .await
+            .map_err(|_| ModuleCallError::Unavailable)?;
+
         let fingerprint = ConfigFingerprint::of(config).map_err(|_| ModuleCallError::ModuleFault)?;
         let current = self
             .loaded
@@ -149,16 +160,6 @@ impl ReconfigurableModule {
             *self.loaded_state() = Some(fingerprint);
         }
 
-        let Some(record) = self.access.find(self.module_id) else {
-            return Err(ModuleCallError::Unavailable);
-        };
-        if !self.access.enabled() {
-            return Err(ModuleCallError::Unavailable);
-        }
-        self.access
-            .ensure_loaded(record.id)
-            .await
-            .map_err(|_| ModuleCallError::Unavailable)?;
         self.access
             .proxy(record.bus_name, record.object_path)
             .await

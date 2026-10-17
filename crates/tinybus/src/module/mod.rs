@@ -19,6 +19,8 @@ pub mod platform;
 mod release;
 #[cfg(feature = "modules")]
 pub mod resolution;
+#[cfg(feature = "modules")]
+pub mod reconfigure;
 
 #[cfg(feature = "modules")]
 pub(crate) mod host;
@@ -39,8 +41,10 @@ mod windows_acl;
 pub use cache::{artifact_dir, is_safe_path_component, prune_stale_versions};
 pub use client::{
     AccessFuture, ModuleAccess, ModuleCallError, ModuleClient, ModuleObjectClient, ProxyFailure,
-    classify,
+    ReconfigureFailure, classify,
 };
+#[cfg(feature = "modules")]
+pub use reconfigure::{ConfigFingerprint, Reconfigure, ReconfigureGuard, ReconfigurableModule};
 pub use failure::{FailureReport, FailureReporter, FailureSink, Reason};
 #[cfg(feature = "modules")]
 pub use first_admitted::{ReleasePlan, load_first_admitted};
