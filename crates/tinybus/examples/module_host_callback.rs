@@ -7,16 +7,24 @@ struct Config {
     host: tinybus::BusName,
     #[serde(default)]
     fail: bool,
+    #[serde(default = "confidential_by_default")]
+    confidential: bool,
+}
+
+fn confidential_by_default() -> bool {
+    true
 }
 async fn setup(connection: Connection, config: Config) -> Result<()> {
     async {
         if config.fail {
             return Err(Error::failed("fixture initialization rejected"));
         }
-        let _: tinybus::BusName = connection
-            .proxy(config.host.as_str(), "/callback", "org.example.Callback")?
-            .call_confidential("Observe", ())
-            .await?;
+        let proxy = connection.proxy(config.host.as_str(), "/callback", "org.example.Callback")?;
+        let _: tinybus::BusName = if config.confidential {
+            proxy.call_confidential("Observe", ()).await?
+        } else {
+            proxy.call("Observe", ()).await?
+        };
         connection.request_name("org.example.EagerCallback").await
     }
     .await

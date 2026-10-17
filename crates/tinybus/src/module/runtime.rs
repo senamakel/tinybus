@@ -31,16 +31,41 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::broker::Broker;
+use crate::connection::ObjectRegistration;
 use crate::module::ModuleHost;
 use crate::transport::memory::MemoryBus;
-use crate::{Connection, Proxy};
+use crate::{Connection, Interface, Proxy};
+
+/// A per-attachment setup callback for a statically linked module.
+///
+/// Unlike the module's export-time setup function, this value belongs to one
+/// admission only and can capture host state without process-global slots.
+pub type LinkedSetup =
+    Box<dyn FnOnce(Connection) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send>> + Send>;
+
+/// Rust-only entrypoint emitted by `tinybus_module::module_export_static!`.
+///
+/// Dynamic modules continue to use the stable C ABI [`crate::module::abi::TbModuleInit`].
+/// This entrypoint is only for linked exports and replaces that export's
+/// default setup callback for one initialization.
+#[doc(hidden)]
+pub type LinkedModuleInitWithSetup = unsafe fn(
+    *const crate::module::abi::TbHostVtable,
+    *mut crate::module::abi::TbModuleVtable,
+    LinkedSetup,
+) -> i32;
 
 /// Work run once on the new runtime, before the first module can load.
 ///
 /// A host uses it to install the callback services its modules call back into,
 /// so they are being served before any module resolves.
-pub type RuntimeSetup =
-    Box<dyn FnOnce(Connection) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send>> + Send>;
+pub type RuntimeSetup = Box<
+    dyn for<'a> FnOnce(
+            Connection,
+            &'a ModuleHost,
+        ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>>
+        + Send,
+>;
 
 /// Thread names for a [`ModuleRuntime`], so a host's threads are recognisable.
 #[derive(Debug, Clone)]
@@ -68,6 +93,71 @@ pub struct ModuleRuntime {
     connection: Connection,
     /// Handle for work that must outlive the caller's runtime.
     handle: tokio::runtime::Handle,
+    host_objects: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+}
+
+struct HostObjectRegistry {
+    broker: Broker,
+    connection: Connection,
+    names: std::collections::HashMap<crate::BusName, HostNameLease>,
+    #[cfg(test)]
+    before_name_request: Option<HostObjectRegistrationBarrier>,
+    #[cfg(test)]
+    after_name_claim: Option<HostObjectRegistrationBarrier>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct HostObjectRegistrationBarrier {
+    entered: std::sync::Arc<tokio::sync::Semaphore>,
+    release: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+struct HostNameLease {
+    registrations: usize,
+    release_when_empty: bool,
+}
+
+/// Owns one host object export and its share of a bus-name claim.
+///
+/// Dropping the guard schedules cleanup on its [`ModuleRuntime`]'s dedicated
+/// runtime, so it is safe to drop from synchronous code or another runtime.
+pub struct HostObjectGuard {
+    registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+    handle: tokio::runtime::Handle,
+    name: crate::BusName,
+    registration: Option<ObjectRegistration>,
+}
+
+impl Drop for HostObjectGuard {
+    fn drop(&mut self) {
+        let Some(registration) = self.registration.take() else {
+            return;
+        };
+        let registry = self.registry.clone();
+        let name = self.name.clone();
+        self.handle.spawn(async move {
+            let mut state = registry.lock().await;
+            let _ = state.connection.unserve_if_owned(&registration).await;
+            let release = if let Some(lease) = state.names.get_mut(&name) {
+                lease.registrations = lease.registrations.saturating_sub(1);
+                if lease.registrations == 0 {
+                    let release = lease.release_when_empty;
+                    state.names.remove(&name);
+                    release
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if release {
+                if let Some(unique) = state.connection.unique_name() {
+                    let _ = state.broker.release_host_name(&unique, &name);
+                }
+            }
+        });
+    }
 }
 
 impl ModuleRuntime {
@@ -162,6 +252,120 @@ impl ModuleRuntime {
     pub fn proxy(&self, bus_name: &str, object_path: &str) -> crate::Result<Proxy> {
         self.connection.proxy(bus_name, object_path, bus_name)
     }
+
+    /// Serve one ordinary host interface on the module runtime's bus.
+    ///
+    /// Same-name registrations share one name claim. Each guard owns only its
+    /// exact interface registration, so dropping an older guard cannot remove
+    /// a later replacement made through this helper or [`Connection::serve_at`].
+    /// A name already owned by this connection is preserved after the final
+    /// guard is dropped; a name claimed by another peer is refused.
+    ///
+    /// This is an ordinary host object registration. It does not attest this
+    /// peer or grant the interface confidential-call authority.
+    pub async fn serve_host_object(
+        &self,
+        name: crate::BusName,
+        path: crate::ObjectPath,
+        interface: impl Interface,
+    ) -> crate::Result<HostObjectGuard> {
+        let registry = self.host_objects.clone();
+        let handle = self.handle.clone();
+        let (response, result) = tokio::sync::oneshot::channel();
+        self.handle.spawn(async move {
+            let guard =
+                serve_host_object_transaction(registry, handle, name, path, interface).await;
+            // If the caller canceled, dropping this failed send drops the guard;
+            // its cleanup is still owned by the dedicated runtime.
+            let _ = response.send(guard);
+        });
+        result.await.map_err(|_| crate::Error::ConnectionClosed)?
+    }
+}
+
+async fn serve_host_object_transaction(
+    registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+    handle: tokio::runtime::Handle,
+    name: crate::BusName,
+    path: crate::ObjectPath,
+    interface: impl Interface,
+) -> crate::Result<HostObjectGuard> {
+    let mut state = registry.lock().await;
+    let own_unique = state.connection.unique_name();
+    let unique = own_unique.as_ref().ok_or(crate::Error::ConnectionClosed)?;
+    // Preserve the public connection's fail-closed behavior for an already
+    // closed runtime connection. The following atomic local claim, rather
+    // than this observation, determines whether this helper acquired the name.
+    state.connection.name_owner(name.as_str()).await?;
+    #[cfg(test)]
+    if let Some(barrier) = state.before_name_request.clone() {
+        barrier.entered.add_permits(1);
+        let _permit = barrier
+            .release
+            .acquire()
+            .await
+            .expect("name-request barrier");
+    }
+    let newly_claimed = state
+        .broker
+        .claim_host_name(unique, name.clone())
+        .map_err(|_| crate::Error::failed("host object bus name is already owned"))?;
+    let release_when_empty = newly_claimed
+        || state
+            .names
+            .get(&name)
+            .is_some_and(|lease| lease.release_when_empty);
+    #[cfg(test)]
+    if let Some(barrier) = state.after_name_claim.clone() {
+        barrier.entered.add_permits(1);
+        let _permit = barrier
+            .release
+            .acquire()
+            .await
+            .expect("registration barrier");
+    }
+    // Run the user-provided interface registration in an owned child task so
+    // a panic in `Interface::name` becomes a registration error here. The
+    // transaction still owns the name claim and can roll it back below.
+    let registration_connection = state.connection.clone();
+    let registration_task = handle.spawn(async move {
+        registration_connection
+            .serve_at_owned(path, interface)
+            .await
+    });
+    let registration = match registration_task.await {
+        Ok(registration) => registration,
+        Err(_) => Err(crate::Error::failed(
+            "host object interface registration task failed",
+        )),
+    };
+    let registration = match registration {
+        Ok(registration) => registration,
+        Err(error) => {
+            if release_when_empty {
+                if let Some(lease) = state.names.get_mut(&name) {
+                    lease.release_when_empty = true;
+                } else {
+                    if let Some(unique) = state.connection.unique_name() {
+                        let _ = state.broker.release_host_name(&unique, &name);
+                    }
+                }
+            }
+            return Err(error);
+        }
+    };
+    let lease = state.names.entry(name.clone()).or_insert(HostNameLease {
+        registrations: 0,
+        release_when_empty,
+    });
+    lease.release_when_empty |= release_when_empty;
+    lease.registrations += 1;
+    Ok(HostObjectGuard {
+        registry: registry.clone(),
+        handle,
+        name,
+        registration: Some(registration),
+    })
 }
 
 async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
@@ -172,15 +376,25 @@ async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
     // transport disappears faults and cannot be reloaded without a restart.
     broker.spawn(transport.clone());
 
-    let host = ModuleHost::new(broker);
+    let host = ModuleHost::new(broker.clone());
     let connection = Connection::connect(transport.connect().await?).await?;
+    let host_objects = std::sync::Arc::new(tokio::sync::Mutex::new(HostObjectRegistry {
+        broker,
+        connection: connection.clone(),
+        names: std::collections::HashMap::new(),
+        #[cfg(test)]
+        before_name_request: None,
+        #[cfg(test)]
+        after_name_claim: None,
+    }));
     if let Some(setup) = setup {
-        setup(connection.clone()).await?;
+        setup(connection.clone(), &host).await?;
     }
     Ok(ModuleRuntime {
         host,
         connection,
         handle: tokio::runtime::Handle::current(),
+        host_objects,
     })
 }
 
