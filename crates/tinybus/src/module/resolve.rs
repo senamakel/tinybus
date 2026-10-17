@@ -246,9 +246,6 @@ pub(super) fn reconfigure_failure(error: &crate::Error) -> super::client::Reconf
             super::client::ReconfigureFailure::Initializing
         }
         crate::Error::ModuleUnavailable { .. } => super::client::ReconfigureFailure::Unavailable,
-        crate::Error::MethodFailed { name, .. } if name == crate::Error::MODULE_INITIALIZING => {
-            super::client::ReconfigureFailure::Initializing
-        }
         crate::Error::MethodFailed { name, .. } if name == crate::Error::MODULE_UNAVAILABLE => {
             super::client::ReconfigureFailure::Unavailable
         }

@@ -459,12 +459,7 @@ pub fn classify(error: &Error) -> (ModuleCallError, Reason) {
             ModuleCallError::IncompatibleContract,
             Reason::IncompatibleContract,
         ),
-        Error::MethodFailed { name, .. }
-            if matches!(
-                name.as_str(),
-                Error::MODULE_UNAVAILABLE | Error::MODULE_INITIALIZING
-            ) =>
-        {
+        Error::MethodFailed { name, .. } if name == Error::MODULE_UNAVAILABLE => {
             (ModuleCallError::Unavailable, Reason::ModuleUnavailable)
         }
         Error::MethodFailed { name, .. }
