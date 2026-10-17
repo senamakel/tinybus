@@ -9,6 +9,7 @@
 //! bus you debug by adding logging to two processes and restarting both; with
 //! it, "did the kernel actually call the wallet" is one command.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -474,6 +475,7 @@ fn read_private_config(path: Option<&Path>) -> Result<serde_json::Value> {
 
 fn write_checksum_manifest(paths: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let mut manifest = String::from("[sha256]\n");
+    let mut libraries = Vec::new();
     for path in paths {
         let name = path
             .file_name()
@@ -481,6 +483,15 @@ fn write_checksum_manifest(paths: &[PathBuf], output: Option<&Path>) -> Result<(
             .ok_or_else(|| Error::failed("checksum path has no safe filename"))?;
         let digest = tinybus::module::sha256_file(path)?;
         manifest.push_str(&format!("{name:?} = \"{digest}\"\n"));
+        if let Some(library_sha256) = library_sha256_in_archive(path)? {
+            libraries.push((name, library_sha256));
+        }
+    }
+    if !libraries.is_empty() {
+        manifest.push_str("\n[library_sha256]\n");
+        for (name, digest) in libraries {
+            manifest.push_str(&format!("{name:?} = \"{digest}\"\n"));
+        }
     }
     if let Some(output) = output {
         std::fs::write(output, manifest)?;
@@ -488,6 +499,65 @@ fn write_checksum_manifest(paths: &[PathBuf], output: Option<&Path>) -> Result<(
         print!("{manifest}");
     }
     Ok(())
+}
+
+fn library_sha256_in_archive(path: &Path) -> Result<Option<String>> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Err(Error::failed("checksum path has no safe filename"));
+    };
+    let file = std::fs::File::open(path)?;
+    let reader: Box<dyn Read> = if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        Box::new(flate2::read::GzDecoder::new(file))
+    } else if name.ends_with(".tar") {
+        Box::new(file)
+    } else {
+        return Ok(None);
+    };
+    let mut archive = tar::Archive::new(reader);
+    let mut digest = None;
+    for entry in archive
+        .entries()
+        .map_err(|_| Error::failed("checksum archive could not be read"))?
+    {
+        let mut entry = entry.map_err(|_| Error::failed("checksum archive entry is invalid"))?;
+        let path = entry
+            .path()
+            .map_err(|_| Error::failed("checksum archive entry path is invalid"))?;
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("so" | "dylib" | "dll")
+        ) {
+            continue;
+        }
+        if digest.is_some() {
+            return Err(Error::failed(
+                "checksum archive contains more than one module library",
+            ));
+        }
+        digest = Some(sha256_reader(&mut entry)?);
+    }
+    digest
+        .map(Some)
+        .ok_or_else(|| Error::failed("checksum archive contains no module library"))
+}
+
+fn sha256_reader(mut reader: impl Read) -> Result<String> {
+    use sha2::Digest as _;
+
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 async fn connect(address: &Path) -> Result<Connection> {
