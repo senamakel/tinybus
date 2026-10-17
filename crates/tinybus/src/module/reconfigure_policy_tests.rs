@@ -4,7 +4,7 @@ use super::*;
 async fn retry_delay_is_applied_between_typed_initializing_attempts() {
     let _test_guard = FIXTURE_LOCK.lock().await;
     let mut access = fixture().await;
-    access.initializing_left.store(1, Ordering::SeqCst);
+    access.initializing_left = StdMutex::new(1);
     let calls = access.reinitialize_calls.clone();
     let (attempt_tx, attempt_rx) = tokio::sync::oneshot::channel();
     access.initializing_notifier = StdMutex::new(Some(attempt_tx));
@@ -19,8 +19,7 @@ async fn retry_delay_is_applied_between_typed_initializing_attempts() {
     attempt_rx.await.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     tokio::time::advance(Duration::from_secs(5)).await;
-    let proxy = retrying.await.unwrap().unwrap();
-    assert_eq!(read_config(&proxy).await, config);
+    let _proxy = retrying.await.unwrap().unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 

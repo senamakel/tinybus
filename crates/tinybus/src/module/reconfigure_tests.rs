@@ -168,7 +168,7 @@ struct FixtureAccess {
     skip_ready_wait: bool,
     forced_reinitialize_failure: Option<ReconfigureFailure>,
     proxy_failure: Option<ProxyFailure>,
-    initializing_left: AtomicUsize,
+    initializing_left: StdMutex<usize>,
     reinitialize_calls: Arc<AtomicUsize>,
     fault_calls: Arc<AtomicUsize>,
     initializing_notifier: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -240,13 +240,19 @@ impl ModuleAccess for FixtureAccess {
             if let Some(failure) = self.forced_reinitialize_failure {
                 return Err(failure);
             }
-            if self
-                .initializing_left
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                    (left > 0).then(|| left - 1)
-                })
-                .is_ok()
-            {
+            let return_initializing = {
+                let mut left = self
+                    .initializing_left
+                    .lock()
+                    .expect("initializing attempt lock");
+                if *left > 0 {
+                    *left -= 1;
+                    true
+                } else {
+                    false
+                }
+            };
+            if return_initializing {
                 if let Some(notifier) = self
                     .initializing_notifier
                     .lock()
@@ -341,7 +347,7 @@ async fn fixture() -> FixtureAccess {
         skip_ready_wait: false,
         forced_reinitialize_failure: None,
         proxy_failure: None,
-        initializing_left: AtomicUsize::new(0),
+        initializing_left: StdMutex::new(0),
         reinitialize_calls: Arc::new(AtomicUsize::new(0)),
         fault_calls: Arc::new(AtomicUsize::new(0)),
         initializing_notifier: StdMutex::new(None),
@@ -471,7 +477,7 @@ async fn reconfiguration_retries_a_wire_initializing_result_after_the_linked_mod
         skip_ready_wait: true,
         forced_reinitialize_failure: None,
         proxy_failure: None,
-        initializing_left: AtomicUsize::new(0),
+        initializing_left: StdMutex::new(0),
         reinitialize_calls: calls.clone(),
         fault_calls: Arc::new(AtomicUsize::new(0)),
         initializing_notifier: StdMutex::new(Some(notifying_tx)),
@@ -560,7 +566,7 @@ async fn fixture_with_unattested_destination() -> (FixtureAccess, Arc<AtomicUsiz
             skip_ready_wait: false,
             forced_reinitialize_failure: None,
             proxy_failure: None,
-            initializing_left: AtomicUsize::new(0),
+            initializing_left: StdMutex::new(0),
             reinitialize_calls: Arc::new(AtomicUsize::new(0)),
             fault_calls: Arc::new(AtomicUsize::new(0)),
             initializing_notifier: StdMutex::new(None),
