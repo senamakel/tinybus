@@ -594,6 +594,24 @@ async fn failed_registration_preserves_a_name_owned_before_the_helper() {
 }
 
 #[tokio::test]
+async fn a_closed_runtime_connection_refuses_host_object_registration() {
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let name: crate::BusName = "ai.tinyhumans.test.ClosedHostObjectConnection"
+        .parse()
+        .unwrap();
+    let path: crate::ObjectPath = "/runtime/closed_connection".parse().unwrap();
+    runtime.connection().close().await.unwrap();
+
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path, HostObjectValue("unreachable"))
+            .await
+            .is_err()
+    );
+    assert!(runtime.host_objects.lock().await.names.get(&name).is_none());
+}
+
+#[tokio::test]
 async fn canceling_after_name_claim_rolls_back_on_the_module_runtime() {
     let runtime = Arc::new(ModuleRuntime::start(&RuntimeNames::default(), None).unwrap());
     let name: crate::BusName = "ai.tinyhumans.test.CancelAfterClaim".parse().unwrap();
