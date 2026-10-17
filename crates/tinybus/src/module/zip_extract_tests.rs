@@ -17,6 +17,7 @@ fn extract_fixture(name: &str) -> (tempfile::TempDir, PathBuf, Result<()>) {
             "suid_mode.zip" => include_bytes!("fixtures/suid_mode.zip"),
             "duplicate.zip" => include_bytes!("fixtures/duplicate.zip"),
             "archive_collision.zip" => include_bytes!("fixtures/archive_collision.zip"),
+            "case_collision.zip" => include_bytes!("fixtures/case_collision.zip"),
             _ => panic!("unknown test fixture"),
         };
     fs::write(&archive, bytes).unwrap();
@@ -78,6 +79,14 @@ fn duplicate_names_are_refused_before_any_file_is_written() {
     let (_root, destination, result) = extract_fixture("duplicate.zip");
     assert!(result.is_err());
     assert!(!destination.join("module.so").exists());
+}
+
+#[test]
+fn case_colliding_components_are_refused_portably() {
+    let (_root, destination, result) = extract_fixture("case_collision.zip");
+    assert!(result.is_err());
+    assert!(!destination.join("foo/a").exists());
+    assert!(!destination.join("FOO/b").exists());
 }
 
 #[test]
@@ -162,4 +171,16 @@ fn data_descriptor_must_match_the_central_directory() {
 
     assert!(extract(&archive, &destination).is_err());
     assert!(!destination.join("folder/module.so").exists());
+}
+
+#[test]
+fn an_incomplete_deflate_stream_is_not_accepted_as_eof() {
+    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(b"payload whose final DEFLATE marker matters").unwrap();
+    let mut compressed = encoder.finish().unwrap();
+    compressed.pop();
+
+    let mut decoder = StrictDeflate::new(compressed.as_slice(), compressed.len() as u64);
+    let mut output = Vec::new();
+    assert!(decoder.read_to_end(&mut output).is_err());
 }
