@@ -21,11 +21,11 @@ pub mod reconfigure;
 mod release;
 #[cfg(feature = "modules")]
 pub mod resolution;
-#[cfg(feature = "modules")]
+#[cfg(any(feature = "modules", feature = "cli"))]
 mod zip_deflate;
-#[cfg(feature = "modules")]
+#[cfg(any(feature = "modules", feature = "cli"))]
 mod zip_descriptor;
-#[cfg(feature = "modules")]
+#[cfg(any(feature = "modules", feature = "cli"))]
 mod zip_extract;
 
 #[cfg(feature = "modules")]
@@ -137,3 +137,15 @@ mod requirements;
 /// Host-selected activation requirements.
 #[cfg(feature = "modules")]
 pub use requirements::{ModuleRequirements, RequiredInterface};
+
+/// Return a ZIP module archive's library digest using the bounded release
+/// extractor. The CLI uses this when producing cross-platform release
+/// checksums, including Windows `.dll` assets on a Unix host.
+#[cfg(feature = "cli")]
+pub fn sha256_zip_module_library(path: impl AsRef<std::path::Path>) -> crate::Result<String> {
+    zip_extract::library_sha256(path.as_ref())
+}
+
+pub(crate) fn refused(reason: impl Into<String>) -> crate::Error {
+    crate::Error::module_refused(std::path::Path::new("github-release"), reason)
+}

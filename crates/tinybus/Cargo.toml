@@ -77,6 +77,10 @@ cli = [
     "uds",
     "dep:flate2",
     "dep:tar",
+    "dep:rawzip",
+    "dep:icu_casemap",
+    "dep:unicode-normalization",
+    "dep:tempfile",
 ]
 
 # Load trusted, in-process cdylib modules. Off by default because a loaded

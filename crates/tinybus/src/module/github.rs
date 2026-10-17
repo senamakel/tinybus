@@ -33,6 +33,7 @@ use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
+use super::refused;
 use crate::module::cache;
 use crate::module::hash::file_hex;
 
@@ -481,10 +482,6 @@ fn extract(name: &str, archive: &Path, destination: &Path) -> Result<()> {
         return Err(refused("release asset is not a supported archive"));
     }
     Ok(())
-}
-
-pub(super) fn refused(reason: impl Into<String>) -> Error {
-    Error::module_refused(Path::new("github-release"), reason)
 }
 
 #[cfg(test)]

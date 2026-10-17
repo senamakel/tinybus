@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::error::Result;
-use crate::module::github::refused;
+use crate::module::refused;
 
 /// Match a descriptor against central-directory claims and stay inside the
 /// validated compressed-data-to-central-directory range.
