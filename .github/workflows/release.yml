@@ -89,4 +89,4 @@ jobs:
       tag: ${{ needs.resolve.outputs.tag }}
       version: ${{ needs.resolve.outputs.version }}
       package: tinybus
-      reviewed-pr: ${{ needs.resolve.outputs.reviewed_pr }}
+      reviewed-pr: ${{ fromJSON(needs.resolve.outputs.reviewed_pr) }}
