@@ -843,3 +843,7 @@ fn valid_sha256(digest: &str) -> bool {
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "client_stream_tests.rs"]
+mod stream_tests;
