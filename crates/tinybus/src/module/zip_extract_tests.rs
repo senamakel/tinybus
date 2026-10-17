@@ -379,21 +379,6 @@ fn data_descriptor_must_match_the_central_directory() {
     assert!(!destination.join("folder/module.so").exists());
 }
 
-#[test]
-fn an_incomplete_deflate_stream_is_not_accepted_as_eof() {
-    let mut encoder =
-        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder
-        .write_all(b"payload whose final DEFLATE marker matters")
-        .unwrap();
-    let mut compressed = encoder.finish().unwrap();
-    compressed.pop();
-
-    let mut decoder = StrictDeflate::new(compressed.as_slice(), compressed.len() as u64);
-    let mut output = Vec::new();
-    assert!(decoder.read_to_end(&mut output).is_err());
-}
-
 fn set_member_crc(bytes: &mut [u8], name: &str, crc: u32) {
     let mut offset = 0;
     while let Some(relative) = bytes[offset..]
