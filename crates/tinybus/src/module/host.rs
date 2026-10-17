@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::broker::Broker;
 use crate::build_info;
 use crate::error::{Error, Result, sanitize_untrusted};
-use crate::module::LinkedModule;
+use crate::module::{LinkedModule, LinkedModuleInitWithSetup, LinkedSetup, ModuleId};
 use crate::module::abi::{TB_OK, TbAbiDescriptor, TbModuleInit, TbModuleVtable, field_bytes};
 use crate::module::github::CachedRelease;
 use crate::module::loader::{self, LoadedArtifact};
@@ -91,6 +91,7 @@ pub struct ModuleInfo {
 
 struct LoadedModule {
     info: ModuleInfo,
+    module_id: ModuleId,
     transport: Arc<ModuleTransport>,
     unique_name: BusName,
     transition_from: Option<ModuleState>,
@@ -159,6 +160,7 @@ struct Activation {
     /// executable digest. `None` for raw attachments and ordinary local files.
     pinned_sha256: Option<String>,
     pinned_library_sha256: Option<String>,
+    linked_setup: Option<(LinkedModuleInitWithSetup, LinkedSetup)>,
 }
 
 impl PendingModule {
