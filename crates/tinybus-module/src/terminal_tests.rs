@@ -152,6 +152,82 @@ fn physical_completion_is_published_only_after_anchor_retirement() {
 }
 
 #[test]
+fn timeout_uncertainty_wins_over_a_prepared_physical_completion() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    FLAGS.store(TB_NATIVE_TERMINAL_LIVE, Ordering::Release);
+    let admission = Admission::new();
+    let state = TerminalState::admit_in(&admission, host(), None).unwrap();
+    let gate = Arc::new(AnchorRemovalGate {
+        entered: std::sync::Barrier::new(2),
+        release: std::sync::Barrier::new(2),
+    });
+    *state.before_anchor_removal.lock().unwrap() = Some(gate.clone());
+    state.register(RuntimeHooks::new(
+        |_| {},
+        || TerminalCompletion::PhysicallyStopped,
+    ));
+    state.publish();
+    state.signal(TerminalReason::Stop);
+
+    gate.entered.wait();
+    let mut release = AnchorRemovalRelease {
+        gate,
+        released: false,
+    };
+    assert_eq!(
+        state.wait(Duration::ZERO),
+        TerminalCompletion::Uncertain,
+        "the deadline expires before completion publication"
+    );
+    state.retain_uncertain_anchor();
+    assert!(TerminalState::lookup_in(&admission, state.context().addr()).is_some());
+
+    release.release();
+    assert_eq!(
+        state.wait(Duration::from_secs(3)),
+        TerminalCompletion::Uncertain,
+        "a prepared physical result cannot erase timeout uncertainty"
+    );
+    assert!(
+        TerminalState::lookup_in(&admission, state.context().addr()).is_some(),
+        "uncertain completion keeps its exact callback anchor"
+    );
+}
+
+#[test]
+fn uncertainty_after_physical_publication_downgrades_and_reanchors() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    FLAGS.store(TB_NATIVE_TERMINAL_LIVE, Ordering::Release);
+    let admission = Admission::new();
+    let state = TerminalState::admit_in(&admission, host(), None).unwrap();
+    state.register(RuntimeHooks::new(
+        |_| {},
+        || TerminalCompletion::PhysicallyStopped,
+    ));
+    state.publish();
+    state.signal(TerminalReason::Stop);
+
+    assert_eq!(
+        state.wait(Duration::from_secs(3)),
+        TerminalCompletion::PhysicallyStopped
+    );
+    assert!(TerminalState::lookup_in(&admission, state.context().addr()).is_none());
+
+    state.retain_uncertain_anchor();
+
+    assert_eq!(
+        state.wait(Duration::ZERO),
+        TerminalCompletion::Uncertain,
+        "a later fault observation cannot leave stale physical success published"
+    );
+    assert!(TerminalState::lookup_in(&admission, state.context().addr()).is_some());
+}
+
+#[test]
 fn request_primary_payload_is_retained_and_finish_still_attempted_once() {
     let _serial = TEST_LOCK
         .lock()
