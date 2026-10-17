@@ -229,7 +229,9 @@ impl Interface for ReadsUploadedStream {
     }
 }
 
-struct ReplacementUpload;
+struct ReplacementUpload {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
 
 #[async_trait]
 impl Interface for ReplacementUpload {
@@ -242,6 +244,8 @@ impl Interface for ReplacementUpload {
     }
 
     async fn call(&self, _member: &MemberName, _args: Value) -> Result<Value> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Value::Null)
     }
 }
@@ -271,8 +275,15 @@ async fn a_stream_method_stays_with_the_owner_that_opened_its_stream_after_name_
     let replacement = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
+    let replacement_calls =
+        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     replacement
-        .serve_at(ObjectPath::new(PATH).unwrap(), ReplacementUpload)
+        .serve_at(
+            ObjectPath::new(PATH).unwrap(),
+            ReplacementUpload {
+                calls: replacement_calls.clone(),
+            },
+        )
         .await
         .unwrap();
 
@@ -301,13 +312,24 @@ async fn a_stream_method_stays_with_the_owner_that_opened_its_stream_after_name_
     // The Open reply has arrived before the transport pauses the following
     // method call. Move the public name while leaving the original stream peer
     // alive, then allow the method frame to route.
-    blocked_rx.recv().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), blocked_rx.recv())
+        .await
+        .expect("the post-Open method call reached the transport barrier")
+        .expect("the transport barrier remained connected");
     owner.release_name(NAME).await.unwrap();
     replacement.request_name(NAME).await.unwrap();
     resume.notify_one();
 
-    let result = upload.await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(10), upload)
+        .await
+        .expect("the streamed method completed after name handover")
+        .unwrap();
     assert_eq!(result.unwrap(), b"stream opened by the original owner".len());
+    assert_eq!(
+        replacement_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the replacement owner must not receive the method"
+    );
     assert_eq!(
         received_rx.recv().await.unwrap(),
         b"stream opened by the original owner"
