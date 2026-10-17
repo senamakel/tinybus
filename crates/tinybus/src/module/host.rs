@@ -1601,6 +1601,37 @@ impl ModuleHost {
         let lazy_init = activation.lazy_init;
         let lazy_load = activation.lazy_load;
         let descriptor_info = activation.descriptor_info;
+        if !self.inner.warned.swap(true, Ordering::AcqRel) {
+            tracing::warn!(
+                modules = 1,
+                "in-process modules are inside the host trust boundary"
+            );
+        }
+        if lazy_load {
+            tracing::info!(module = %admitted.name, "module registered for lazy loading");
+        } else {
+            tracing::info!(module = %admitted.name, "module loaded");
+        }
+        let ready_transport = transport.clone();
+        let module_name = admitted.name.clone();
+        let previous_state = state_name(&admitted.state);
+        self.inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .push(LoadedModule {
+                info: admitted.clone(),
+                module_id: ModuleId::new(manifest.module.name.clone()),
+                transport,
+                unique_name: unique,
+                transition_from: None,
+                descriptor_info,
+                lifecycle_busy: false,
+                callback_config: None,
+                callback_state: None,
+            });
+        staged.start();
+        let broker = self.inner.broker.clone();
         tokio::spawn(async move {
             if lazy_init {
                 ready_transport.wait_initializing().await;
@@ -1629,33 +1660,6 @@ impl ModuleHost {
                     .await;
             }
         });
-        if !self.inner.warned.swap(true, Ordering::AcqRel) {
-            tracing::warn!(
-                modules = 1,
-                "in-process modules are inside the host trust boundary"
-            );
-        }
-        if lazy_load {
-            tracing::info!(module = %admitted.name, "module registered for lazy loading");
-        } else {
-            tracing::info!(module = %admitted.name, "module loaded");
-        }
-        self.inner
-            .loaded
-            .lock()
-            .expect("module list lock")
-            .push(LoadedModule {
-                info: admitted.clone(),
-                module_id: ModuleId::new(manifest.module.name.clone()),
-                transport,
-                unique_name: unique,
-                transition_from: None,
-                descriptor_info,
-                lifecycle_busy: false,
-                callback_config: None,
-                callback_state: None,
-            });
-        staged.start();
         #[cfg(test)]
         if let Some(barrier) = self
             .inner
