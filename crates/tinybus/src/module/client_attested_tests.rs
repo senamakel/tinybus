@@ -11,15 +11,18 @@ fn strict_record() -> &'static ReleaseRecord {
     let archive = Box::leak("attested-test.tar.gz".to_string().into_boxed_str());
     let archive_sha = Box::leak("a".repeat(64).into_boxed_str());
     let library_sha = Box::leak("b".repeat(64).into_boxed_str());
-    let assets = Box::leak(
-        vec![crate::module::ReleaseAsset {
-            host_key,
-            archive,
-            sha256: archive_sha,
-            library_sha256: Some(library_sha),
-        }]
-        .into_boxed_slice(),
-    );
+    strict_record_with_assets(vec![crate::module::ReleaseAsset {
+        host_key,
+        archive,
+        sha256: archive_sha,
+        library_sha256: Some(library_sha),
+    }])
+}
+
+fn strict_record_with_assets(
+    assets: Vec<crate::module::ReleaseAsset<'static>>,
+) -> &'static ReleaseRecord {
+    let assets = Box::leak(assets.into_boxed_slice());
     Box::leak(Box::new(ReleaseRecord {
         id: "attested-client-test",
         bus_name: "ai.tinyhumans.test.AttestedClient",
@@ -28,6 +31,22 @@ fn strict_record() -> &'static ReleaseRecord {
         release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v1.0.0",
         assets,
     }))
+}
+
+fn attested_asset(
+    host_key: &'static str,
+    suffix: &str,
+    archive_digest: char,
+    library_digest: char,
+) -> crate::module::ReleaseAsset<'static> {
+    crate::module::ReleaseAsset {
+        host_key,
+        archive: Box::leak(format!("attested-{suffix}.tar.gz").into_boxed_str()),
+        sha256: Box::leak(archive_digest.to_string().repeat(64).into_boxed_str()),
+        library_sha256: Some(Box::leak(
+            library_digest.to_string().repeat(64).into_boxed_str(),
+        )),
+    }
 }
 
 struct PreparedAccess {
@@ -387,6 +406,99 @@ impl crate::Interface for AttestedReceiver {
         self.calls.lock().unwrap().push(args);
         Ok(serde_json::json!(self.label))
     }
+}
+
+async fn call_with_attestation(
+    record: &'static ReleaseRecord,
+    archive_sha256: &str,
+    library_sha256: &str,
+) -> Result<String, ModuleCallError> {
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    service
+        .serve_at(
+            crate::ObjectPath::new(record.object_path).unwrap(),
+            AttestedReceiver {
+                label: "attested",
+                calls: Arc::new(Mutex::new(Vec::new())),
+            },
+        )
+        .await
+        .unwrap();
+    service.request_name(record.bus_name).await.unwrap();
+    broker.attest_module(
+        &service.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::BusName::new(record.bus_name).unwrap(),
+            sha256: archive_sha256.to_string(),
+            library_sha256: Some(library_sha256.to_string()),
+        },
+    );
+    let access = PreparedAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    };
+    let result = ModuleClient::new(access)
+        .call_attested(record.id, "Consume", ())
+        .await;
+    broker_task.abort();
+    result
+}
+
+#[tokio::test]
+async fn attested_calls_accept_a_verified_compatible_fallback_asset_pair() {
+    let candidates = crate::module::platform::host_candidates();
+    let first_key = Box::leak(candidates[0].clone().into_boxed_str());
+    let fallback_key = Box::leak(candidates.last().unwrap().clone().into_boxed_str());
+    let first = attested_asset(first_key, "preferred", 'a', 'b');
+    let fallback = attested_asset(fallback_key, "fallback", 'c', 'd');
+    let record = strict_record_with_assets(vec![first, fallback]);
+
+    assert_eq!(
+        call_with_attestation(record, fallback.sha256, fallback.library_sha256.unwrap()).await,
+        Ok("attested".to_string())
+    );
+}
+
+#[tokio::test]
+async fn attested_calls_reject_archive_and_library_digests_crossed_between_assets() {
+    let candidates = crate::module::platform::host_candidates();
+    let first_key = Box::leak(candidates[0].clone().into_boxed_str());
+    let fallback_key = Box::leak(candidates.last().unwrap().clone().into_boxed_str());
+    let first = attested_asset(first_key, "preferred", 'a', 'b');
+    let fallback = attested_asset(fallback_key, "fallback", 'c', 'd');
+    let record = strict_record_with_assets(vec![first, fallback]);
+
+    assert_eq!(
+        call_with_attestation(record, first.sha256, fallback.library_sha256.unwrap()).await,
+        Err(ModuleCallError::Unavailable)
+    );
+}
+
+#[tokio::test]
+async fn attested_calls_reject_a_valid_pair_for_an_unrelated_platform() {
+    let compatible_key = Box::leak(
+        crate::module::platform::host_candidates()[0]
+            .clone()
+            .into_boxed_str(),
+    );
+    let compatible = attested_asset(compatible_key, "compatible", 'a', 'b');
+    let unrelated = attested_asset("unrelated-platform-key", "unrelated", 'c', 'd');
+    let record = strict_record_with_assets(vec![compatible, unrelated]);
+
+    assert_eq!(
+        call_with_attestation(record, unrelated.sha256, unrelated.library_sha256.unwrap()).await,
+        Err(ModuleCallError::Unavailable)
+    );
 }
 
 struct HandoverArgs {
