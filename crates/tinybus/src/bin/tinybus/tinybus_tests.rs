@@ -119,7 +119,11 @@ fn checksum_manifest_reads_a_windows_library_from_zip_on_unix() {
 #[test]
 fn checksum_reader_refuses_module_sizes_above_its_expansion_limit() {
     let error = sha256_reader(&b""[..], 8, 4).unwrap_err();
-    assert!(error.to_string().contains("checksum module exceeds its size limit"));
+    assert!(
+        error
+            .to_string()
+            .contains("checksum module exceeds its size limit")
+    );
 }
 
 #[test]

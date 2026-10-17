@@ -527,7 +527,8 @@ fn library_sha256_in_archive(path: &Path) -> Result<Option<String>> {
             .entries()
             .map_err(|_| Error::failed("checksum archive could not be read"))?
         {
-            let mut entry = entry.map_err(|_| Error::failed("checksum archive entry is invalid"))?;
+            let mut entry =
+                entry.map_err(|_| Error::failed("checksum archive entry is invalid"))?;
             let is_library = {
                 let path = entry
                     .path()
@@ -549,16 +550,14 @@ fn library_sha256_in_archive(path: &Path) -> Result<Option<String>> {
                 .header()
                 .size()
                 .map_err(|_| Error::failed("checksum archive module header is invalid"))?;
-            digest = Some(sha256_reader(
-                &mut entry,
-                size,
-                MAX_CHECKSUM_MODULE_BYTES,
-            )?);
+            digest = Some(sha256_reader(&mut entry, size, MAX_CHECKSUM_MODULE_BYTES)?);
         }
         digest
     };
     if bounded_reader.limit() == 0 {
-        return Err(Error::failed("checksum archive exceeds its expanded-size limit"));
+        return Err(Error::failed(
+            "checksum archive exceeds its expanded-size limit",
+        ));
     }
     digest
         .map(Some)
