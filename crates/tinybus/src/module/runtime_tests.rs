@@ -275,6 +275,55 @@ async fn a_name_collision_leaves_no_host_object_registration_behind() {
     assert!(leaked.is_err());
 }
 
+#[tokio::test]
+async fn canceling_after_name_claim_rolls_back_on_the_module_runtime() {
+    let runtime = Arc::new(ModuleRuntime::start(&RuntimeNames::default(), None).unwrap());
+    let name: crate::BusName = "ai.tinyhumans.test.CancelAfterClaim".parse().unwrap();
+    let path: crate::ObjectPath = "/runtime/cancel_after_claim".parse().unwrap();
+    let barrier = HostObjectRegistrationBarrier {
+        entered: Arc::new(tokio::sync::Semaphore::new(0)),
+        release: Arc::new(tokio::sync::Semaphore::new(0)),
+    };
+    {
+        let mut state = runtime.host_objects.lock().await;
+        state.after_name_claim = Some(barrier.clone());
+    }
+
+    let serving_runtime = runtime.clone();
+    let serving_name = name.clone();
+    let serving_path = path.clone();
+    let serving = tokio::spawn(async move {
+        serving_runtime
+            .serve_host_object(serving_name, serving_path, HostObjectValue("value"))
+            .await
+    });
+    let entered =
+        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.entered.acquire())
+            .await
+            .expect("name claim was not reached")
+            .unwrap();
+    let owner = runtime
+        .connection()
+        .name_owner(name.as_str())
+        .await
+        .unwrap();
+    assert_eq!(owner, runtime.connection().unique_name());
+
+    serving.abort();
+    assert!(matches!(serving.await, Err(error) if error.is_cancelled()));
+    drop(entered);
+    barrier.release.add_permits(1);
+    wait_for_owner(runtime.connection(), name.as_str(), None).await;
+    runtime.host_objects.lock().await.after_name_claim = None;
+
+    let guard = runtime
+        .serve_host_object(name.clone(), path, HostObjectValue("reclaimed"))
+        .await
+        .unwrap();
+    drop(guard);
+    wait_for_owner(runtime.connection(), name.as_str(), None).await;
+}
+
 unsafe extern "C" fn collision_module_init(
     _: *const crate::module::abi::TbHostVtable,
     _: *mut crate::module::abi::TbModuleVtable,

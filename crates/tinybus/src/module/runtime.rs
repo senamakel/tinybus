@@ -99,6 +99,15 @@ pub struct ModuleRuntime {
 struct HostObjectRegistry {
     connection: Connection,
     names: std::collections::HashMap<crate::BusName, HostNameLease>,
+    #[cfg(test)]
+    after_name_claim: Option<HostObjectRegistrationBarrier>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct HostObjectRegistrationBarrier {
+    entered: std::sync::Arc<tokio::sync::Semaphore>,
+    release: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 struct HostNameLease {
@@ -273,6 +282,11 @@ impl ModuleRuntime {
                 true
             }
         };
+        #[cfg(test)]
+        if let Some(barrier) = state.after_name_claim.clone() {
+            barrier.entered.add_permits(1);
+            let _permit = barrier.release.acquire().await.expect("registration barrier");
+        }
         let registration = match state.connection.serve_at_owned(path, interface).await {
             Ok(registration) => registration,
             Err(error) => {
@@ -314,6 +328,8 @@ async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
     let host_objects = std::sync::Arc::new(tokio::sync::Mutex::new(HostObjectRegistry {
         connection: connection.clone(),
         names: std::collections::HashMap::new(),
+        #[cfg(test)]
+        after_name_claim: None,
     }));
     if let Some(setup) = setup {
         setup(connection.clone(), &host).await?;
