@@ -2944,8 +2944,9 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
     loading.await.unwrap().expect("eager module loads");
 
     assert_eq!(
-        observed, None,
-        "regression setup must expose the missing publication"
+        observed.as_ref().map(crate::module::ModuleId::as_str),
+        Some("tinybus"),
+        "the authenticated callback must resolve the exact admitted module before READY"
     );
     broker_task.abort();
 }
