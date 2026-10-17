@@ -4,6 +4,36 @@ use crate::module::manifest::{
 };
 use crate::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
+#[test]
+fn reconfiguration_classifies_only_closed_lifecycle_wire_names() {
+    let cases = [
+        (
+            crate::Error::MethodFailed {
+                name: crate::Error::MODULE_INITIALIZING.into(),
+                message: "arbitrary remote prose is ignored".into(),
+            },
+            crate::module::ReconfigureFailure::Initializing,
+        ),
+        (
+            crate::Error::MethodFailed {
+                name: crate::Error::MODULE_UNAVAILABLE.into(),
+                message: "arbitrary remote prose is ignored".into(),
+            },
+            crate::module::ReconfigureFailure::Unavailable,
+        ),
+        (
+            crate::Error::MethodFailed {
+                name: "ai.tinyhumans.tinybus.Error.Other".into(),
+                message: "module initializing".into(),
+            },
+            crate::module::ReconfigureFailure::Failed,
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(reconfigure_failure(&error), expected);
+    }
+}
+
 fn module(name: &str, provides: &[&str], requires: &[(&str, bool)]) -> ModuleManifest {
     let version = Version::new(1, 0, 0);
     ModuleManifest {

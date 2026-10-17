@@ -10,7 +10,7 @@ use crate::transport::memory::MemoryBus;
 use crate::{Connection, Message, Proxy};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 const ID: &str = "reconfigure-test-module";
 const BUS: &str = "ai.tinyhumans.test.Reconfigure";
@@ -25,6 +25,10 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     assets: &[],
 };
 static FIXTURE_LOCK: Mutex<()> = Mutex::const_new(());
+static INITIALIZER_STARTED: OnceLock<StdMutex<Option<std::sync::mpsc::SyncSender<()>>>> =
+    OnceLock::new();
+static INITIALIZER_RELEASE: OnceLock<StdMutex<Option<std::sync::mpsc::Receiver<()>>>> =
+    OnceLock::new();
 
 struct FixtureState {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
@@ -120,6 +124,30 @@ unsafe extern "C" fn fixture_init(host: *const TbHostVtable, out: *mut TbModuleV
         };
     }
     TB_OK
+}
+
+unsafe extern "C" fn blocked_fixture_init(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+) -> i32 {
+    let started = INITIALIZER_STARTED
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap()
+        .take();
+    let release = INITIALIZER_RELEASE
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap()
+        .take();
+    let Some((started, release)) = started.zip(release) else {
+        return TB_BAD_ARGUMENT;
+    };
+    let _ = started.send(());
+    if release.recv().is_err() {
+        return TB_BAD_ARGUMENT;
+    }
+    unsafe { fixture_init(host, out) }
 }
 
 struct Quiet;
@@ -247,6 +275,28 @@ async fn fixture() -> FixtureAccess {
         reinitialize_calls: Arc::new(AtomicUsize::new(0)),
         initializing_left: AtomicUsize::new(0),
     }
+}
+
+async fn lazy_fixture(block_initialization: bool) -> (Arc<ModuleHost>, Connection, tokio::task::JoinHandle<crate::Result<()>>) {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let host = Arc::new(ModuleHost::new(broker));
+    let mut manifest = fixture_manifest();
+    manifest.lazy_init = true;
+    host.attach_linked_with_config(
+        crate::module::LinkedModule {
+            descriptor: TbAbiDescriptor::current(ID, "0.0.0"),
+            manifest,
+            init: if block_initialization { blocked_fixture_init } else { fixture_init },
+        },
+        serde_json::Value::Null,
+    )
+    .unwrap();
+    let connection = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    (host, connection, broker_task)
 }
 
 struct UnattestedService(Arc<AtomicUsize>);
