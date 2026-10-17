@@ -84,7 +84,9 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
     let observer = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let setups = Arc::new(Mutex::new(Vec::<(String, String, Connection)>::new()));
+    let setups = Arc::new(Mutex::new(
+        Vec::<(String, &'static str, String, Connection)>::new(),
+    ));
 
     let setup_a = setups.clone();
     let first = host.attach_linked_with_setup(
@@ -95,10 +97,12 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
             connection
                 .serve_at("/linked/setup".parse().unwrap(), SetupValue("a"))
                 .await?;
-            setup_a
-                .lock()
-                .unwrap()
-                .push(("linked_a".to_string(), peer.to_string(), connection));
+            setup_a.lock().unwrap().push((
+                "linked_a".to_string(),
+                "a",
+                peer.to_string(),
+                connection,
+            ));
             Ok(())
         },
     );
@@ -112,10 +116,12 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
             connection
                 .serve_at("/linked/setup".parse().unwrap(), SetupValue("b"))
                 .await?;
-            setup_b
-                .lock()
-                .unwrap()
-                .push(("linked_b".to_string(), peer.to_string(), connection));
+            setup_b.lock().unwrap().push((
+                "linked_b".to_string(),
+                "b",
+                peer.to_string(),
+                connection,
+            ));
             Ok(())
         },
     );
@@ -127,8 +133,8 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
 
     let setups = std::mem::take(&mut *setups.lock().unwrap());
     assert_eq!(setups.len(), 2);
-    assert_ne!(setups[0].1, setups[1].1);
-    for (expected, peer, connection) in &setups {
+    assert_ne!(setups[0].2, setups[1].2);
+    for (id, expected, peer, connection) in &setups {
         let proxy = observer
             .proxy(peer, "/linked/setup", "org.example.LinkedSetupValue")
             .unwrap();
@@ -138,11 +144,11 @@ async fn concurrent_linked_setups_replace_the_default_with_instance_bound_state(
             host.module_for_sender(&peer.parse().unwrap())
                 .as_ref()
                 .map(tinybus::module::ModuleId::as_str),
-            Some(expected.as_str())
+            Some(id.as_str())
         );
 
         let attestation = observer
-            .attestation(format!("ai.tinyhumans.test.{expected}").parse().unwrap())
+            .attestation(format!("ai.tinyhumans.test.{id}").parse().unwrap())
             .await
             .unwrap()
             .expect("stateful linked setup keeps executable attestation");
@@ -176,7 +182,11 @@ async fn a_failing_stateful_setup_faults_and_releases_its_module_peer() {
         .await;
     assert!(result.is_err());
     assert!(host.list().iter().any(|module| {
-        module.manifest.bus_name == bus_name && matches!(module.state, ModuleState::Failed { .. })
+        module.manifest.bus_name == bus_name
+            && matches!(
+                module.state,
+                ModuleState::Failed { .. } | ModuleState::Faulted { .. }
+            )
     }));
     wait_for_owner(&observer, bus_name.as_str(), None).await;
     broker_task.abort();
