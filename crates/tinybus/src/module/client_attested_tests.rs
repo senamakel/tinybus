@@ -101,6 +101,89 @@ impl ModuleAccess for UnpreparedAccess {
     }
 }
 
+struct ReadinessAccess {
+    record: &'static ReleaseRecord,
+    connection: crate::Connection,
+    reporter: FailureReporter,
+    host: Arc<crate::module::ModuleHost>,
+}
+
+impl ModuleAccess for ReadinessAccess {
+    fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
+        (id == self.record.id).then_some(self.record)
+    }
+
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    fn reporter(&self) -> &FailureReporter {
+        &self.reporter
+    }
+
+    fn ensure_loaded<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn prepare_attested<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.host
+                .ensure_ready_within(self.record.bus_name, Duration::from_millis(20))
+                .await
+                .map_err(|_| "module did not reach READY".to_string())
+        })
+    }
+
+    fn proxy<'a>(
+        &'a self,
+        bus_name: &'a str,
+        object_path: &'a str,
+    ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
+        Box::pin(async move {
+            self.connection
+                .proxy(bus_name, object_path, bus_name)
+                .map_err(|_| ProxyFailure::Contract)
+        })
+    }
+}
+
+unsafe extern "C" fn never_ready_deliver(
+    _: *mut std::ffi::c_void,
+    _: *const u8,
+    _: usize,
+) -> i32 {
+    crate::module::abi::TB_OK
+}
+
+unsafe extern "C" fn no_op_lifecycle(_: *mut std::ffi::c_void, _: u64) -> i32 {
+    crate::module::abi::TB_OK
+}
+
+unsafe extern "C" fn no_op_reinitialize(
+    _: *mut std::ffi::c_void,
+    _: *const u8,
+    _: usize,
+) -> i32 {
+    crate::module::abi::TB_OK
+}
+
+unsafe extern "C" fn never_ready_init(
+    _: *const crate::module::abi::TbHostVtable,
+    out: *mut crate::module::abi::TbModuleVtable,
+) -> i32 {
+    unsafe {
+        *out = crate::module::abi::TbModuleVtable {
+            size: std::mem::size_of::<crate::module::abi::TbModuleVtable>() as u32,
+            _reserved: 0,
+            module_ctx: Box::into_raw(Box::new(0u8)).cast(),
+            deliver: never_ready_deliver,
+            shutdown: no_op_lifecycle,
+            reinitialize: Some(no_op_reinitialize),
+        };
+    }
+    crate::module::abi::TB_OK
+}
+
 struct SerializeCounter(Arc<std::sync::atomic::AtomicUsize>);
 
 impl serde::Serialize for SerializeCounter {
@@ -147,6 +230,77 @@ async fn an_unprepared_custom_access_refuses_before_serializing_confidential_arg
         &[(record.id.to_string(), Reason::ModuleUnavailable)]
     );
     broker_task.abort();
+}
+
+#[tokio::test]
+async fn a_lazy_module_that_never_announces_ready_fails_before_serializing_arguments() {
+    use crate::module::manifest::{
+        MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy, ProvidedInterface,
+    };
+    use crate::version::{InterfaceVersion, Version};
+
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let _broker_task = broker.clone().spawn(bus.clone());
+    let host = Arc::new(crate::module::ModuleHost::new(broker));
+    let connection = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = strict_record();
+    let version = Version::new(1, 0, 0);
+    let manifest = ModuleManifest {
+        schema: MANIFEST_SCHEMA,
+        module: ModuleIdentity {
+            name: "attested-client-test".to_string(),
+            version: version.clone(),
+            description: String::new(),
+            homepage: None,
+            license: String::new(),
+        },
+        bus_name: crate::BusName::new(record.bus_name).unwrap(),
+        object_path: crate::ObjectPath::new(record.object_path).unwrap(),
+        provides: vec![ProvidedInterface {
+            version: InterfaceVersion::provided(
+                crate::InterfaceName::new(record.bus_name).unwrap(),
+                version,
+            ),
+            methods: vec![crate::MemberName::new("Consume").unwrap()],
+            signals: Vec::new(),
+        }],
+        requires: Vec::new(),
+        environment: Vec::new(),
+        capabilities: Vec::new(),
+        lazy_init: true,
+        worker_threads: 1,
+        on_panic: PanicPolicy::Detach,
+    };
+    unsafe {
+        host.attach_raw(
+            "attested-client.so",
+            crate::module::abi::TbAbiDescriptor::current("attested-client-test", "1.0.0"),
+            manifest,
+            never_ready_init,
+        )
+    }
+    .unwrap();
+    let sink = Arc::new(Recording::default());
+    let client = ModuleClient::new(ReadinessAccess {
+        record,
+        connection,
+        reporter: FailureReporter::new(sink.clone()),
+        host,
+    });
+    let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let result: Result<String, _> = client
+        .call_attested(record.id, "Consume", SerializeCounter(serializations.clone()))
+        .await;
+    assert_eq!(result, Err(ModuleCallError::Unavailable));
+    assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(record.id.to_string(), Reason::ModuleUnavailable)]
+    );
 }
 
 struct AttestedReceiver {
