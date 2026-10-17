@@ -2922,10 +2922,17 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
         inner: modules.inner.clone(),
     };
     let loading_binding = binding;
-    let loading = tokio::spawn(async move {
-        loading_modules
-            .load_file_with_host_callbacks(artifact, config, &loading_binding)
-            .await
+    let loading = tokio::task::spawn_blocking(move || {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(loading_modules.load_file_with_host_callbacks(
+                artifact,
+                config,
+                &loading_binding,
+            ))
     });
 
     tokio::task::spawn_blocking(move || {
@@ -2935,13 +2942,13 @@ async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
     })
     .await
     .unwrap();
-    let observed = tokio::time::timeout(Duration::from_secs(3), observed_rx)
-        .await
-        .expect("eager setup did not call the authenticated host callback")
-        .expect("host callback dropped its observation");
+    let observation = tokio::time::timeout(Duration::from_secs(3), observed_rx).await;
     release_tx
         .send(())
         .expect("release the attachment after observing callback identity");
+    let observed = observation
+        .expect("eager setup did not call the authenticated host callback")
+        .expect("host callback dropped its observation");
     loading.await.unwrap().expect("eager module loads");
 
     assert_eq!(
