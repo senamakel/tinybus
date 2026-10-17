@@ -4,6 +4,7 @@ static ASSETS: [ReleaseAsset<'static>; 1] = [ReleaseAsset {
     host_key: "ubuntu-24.04-x86_64",
     archive: "tinybus-module-linux-x86_64.tar.gz",
     sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    library_sha256: None,
 }];
 
 static RECORD: ReleaseRecord = ReleaseRecord {

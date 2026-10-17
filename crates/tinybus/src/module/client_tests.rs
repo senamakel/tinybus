@@ -460,6 +460,7 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
             crate::attest::Attestation {
                 name: crate::BusName::new(RECORD.bus_name).unwrap(),
                 sha256: "a".repeat(64),
+                library_sha256: None,
             },
         );
         let reply: serde_json::Value = client

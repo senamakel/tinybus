@@ -6,6 +6,7 @@ const ASSET: ReleaseAsset<'static> = ReleaseAsset {
     host_key: "ubuntu-24.04-x86_64",
     archive: "demo-ubuntu-24.04-x86_64.tar.gz",
     sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+    library_sha256: None,
 };
 
 fn plan<'a>(

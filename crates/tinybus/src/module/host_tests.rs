@@ -588,6 +588,7 @@ async fn a_bundle_marker_equal_to_the_pin_admits_the_extraction_without_its_arch
         host_key: "macos-15-arm64",
         archive: "clock-macos-15-arm64.tar.gz",
         sha256: "abababababababababababababababababababababababababababababababab",
+        library_sha256: None,
     };
     let dir = artifact_dir(bundled.path(), "clock", "0.1.0", asset.host_key).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
@@ -665,6 +666,7 @@ async fn a_bundle_marker_without_an_allowlist_is_refused_rather_than_loaded_unha
         host_key: "macos-15-arm64",
         archive: "clock-macos-15-arm64.tar.gz",
         sha256: "abababababababababababababababababababababababababababababababab",
+        library_sha256: None,
     };
     let dir = artifact_dir(bundled.path(), "clock", "0.1.0", asset.host_key).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
@@ -2437,7 +2439,8 @@ async fn authenticates_native_context(variable: &str) {
         proxy.attestation().await.unwrap(),
         Some(crate::attest::Attestation {
             name: info.manifest.bus_name,
-            sha256: hash
+            sha256: hash.clone(),
+            library_sha256: Some(hash),
         })
     );
     let sender: crate::BusName = proxy.call_confidential("Inspect", ()).await.unwrap();
@@ -2477,6 +2480,7 @@ async fn fixed_unique_module_calls_are_refused_in_terminal_states_before_detach(
         crate::attest::Attestation {
             name: manifest().bus_name,
             sha256: "a".repeat(64),
+            library_sha256: None,
         },
     );
     let client = Connection::connect(bus.connect().await.unwrap())
