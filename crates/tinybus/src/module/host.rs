@@ -1537,8 +1537,7 @@ impl ModuleHost {
         activation: Activation,
     ) -> Result<ModuleInfo> {
         let transport_for_broker: Arc<dyn Transport> = transport.clone();
-        let staged = self.inner.broker.attach_module_staged(transport_for_broker);
-        let unique = staged.unique_name().clone();
+        let unique = self.inner.broker.attach(transport_for_broker);
         let reserved_change = match self
             .inner
             .broker
@@ -1608,6 +1607,23 @@ impl ModuleHost {
         } else {
             tracing::info!(module = %admitted.name, "module loaded");
         }
+        #[cfg(test)]
+        if let Some(barrier) = self
+            .inner
+            .before_loaded_publish
+            .lock()
+            .expect("loaded publication barrier lock")
+            .take()
+        {
+            barrier
+                .reached
+                .send(())
+                .expect("test observes loaded publication barrier");
+            barrier
+                .release
+                .recv()
+                .expect("test releases loaded publication barrier");
+        }
         let ready_transport = transport.clone();
         let module_name = admitted.name.clone();
         let previous_state = state_name(&admitted.state);
@@ -1626,7 +1642,7 @@ impl ModuleHost {
                 callback_config: None,
                 callback_state: None,
             });
-        staged.start();
+        // This temporary baseline replay starts dispatch before identity publication.
         let broker = self.inner.broker.clone();
         tokio::spawn(async move {
             if lazy_init {
