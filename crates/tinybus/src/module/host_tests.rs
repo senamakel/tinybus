@@ -209,11 +209,31 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
                 descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
                 manifest: module_manifest,
                 init: lazy_echo_init,
+                init_with_setup: None,
             },
             serde_json::json!({}),
         )
         .unwrap();
     assert_eq!(info.state, ModuleState::Resolved);
+
+    // Identity comes from the module's broker-assigned unique peer. A
+    // well-known alias is only a routing name and must never resolve as a
+    // module sender.
+    let unique = host.inner.loaded.lock().unwrap()[0].unique_name.clone();
+    let lookup = host.sender_lookup();
+    let module_id = host
+        .module_for_sender(&unique)
+        .expect("an admitted module resolves from its unique peer");
+    assert_eq!(module_id.as_str(), "clock");
+    assert_eq!(
+        lookup
+            .module_for_sender(&unique)
+            .as_ref()
+            .map(ModuleId::as_str),
+        Some("clock")
+    );
+    assert!(host.module_for_sender(&info.manifest.bus_name).is_none());
+    assert!(lookup.module_for_sender(&info.manifest.bus_name).is_none());
 
     let connection = Connection::connect(bus.connect().await.unwrap())
         .await
@@ -228,7 +248,51 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         attestation.sha256,
         crate::module::sha256_file(executable).unwrap()
     );
+
+    let alias: crate::BusName = "ai.tinyhumans.test.ModuleAliasHandover".parse().unwrap();
+    let first_owner = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    first_owner.request_name(alias.as_str()).await.unwrap();
+    assert!(host.module_for_sender(&alias).is_none());
+    drop(first_owner);
+    let replacement_owner = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    replacement_owner
+        .request_name(alias.as_str())
+        .await
+        .unwrap();
+    assert!(host.module_for_sender(&alias).is_none());
+    assert_eq!(
+        host.module_for_sender(&unique)
+            .expect("alias handover does not change module identity")
+            .as_str(),
+        "clock"
+    );
+
+    host.inner
+        .stop(&info.name, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(host.module_for_sender(&unique).is_none());
+    assert!(lookup.module_for_sender(&unique).is_none());
     broker_task.abort();
+}
+
+#[test]
+fn an_owned_sender_lookup_does_not_keep_its_host_alive() {
+    let host = ModuleHost::new(Broker::new());
+    let observed_lifetime = std::sync::Arc::downgrade(&host.inner);
+    let lookup = host.sender_lookup();
+    let peer: crate::BusName = ":1.4242".parse().unwrap();
+
+    assert_eq!(observed_lifetime.strong_count(), 1);
+    assert!(lookup.module_for_sender(&peer).is_none());
+    drop(host);
+
+    assert_eq!(observed_lifetime.strong_count(), 0);
+    assert!(lookup.module_for_sender(&peer).is_none());
 }
 
 #[test]
@@ -251,6 +315,7 @@ fn linked_module_with_an_unmet_required_interface_is_refused_before_init() {
                 descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
                 manifest: module_manifest,
                 init: init_that_must_not_run,
+                init_with_setup: None,
             },
             serde_json::json!({}),
         )
@@ -2730,12 +2795,14 @@ async fn eager_native_setup_callbacks_are_bound_before_ready_and_failures_rollba
             .unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
         let guard = binding.guard();
+        let sender_lookup = modules.sender_lookup();
         binding
             .serve_at(
                 "/callback".parse().unwrap(),
                 BoundNativeCallback {
                     calls: calls.clone(),
                     guard: guard.clone(),
+                    sender_lookup,
                 },
             )
             .await
@@ -2813,9 +2880,263 @@ async fn eager_native_setup_callbacks_are_bound_before_ready_and_failures_rollba
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBUS_TEST_HOST_CALLBACK_MODULE to point at the built cdylib"]
+async fn an_eager_setup_callback_resolves_its_admitted_module_before_ready() {
+    let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
+    let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+    let (_dir, artifact) = staged_module(&artifact, &hash);
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let modules = ModuleHost::new(broker);
+    let callback = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+    callback
+        .serve_at(
+            "/callback".parse().unwrap(),
+            EagerSetupSenderLookup {
+                lookup: modules.sender_lookup(),
+                observed: std::sync::Mutex::new(Some(observed_tx)),
+            },
+        )
+        .await
+        .unwrap();
+
+    let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    *modules
+        .inner
+        .after_loaded_publish
+        .lock()
+        .expect("loaded publication barrier lock") = Some(LoadedPublishBarrier {
+        reached: reached_tx,
+        release: release_rx,
+    });
+    let config = serde_json::json!({
+        "host": callback.unique_name(),
+        "fail": false,
+        "confidential": false
+    });
+    let loading_modules = ModuleHost {
+        inner: modules.inner.clone(),
+    };
+    let mut loading = tokio::task::spawn_blocking(move || {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async { loading_modules.load_file_with_config(artifact, config) })
+    });
+
+    let reached = tokio::task::spawn_blocking(move || {
+        reached_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("attach did not reach the pre-publication barrier");
+    });
+    tokio::select! {
+        result = &mut loading => panic!("load completed before reaching the publication barrier: {result:?}"),
+        result = reached => result.expect("publication barrier observer panicked"),
+    }
+    let observation = tokio::select! {
+        result = &mut loading => panic!("load completed before its eager callback was observed: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(30), observed_rx) => result,
+    };
+    release_tx
+        .send(())
+        .expect("release the attachment after observing callback identity");
+    let observed = observation
+        .expect("eager setup did not call the authenticated host callback")
+        .expect("host callback dropped its observation");
+    loading.await.unwrap().expect("eager module loads");
+
+    assert_eq!(
+        observed.as_ref().map(crate::module::ModuleId::as_str),
+        Some("tinybus"),
+        "the authenticated callback must resolve the exact admitted module before READY"
+    );
+    broker_task.abort();
+}
+
+struct PanickingStagedStartSubscriber {
+    host: Arc<ModuleHostInner>,
+    peer: Arc<StdMutex<Option<crate::BusName>>>,
+}
+
+impl tracing::Subscriber for PanickingStagedStartSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::DEBUG
+            && event.metadata().target().ends_with("broker")
+        {
+            let peer = self
+                .host
+                .loaded
+                .lock()
+                .unwrap()
+                .last()
+                .expect("staged module row is published before broker start")
+                .unique_name
+                .clone();
+            *self.peer.lock().unwrap() = Some(peer);
+            panic!("test subscriber panics while staged dispatch starts");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+#[test]
+fn a_staged_start_unwind_removes_its_exact_published_peer() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "module::host::tests::staged_start_unwind_child_process",
+            "--test-threads=1",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed;"),
+        "isolated staged-start unwind check failed or was not selected: {}{}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn staged_start_unwind_child_process() {
+    if !std::env::args()
+        .any(|argument| argument == "module::host::tests::staged_start_unwind_child_process")
+    {
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(staged_start_unwind_case());
+}
+
+async fn staged_start_unwind_case() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let host = ModuleHost::new(broker);
+    let observer = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let peer = Arc::new(StdMutex::new(None));
+    let mut manifest = named_manifest("staged-start-panic", "StagedStartPanic");
+    manifest.lazy_init = true;
+
+    let result = tracing::subscriber::with_default(
+        PanickingStagedStartSubscriber {
+            host: host.inner.clone(),
+            peer: peer.clone(),
+        },
+        || {
+            host.attach_linked_with_config(
+                LinkedModule {
+                    descriptor: TbAbiDescriptor::current("staged-start-panic", "0.1.0"),
+                    manifest,
+                    init: lazy_echo_init,
+                    init_with_setup: None,
+                },
+                serde_json::json!({}),
+            )
+        },
+    );
+    assert!(
+        result.is_err(),
+        "a failed dispatch start must refuse attachment"
+    );
+    let unique = peer
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("peer observed at panic");
+    assert!(
+        host.inner.loaded.lock().unwrap().is_empty(),
+        "failed start removes the published row"
+    );
+    assert!(
+        host.module_for_sender(&unique).is_none(),
+        "failed start revokes lookup authority for the exact peer"
+    );
+    assert_eq!(
+        observer
+            .name_owner("ai.tinyhumans.module.StagedStartPanic")
+            .await
+            .unwrap(),
+        None,
+        "failed start detaches its reserved bus name"
+    );
+    broker_task.abort();
+}
+
+struct EagerSetupSenderLookup {
+    lookup: crate::module::ModuleSenderLookup,
+    observed:
+        std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Option<crate::module::ModuleId>>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::Interface for EagerSetupSenderLookup {
+    fn name(&self) -> crate::InterfaceName {
+        "org.example.Callback".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Observe".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Err(Error::failed("callback requires authenticated dispatch"))
+    }
+
+    async fn call_with_context(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+        context: &crate::CallContext,
+    ) -> crate::Result<serde_json::Value> {
+        let sender = context
+            .authenticated_sender()
+            .ok_or_else(|| Error::failed("callback sender is unauthenticated"))?;
+        let module = self.lookup.module_for_sender(sender);
+        if let Some(observed) = self.observed.lock().unwrap().take() {
+            let _ = observed.send(module);
+        }
+        Ok(serde_json::json!(sender))
+    }
+}
+
 struct BoundNativeCallback {
     calls: Arc<AtomicUsize>,
     guard: crate::module::HostCallbackGuard,
+    sender_lookup: crate::module::ModuleSenderLookup,
 }
 #[async_trait::async_trait]
 impl crate::Interface for BoundNativeCallback {
@@ -2845,6 +3166,16 @@ impl crate::Interface for BoundNativeCallback {
         assert!(
             self.guard.authorizes(context),
             "peer must be pinned before eager callback"
+        );
+        assert!(
+            self.sender_lookup
+                .module_for_sender(
+                    context
+                        .authenticated_sender()
+                        .expect("authenticated sender")
+                )
+                .is_some(),
+            "the admitted module identity must be published before its eager setup callback"
         );
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(serde_json::json!(context.authenticated_sender().unwrap()))
