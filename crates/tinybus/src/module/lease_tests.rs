@@ -273,20 +273,30 @@ impl Harness {
     }
 
     async fn opened(&mut self) -> RuntimeLease<Object, DriverError> {
-        self.opened_with_policy(RetryPolicy::new(
-            std::time::Duration::from_millis(20),
-            vec![std::time::Duration::ZERO, std::time::Duration::ZERO],
-        ).unwrap()).await
+        self.opened_with_policy(
+            RetryPolicy::new(
+                std::time::Duration::from_millis(20),
+                vec![std::time::Duration::ZERO, std::time::Duration::ZERO],
+            )
+            .unwrap(),
+        )
+        .await
     }
 
-    async fn opened_with_policy(&mut self, policy: RetryPolicy) -> RuntimeLease<Object, DriverError> {
+    async fn opened_with_policy(
+        &mut self,
+        policy: RetryPolicy,
+    ) -> RuntimeLease<Object, DriverError> {
         let calls = self.callback_calls.clone();
-        let opening = tokio::spawn(self.open_with_policy(move |reservation, object| {
-            if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
-                return Err(DriverError("reservation/object mismatch"));
-            }
-            Ok(Callback(calls))
-        }, policy));
+        let opening = tokio::spawn(self.open_with_policy(
+            move |reservation, object| {
+                if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
+                    return Err(DriverError("reservation/object mismatch"));
+                }
+                Ok(Callback(calls))
+            },
+            policy,
+        ));
         match self.calls.recv().await.unwrap() {
             DriverCall::Reserve(reply) => {
                 reply
@@ -403,7 +413,9 @@ async fn acknowledged_close_preserves_a_newer_registration_at_its_callback_path(
         .runtime
         .serve_host_object(
             CALLBACK_NAME.parse().unwrap(),
-            "/ai/tinyhumans/tinybus/tests/RuntimeLease1".parse().unwrap(),
+            "/ai/tinyhumans/tinybus/tests/RuntimeLease1"
+                .parse()
+                .unwrap(),
             Callback(replacement_calls.clone()),
         )
         .await
@@ -709,7 +721,10 @@ async fn callback_factory_panic_still_rolls_back_the_reserved_resource() {
             .unwrap(),
         _ => panic!("reserve is first"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),
@@ -729,25 +744,30 @@ async fn callback_factory_panic_still_rolls_back_the_reserved_resource() {
 async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
     let mut harness = Harness::new();
     let calls = harness.callback_calls.clone();
-    let opening = tokio::spawn(harness.open_with_policy_and_reporter(
-        move |reservation, object| {
-            assert!(Arc::ptr_eq(&reservation.0.0, &object.0.0));
-            Ok(Callback(calls))
-        },
-        RetryPolicy::new(
-            std::time::Duration::from_millis(20),
-            vec![std::time::Duration::ZERO],
-        )
-        .unwrap(),
-        |_| std::panic::panic_any(()),
-    ));
+    let opening = tokio::spawn(
+        harness.open_with_policy_and_reporter(
+            move |reservation, object| {
+                assert!(Arc::ptr_eq(&reservation.0.0, &object.0.0));
+                Ok(Callback(calls))
+            },
+            RetryPolicy::new(
+                std::time::Duration::from_millis(20),
+                vec![std::time::Duration::ZERO],
+            )
+            .unwrap(),
+            |_| std::panic::panic_any(()),
+        ),
+    );
     match harness.calls.recv().await.unwrap() {
         DriverCall::Reserve(reply) => reply
             .send(Ok(Reservation(harness.driver.identity.clone())))
             .unwrap(),
         _ => panic!("reserve is first"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),
@@ -844,7 +864,10 @@ async fn retryable_stop_uses_the_configured_nonzero_backoff_sequence_in_order() 
     assert!(starts[1].duration_since(starts[0]) >= first_delay);
     assert!(starts[2].duration_since(starts[1]) >= second_delay);
     assert!(closing.await.unwrap().is_err());
-    assert!(harness.calls.try_recv().is_err(), "the retry vector is finite");
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "the retry vector is finite"
+    );
     assert!(harness.callback().await.is_ok());
 }
 
