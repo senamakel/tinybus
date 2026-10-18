@@ -257,6 +257,7 @@ pub trait RuntimeLeaseDriver: Send + Sync + 'static {
     async fn start(&self, reservation: &Self::Reservation) -> Result<(), Self::Error>;
     /// Stop work associated with this reservation.
     ///
+    /// STOP must be idempotent for this reservation so a proven-settled failure can be retried.
     /// `RetryableFailure` is valid only when the driver has authoritative evidence that this
     /// operation settled and a later STOP cannot overlap it. Timeouts, lost replies, malformed
     /// responses, and faulted peers must be `Unacknowledged` unless separate evidence proves

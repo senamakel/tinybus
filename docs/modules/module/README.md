@@ -64,6 +64,12 @@ operation remains uncertain or finite retries end, the dedicated runtime parks
 the reservation and callback guard without another retry. Caller close waiters
 may time out independently; that does not cancel cleanup.
 
+`ModuleClient::bind_attested` applies the same identity rule to module calls. It
+returns a `BoundModuleClient` only after the loaded peer proves the registered
+archive and library pair. Later ordinary, detailed, confidential, and held
+object calls use that same unique peer even after its public bus name changes
+owners. If the peer disconnects, those calls fail instead of rebinding.
+
 The lifecycle contract, retry policy, typed error accessor and content-free
 report records compile without the `modules` feature. The runtime lease and its
 host-object registration require `modules`.
