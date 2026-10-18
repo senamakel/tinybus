@@ -30,6 +30,7 @@ impl FailureSink for Reports {
 }
 
 struct StreamAccess {
+    record: &'static ReleaseRecord,
     connection: Connection,
     reporter: FailureReporter,
     enabled: bool,
@@ -38,7 +39,7 @@ struct StreamAccess {
 
 impl ModuleAccess for StreamAccess {
     fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
-        (id == RECORD.id).then_some(&RECORD)
+        (id == self.record.id).then_some(self.record)
     }
 
     fn enabled(&self) -> bool {
@@ -57,6 +58,10 @@ impl ModuleAccess for StreamAccess {
                 Err("not ready".to_string())
             }
         })
+    }
+
+    fn prepare_attested<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
     }
 
     fn proxy<'a>(
@@ -117,6 +122,10 @@ impl crate::ports::Transport for ObservedTransport {
 #[derive(Clone)]
 enum Behavior {
     Consume(tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
+    Bound {
+        label: &'static str,
+        received: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    },
     Invalid,
     Unavailable,
     Stall {
@@ -126,31 +135,45 @@ enum Behavior {
 }
 
 struct StreamService {
+    interface_name: &'static str,
     connection: Connection,
     behavior: Behavior,
     calls: Arc<AtomicUsize>,
+    events: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 #[async_trait]
 impl Interface for StreamService {
     fn name(&self) -> InterfaceName {
-        InterfaceName::new(RECORD.bus_name).unwrap()
+        InterfaceName::new(self.interface_name).unwrap()
     }
 
     fn members(&self) -> Vec<MemberName> {
-        ["Upload", "InvalidInput", "Unavailable", "Stall"]
+        ["Upload", "Generate", "Read", "Release", "InvalidInput", "Unavailable", "Stall"]
             .map(|name| MemberName::new(name).unwrap())
             .to_vec()
     }
 
     async fn call(&self, member: &MemberName, args: Value) -> crate::Result<Value> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(events) = &self.events {
+            events.lock().unwrap().push(member.as_str().to_string());
+        }
         match (&self.behavior, member.as_str()) {
             (Behavior::Consume(received), "Upload") => {
                 let (stream,): (StreamRef,) = serde_json::from_value(args)?;
                 let bytes = self.connection.read_stream(&stream).await?;
                 received.send(bytes.clone()).unwrap();
                 Ok(serde_json::json!(bytes.len()))
+            }
+            (Behavior::Bound { received, .. }, "Generate") => {
+                let (stream,): (StreamRef,) = serde_json::from_value(args)?;
+                let bytes = self.connection.read_stream(&stream).await?;
+                received.send(bytes).unwrap();
+                Ok(serde_json::json!("/child"))
+            }
+            (Behavior::Bound { label, .. }, "Read" | "Release") => {
+                Ok(serde_json::json!(label))
             }
             (Behavior::Invalid, "InvalidInput") => Err(Error::MethodFailed {
                 name: "ai.tinyhumans.tinydocs.Error.InvalidInput".to_string(),
