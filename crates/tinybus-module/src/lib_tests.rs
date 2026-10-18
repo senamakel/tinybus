@@ -333,19 +333,18 @@ async fn module_transport_close_wakes_an_idle_pending_receive() {
         closing_transport.close().await
     });
     close_started_rx.await.unwrap();
-    if tokio::time::timeout(Duration::from_secs(2), &mut closing)
-        .await
-        .is_err()
-    {
-        // Negative control for the old implementation: one inbound frame
-        // releases the receiver mutex that close is incorrectly waiting on.
-        let frame = serde_json::to_vec(&message()).unwrap();
-        sender.send((frame, false)).await.unwrap();
-        assert!(receiving.await.unwrap().unwrap().is_some());
-        assert!(closing.await.unwrap().is_ok());
-        panic!("close must wake an idle module receive without another frame");
+    match tokio::time::timeout(Duration::from_secs(2), &mut closing).await {
+        Ok(result) => assert!(result.unwrap().is_ok()),
+        Err(_) => {
+            // Negative control for the old implementation: one inbound frame
+            // releases the receiver mutex that close is incorrectly waiting on.
+            let frame = serde_json::to_vec(&message()).unwrap();
+            sender.send((frame, false)).await.unwrap();
+            assert!(receiving.await.unwrap().unwrap().is_some());
+            assert!(closing.await.unwrap().is_ok());
+            panic!("close must wake an idle module receive without another frame");
+        }
     }
-    assert!(closing.await.unwrap().is_ok());
     assert!(receiving.await.unwrap().unwrap().is_none());
 }
 
