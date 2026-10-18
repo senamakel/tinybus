@@ -27,6 +27,15 @@ pub enum ProxyFailure {
     Contract,
 }
 
+/// Outcome when bounded readiness did not return a serving module.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadinessFailure {
+    /// The access layer reported that the module is unavailable.
+    Unavailable,
+    /// The caller's explicit preparation deadline elapsed.
+    TimedOut,
+}
+
 /// What a [`ModuleClient`] needs from the host to reach a registry module.
 ///
 /// With the `modules` feature the host's `Resolver` implements it, loading the
@@ -49,6 +58,29 @@ pub trait ModuleAccess: Send + Sync {
     ///
     /// A message fit for a user or a model when the module cannot be loaded.
     fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>>;
+
+    /// Ensure `id` is ready, optionally bounding this caller's wait.
+    ///
+    /// Without a deadline this keeps the existing unbounded behavior. The
+    /// default bounds the returned future when one is supplied. An access layer
+    /// whose load work belongs to an independent process-lifetime task should
+    /// override this method so timing out the caller does not cancel that work.
+    fn ensure_loaded_within<'a>(
+        &'a self,
+        id: &'a str,
+        within: Option<Duration>,
+    ) -> AccessFuture<'a, Result<(), ReadinessFailure>> {
+        Box::pin(async move {
+            let loading = self.ensure_loaded(id);
+            match within {
+                Some(within) => tokio::time::timeout(within, loading)
+                    .await
+                    .map_err(|_| ReadinessFailure::TimedOut)?
+                    .map_err(|_| ReadinessFailure::Unavailable),
+                None => loading.await.map_err(|_| ReadinessFailure::Unavailable),
+            }
+        })
+    }
 
     /// Perform host-owned readiness work before a strict recipient-attestation
     /// query. The default refuses because generic accessors cannot prove that
