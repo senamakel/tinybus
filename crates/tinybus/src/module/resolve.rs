@@ -217,7 +217,11 @@ pub type RuntimeFuture =
     Pin<Box<dyn Future<Output = crate::Result<&'static ModuleRuntime>> + Send>>;
 
 /// Starts (or returns) the host's process-wide [`ModuleRuntime`], lazily, so a
-/// refusal or a cached outcome never starts a broker.
+/// refusal or a cached outcome never starts a broker. The SDK polls this future
+/// on a dedicated startup executor, independent of any caller runtime. Tasks
+/// that must outlive the provider future must be owned by the returned
+/// [`ModuleRuntime`] or another retained host executor; detached tasks on this
+/// temporary executor stop when startup finishes.
 pub type RuntimeProvider = Arc<dyn Fn() -> RuntimeFuture + Send + Sync>;
 
 /// Builds the configuration blob handed to a module when it is initialised.
@@ -517,7 +521,45 @@ impl Resolver {
             }
             Claim::Wait(receiver) => receiver,
             Claim::Run { sender, receiver } => {
-                self.start_resolution(record, sender).await;
+                // Runtime startup can itself be slow, and a task spawned on the
+                // caller's executor would be cancelled if that executor shuts
+                // down. Give this one startup attempt its own executor thread;
+                // once the module runtime exists, start_resolution transfers
+                // the actual load work to that process-owned runtime.
+                let resolver = self.clone();
+                let task_sender = sender.clone();
+                let thread = std::thread::Builder::new()
+                    .name("tinybus-resolution-startup".to_string())
+                    .spawn(move || {
+                        let startup_runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build();
+                        match startup_runtime {
+                            Ok(runtime) => {
+                                runtime.block_on(resolver.start_resolution(record, task_sender));
+                            }
+                            Err(error) => {
+                                let reason = format!(
+                                    "module '{}' is unavailable: the module startup executor could not start ({error})",
+                                    record.id
+                                );
+                                resolver.report(record, Reason::ResolutionFailed);
+                                resolution::global().complete(
+                                    record.id,
+                                    Resolution::Failed(reason),
+                                    task_sender,
+                                );
+                            }
+                        }
+                    });
+                if let Err(error) = thread {
+                    let reason = format!(
+                        "module '{}' is unavailable: the module startup executor could not start ({error})",
+                        record.id
+                    );
+                    self.report(record, Reason::ResolutionFailed);
+                    resolution::global().complete(record.id, Resolution::Failed(reason), sender);
+                }
                 receiver
             }
         };
@@ -585,10 +627,11 @@ impl Resolver {
         )
     }
 
-    /// Run the resolution for `record` as a process-lifetime task and record its
-    /// outcome. A caller runtime that shuts down mid-load must not cancel a
-    /// resolution other callers are waiting on. Without a module runtime there is
-    /// nothing to load into, so the outcome is recorded inline instead.
+    /// Run the resolution for `record` on its startup executor and record its
+    /// outcome. Once the module runtime is available, the resolution work moves
+    /// there so caller runtime teardown cannot cancel work other callers await.
+    /// Without a module runtime there is nothing to load into, so the outcome is
+    /// recorded inline instead.
     async fn start_resolution(
         &self,
         record: &'static ReleaseRecord,

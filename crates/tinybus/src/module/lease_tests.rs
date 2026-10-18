@@ -582,11 +582,13 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
-    match harness.calls.recv().await.unwrap() {
-        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+    let stop = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply,
         _ => panic!("a lease whose result was abandoned is rolled back"),
-    }
-    assert!(harness.callback().await.is_err());
+    };
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+    stop.send(StopOutcome::Acknowledged).unwrap();
+    harness.wait_callback_removed().await;
 }
 
 #[tokio::test]

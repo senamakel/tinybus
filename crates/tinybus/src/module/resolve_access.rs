@@ -3,7 +3,9 @@
 use super::Resolver;
 use crate::Proxy;
 use crate::module::ReleaseRecord;
-use crate::module::client::{AccessFuture, ModuleAccess, ProxyFailure, ReconfigureFailure};
+use crate::module::client::{
+    AccessFuture, ModuleAccess, ProxyFailure, ReadinessFailure, ReconfigureFailure,
+};
 use crate::module::failure::FailureReporter;
 use crate::module::resolution;
 
@@ -37,6 +39,22 @@ impl ModuleAccess for Resolver {
 
     fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
         Box::pin(Resolver::ensure_loaded(self, id))
+    }
+
+    fn ensure_loaded_within<'a>(
+        &'a self,
+        id: &'a str,
+        within: Option<std::time::Duration>,
+    ) -> AccessFuture<'a, Result<(), ReadinessFailure>> {
+        Box::pin(async move {
+            match Resolver::ensure_loaded_within(self, id, within).await {
+                Ok(()) => Ok(()),
+                Err(crate::module::LoadError::StillLoading) => Err(ReadinessFailure::TimedOut),
+                Err(
+                    crate::module::LoadError::Failed(_) | crate::module::LoadError::Disabled(_),
+                ) => Err(ReadinessFailure::Unavailable),
+            }
+        })
     }
 
     fn prepare_attested<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
