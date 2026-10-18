@@ -50,9 +50,9 @@ impl ModuleAccess for Resolver {
             match Resolver::ensure_loaded_within(self, id, within).await {
                 Ok(()) => Ok(()),
                 Err(crate::module::LoadError::StillLoading) => Err(ReadinessFailure::TimedOut),
-                Err(crate::module::LoadError::Failed(_) | crate::module::LoadError::Disabled(_)) => {
-                    Err(ReadinessFailure::Unavailable)
-                }
+                Err(
+                    crate::module::LoadError::Failed(_) | crate::module::LoadError::Disabled(_),
+                ) => Err(ReadinessFailure::Unavailable),
             }
         })
     }

@@ -615,9 +615,8 @@ impl ModuleClient {
         let alias_proxy = if let Some(fixture) = &self.fixture {
             fixture.clone()
         } else {
-            self.load_proxy(record, record.object_path)
-                .await
-                .map_err(ModuleCallFailure::local)?
+            self.load_proxy_for_binding(record, record.object_path)
+                .await?
         };
         // `ModuleAccess::proxy` and explicit fixtures may carry an integration-
         // specific deadline. An explicit client timeout overrides it; otherwise
@@ -813,6 +812,59 @@ impl ModuleClient {
                     ModuleCallError::IncompatibleContract
                 }
             })
+    }
+
+    /// Load a module for an ordinary persistent binding, honoring an explicit
+    /// client timeout without making a terminal loader failure from a caller
+    /// that merely stopped waiting.
+    async fn load_proxy_for_binding(
+        &self,
+        record: &'static ReleaseRecord,
+        object_path: &str,
+    ) -> Result<Proxy, ModuleCallFailure> {
+        match self
+            .access
+            .ensure_loaded_within(record.id, self.timeout)
+            .await
+        {
+            Ok(()) => {}
+            Err(ReadinessFailure::Unavailable) => {
+                return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
+            }
+            Err(ReadinessFailure::TimedOut) => {
+                return Err(report_proxy_failure_detailed(
+                    self.access.reporter(),
+                    record,
+                    &Error::transport("module readiness deadline elapsed"),
+                ));
+            }
+        }
+
+        let proxy = self.access.proxy(record.bus_name, object_path);
+        let proxy = if let Some(timeout) = self.timeout {
+            match tokio::time::timeout(timeout, proxy).await {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(report_proxy_failure_detailed(
+                        self.access.reporter(),
+                        record,
+                        &Error::transport("module proxy preparation deadline elapsed"),
+                    ));
+                }
+            }
+        } else {
+            proxy.await
+        };
+        proxy.map_err(|failure| match failure {
+            ProxyFailure::Transport => {
+                report(&*self.access, record, Reason::TransportFailed);
+                ModuleCallFailure::local(ModuleCallError::TransportFailed)
+            }
+            ProxyFailure::Contract => {
+                report(&*self.access, record, Reason::IncompatibleContract);
+                ModuleCallFailure::local(ModuleCallError::IncompatibleContract)
+            }
+        })
     }
 
     async fn invoke<R: DeserializeOwned>(
