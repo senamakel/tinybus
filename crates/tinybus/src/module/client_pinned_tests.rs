@@ -328,6 +328,11 @@ async fn ordinary_binding_accepts_a_resolver_owned_linked_factory_without_librar
     });
 
     assert!(RECORD.assets.is_empty());
+    let load_result = resolver.ensure_loaded(RECORD.id).await;
+    assert!(
+        load_result.is_ok(),
+        "linked resolver failed to load: {load_result:?}"
+    );
     let diagnostic_resolver = resolver.clone();
     let client = ModuleClient::new(resolver);
     let pinned = client.bind(RECORD.id).await.unwrap_or_else(|failure| {
