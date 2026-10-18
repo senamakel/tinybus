@@ -870,10 +870,7 @@ async fn a_bound_attested_client_and_its_objects_never_rebind_after_alias_handov
         "attested"
     );
     assert_eq!(
-        bound
-            .call_detailed::<String>("Consume", ())
-            .await
-            .unwrap(),
+        bound.call_detailed::<String>("Consume", ()).await.unwrap(),
         "attested"
     );
     assert_eq!(

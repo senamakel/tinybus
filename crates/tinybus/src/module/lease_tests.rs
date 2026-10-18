@@ -378,7 +378,10 @@ fn stop_outcome_debug_names_the_disposition_but_redacts_typed_errors() {
     let uncertain = StopOutcome::Unacknowledged(DriverError("private timeout detail"));
     assert_eq!(format!("{retry:?}"), "RetryableFailure(<redacted>)");
     assert_eq!(format!("{uncertain:?}"), "Unacknowledged(<redacted>)");
-    assert_eq!(format!("{:?}", StopOutcome::<DriverError>::Acknowledged), "Acknowledged");
+    assert_eq!(
+        format!("{:?}", StopOutcome::<DriverError>::Acknowledged),
+        "Acknowledged"
+    );
 }
 
 #[test]
@@ -551,7 +554,10 @@ async fn reserve_error_returns_the_typed_failure_without_starting_cleanup() {
     assert_eq!(error.phase(), LeasePhase::Reserve);
     assert_eq!(error.driver_error().unwrap().0, "private reserve detail");
     assert!(!error.to_string().contains("private reserve detail"));
-    assert!(harness.calls.try_recv().is_err(), "no reservation means no STOP or START");
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "no reservation means no STOP or START"
+    );
 }
 
 #[tokio::test]
@@ -1010,7 +1016,10 @@ async fn callback_address_error_rolls_back_before_export_or_start() {
             .unwrap(),
         _ => panic!("reserve is first"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),
@@ -1023,8 +1032,14 @@ async fn callback_address_error_rolls_back_before_export_or_start() {
         panic!("callback address error cannot produce a lease");
     };
     assert_eq!(error.phase(), LeasePhase::Address);
-    assert_eq!(error.driver_error().unwrap().0, "private address error detail");
-    assert!(harness.calls.try_recv().is_err(), "address error prevents START");
+    assert_eq!(
+        error.driver_error().unwrap().0,
+        "private address error detail"
+    );
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "address error prevents START"
+    );
     assert!(harness.callback().await.is_err());
 }
 
@@ -1133,17 +1148,25 @@ async fn cloned_close_waiters_share_the_same_unacknowledged_typed_result() {
     let second_waiter = tokio::spawn(async move { second.close().await });
     match harness.calls.recv().await.unwrap() {
         DriverCall::Stop(_, reply) => reply
-            .send(StopOutcome::Unacknowledged(DriverError("private uncertain result")))
+            .send(StopOutcome::Unacknowledged(DriverError(
+                "private uncertain result",
+            )))
             .unwrap(),
         _ => panic!("close starts the single STOP worker"),
     }
     let first_error = first_waiter.await.unwrap().unwrap_err();
     let second_error = second_waiter.await.unwrap().unwrap_err();
     assert!(Arc::ptr_eq(&first_error, &second_error));
-    assert_eq!(first_error.driver_error().unwrap().0, "private uncertain result");
+    assert_eq!(
+        first_error.driver_error().unwrap().0,
+        "private uncertain result"
+    );
     assert!(!format!("{first_error:?}").contains("private uncertain result"));
     assert!(harness.callback().await.is_ok());
-    assert!(harness.calls.try_recv().is_err(), "joined waiters never duplicate STOP");
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "joined waiters never duplicate STOP"
+    );
 }
 
 #[tokio::test]
@@ -1292,8 +1315,14 @@ async fn a_child_stop_panic_after_deadline_keeps_the_callback_parked() {
     stop_reply
         .send(StopOutcome::Unacknowledged(DriverError("uncertain")))
         .unwrap();
-    assert!(harness.callback().await.is_ok(), "a child panic cannot acknowledge STOP");
-    assert!(harness.calls.try_recv().is_err(), "the panicked operation is never retried");
+    assert!(
+        harness.callback().await.is_ok(),
+        "a child panic cannot acknowledge STOP"
+    );
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "the panicked operation is never retried"
+    );
 }
 
 #[tokio::test]
