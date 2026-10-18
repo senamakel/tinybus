@@ -274,7 +274,7 @@ async fn replacing_a_host_object_contains_the_retired_callback_drop_panic() {
     assert_eq!(value, serde_json::json!("new"));
     drop(replacement);
     wait_for_owner(runtime.connection(), name.as_str(), None).await;
-    assert!(proxy.call::<_, serde_json::Value>("Value", ()).await.is_err());
+    assert!(proxy.call::<serde_json::Value>("Value", ()).await.is_err());
 }
 
 #[tokio::test]
