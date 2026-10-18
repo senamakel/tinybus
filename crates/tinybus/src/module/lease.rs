@@ -6,6 +6,7 @@ use std::{error::Error as StdError, sync::Arc, time::Duration};
 use super::runtime::ModuleRuntime;
 #[cfg(feature = "modules")]
 use std::{
+    any::Any,
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
@@ -353,6 +354,15 @@ impl<E: Send + Sync + 'static> LeaseControl<E> {
         }
     }
 
+    fn park<T: Send + 'static>(self: &Arc<Self>, retained: T) {
+        let control = self.clone();
+        self.runtime.spawn(async move {
+            let _control = control;
+            let _retained = retained;
+            std::future::pending::<()>().await;
+        });
+    }
+
     async fn wait(&self) -> Result<(), Arc<LeaseError<E>>> {
         let mut state = self.state.subscribe();
         self.start();
@@ -377,14 +387,43 @@ impl<E: Send + Sync + 'static> LeaseControl<E> {
 #[cfg(feature = "modules")]
 struct ActivationRollback<E: Send + Sync + 'static> {
     control: Arc<LeaseControl<E>>,
+    retained_object: Option<Arc<dyn Any + Send + Sync>>,
     armed: bool,
+    start_in_flight: bool,
+}
+
+#[cfg(feature = "modules")]
+impl<E: Send + Sync + 'static> ActivationRollback<E> {
+    fn retain_object<T: Any + Send + Sync + 'static>(&mut self, object: Arc<T>) {
+        self.retained_object = Some(object);
+    }
+
+    fn mark_start_in_flight(&mut self) {
+        self.start_in_flight = true;
+    }
+
+    fn mark_start_settled(&mut self) {
+        self.start_in_flight = false;
+    }
+
+    fn park(&mut self) {
+        self.armed = false;
+        match self.retained_object.take() {
+            Some(object) => self.control.park(object),
+            None => self.control.park(()),
+        }
+    }
 }
 
 #[cfg(feature = "modules")]
 impl<E: Send + Sync + 'static> Drop for ActivationRollback<E> {
     fn drop(&mut self) {
         if self.armed {
-            self.control.start();
+            if self.start_in_flight {
+                self.park();
+            } else {
+                self.control.start();
+            }
         }
     }
 }
@@ -528,7 +567,9 @@ where
     let control = Arc::new(LeaseControl::new(runtime.clone(), starter));
     let mut rollback = ActivationRollback {
         control: control.clone(),
+        retained_object: None,
         armed: true,
+        start_in_flight: false,
     };
 
     if let Err(error) = driver.validate(&reservation) {
@@ -553,6 +594,7 @@ where
             ));
         }
     };
+    rollback.retain_object(object.clone());
 
     let callback = match catch_unwind(AssertUnwindSafe(|| make_callback(&reservation, &object))) {
         Ok(Ok(callback)) => callback,
@@ -613,18 +655,40 @@ where
         }
     }
 
-    if let Err(error) = driver.start(&reservation).await {
-        let acknowledged = control.wait().await.is_ok();
-        return Err(LeaseError::new(
-            LeasePhase::Start,
-            None,
-            acknowledged,
-            Some(error),
-        ));
+    rollback.mark_start_in_flight();
+    let start_driver = driver.clone();
+    let start_reservation = reservation.clone();
+    let start = runtime.spawn(async move { start_driver.start(&start_reservation).await });
+    match start.await {
+        Ok(StartOutcome::Started) => {
+            rollback.mark_start_settled();
+            rollback.armed = false;
+            Ok(RuntimeLease { object, control })
+        }
+        Ok(StartOutcome::SettledFailure(error)) => {
+            rollback.mark_start_settled();
+            let acknowledged = control.wait().await.is_ok();
+            Err(LeaseError::new(
+                LeasePhase::Start,
+                None,
+                acknowledged,
+                Some(error),
+            ))
+        }
+        Ok(StartOutcome::Unacknowledged(error)) => {
+            rollback.park();
+            Err(LeaseError::new(
+                LeasePhase::Start,
+                None,
+                false,
+                Some(error),
+            ))
+        }
+        Err(_) => {
+            rollback.park();
+            Err(LeaseError::new(LeasePhase::Start, None, false, None))
+        }
     }
-
-    rollback.armed = false;
-    Ok(RuntimeLease { object, control })
 }
 
 #[cfg(feature = "modules")]
