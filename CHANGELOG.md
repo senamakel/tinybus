@@ -13,6 +13,11 @@
 - Unacknowledged and faulted cleanup retains the exact callback registration
   until STOP acknowledgement.
 
+### Fixed
+
+- Closing a linked module connection wakes an idle receive without requiring
+  another inbound frame, drains queued frames, and refuses sends after close.
+
 ## 0.3.0
 
 ### Breaking changes
