@@ -44,6 +44,30 @@ last initialized instance. Linked modules keep the embedding host's tracing and
 panic hook. The existing instance-wide last panic location is diagnostic state,
 not a proof of exact attribution among concurrently panicking methods.
 
+## Host runtime leases
+
+`RuntimeLeaseDriver` is the protocol-neutral contract for a host that reserves
+module-side resources and exports one callback through `ModuleRuntime::lease`.
+The host validates the opaque reservation, creates its object, supplies an
+owned callback factory, then starts the module. The callback factory runs only
+after validation and object creation. The returned cloneable `RuntimeLease`
+provides `object()` and `close()`; the last user clone starts the same cleanup
+worker as explicit close, including when dropped outside Tokio.
+
+The driver returns `StopOutcome::Acknowledged`, `RetryableFailure`, or
+`Unacknowledged`. A retryable failure is safe only after the driver proves the
+operation settled. Lost replies, timeouts, malformed responses and faults are
+uncertain unless the driver has other authoritative evidence. The SDK retains
+the active STOP future across its per-attempt deadline, never overlaps STOP
+attempts, and removes the exact callback registration only after ACK. If the
+operation remains uncertain or finite retries end, the dedicated runtime parks
+the reservation and callback guard without another retry. Caller close waiters
+may time out independently; that does not cancel cleanup.
+
+The lifecycle contract, retry policy, typed error accessor and content-free
+report records compile without the `modules` feature. The runtime lease and its
+host-object registration require `modules`.
+
 ## Opted-in terminal factories
 
 Configured modules can opt in with `module_export!(terminal_setup_factory =
