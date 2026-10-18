@@ -433,7 +433,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     use crate::module::{Availability, LinkedRegistry, ModuleSource, Resolver, ResolverInputs};
     use std::collections::HashMap;
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     RESOLVER_LINKED_STARTS.store(0, Ordering::SeqCst);
     RESOLVER_LINKED_DELIVERIES.store(0, Ordering::SeqCst);
@@ -452,6 +452,12 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     let runtime = RUNTIME.get_or_init(|| {
         ModuleRuntime::start(&RuntimeNames::default(), None).expect("test runtime starts")
     });
+    let runtime_provider_started = Arc::new(tokio::sync::Notify::new());
+    let runtime_provider_gate = Arc::new(tokio::sync::Notify::new());
+    let first_runtime_request = Arc::new(AtomicBool::new(true));
+    let started_runtime_provider = runtime_provider_started.clone();
+    let release_runtime_provider = runtime_provider_gate.clone();
+    let first_runtime_request_for_provider = first_runtime_request.clone();
     let linked = Arc::new(LinkedRegistry::new());
     linked.register(RESOLVER_LINKED_RECORD.id, resolver_linked_factory);
     let reports = Arc::new(RecordedReports::default());
@@ -468,7 +474,18 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         on_resolved: None,
         records: vec![&RESOLVER_LINKED_RECORD],
         terminal_marker: String::new(),
-        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        runtime: Arc::new(move || {
+            let first = first_runtime_request_for_provider.swap(false, Ordering::SeqCst);
+            let started = started_runtime_provider.clone();
+            let gate = release_runtime_provider.clone();
+            Box::pin(async move {
+                if first {
+                    started.notify_one();
+                    gate.notified().await;
+                }
+                Ok(runtime)
+            })
+        }),
         module_config: Arc::new(|_| serde_json::Value::Null),
         reporter: Arc::new(FailureReporter::new(reports.clone())),
     });
@@ -525,27 +542,65 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         proxy_calls: proxy_calls.clone(),
     })
     .with_timeout(std::time::Duration::from_millis(50));
+    let runtime_provider_started_wait = runtime_provider_started.notified();
     let client_for_bind = client.clone();
     let mut first_bind =
         tokio::spawn(async move { client_for_bind.bind(RESOLVER_LINKED_RECORD.id).await });
-    tokio::time::timeout(std::time::Duration::from_secs(2), started_rx)
-        .await
-        .expect("linked initializer should enter its gate")
-        .unwrap();
-    let first_result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut first_bind)
-        .await
-        .expect("explicit bind deadline should stop this caller waiting")
-        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        runtime_provider_started_wait,
+    )
+    .await
+    .expect("the first runtime-provider request should enter its gate");
+    let first_result =
+        match tokio::time::timeout(std::time::Duration::from_secs(1), &mut first_bind).await {
+            Ok(joined) => joined.unwrap(),
+            Err(_) => {
+                first_bind.abort();
+                runtime_provider_gate.notify_one();
+                panic!("explicit bind deadline must bound a stalled runtime provider");
+            }
+        };
     assert!(matches!(
         first_result,
         Err(failure) if failure.kind == ModuleCallError::TransportFailed
     ));
-    assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 0);
     assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         reports.0.lock().unwrap().as_slice(),
         &[Reason::TransportFailed]
+    );
+
+    let linked_initializer_started = started_rx;
+    runtime_provider_gate.notify_one();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        linked_initializer_started,
+    )
+    .await
+    .expect("the process-owned resolver should start linked initialization")
+    .unwrap();
+    assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
+
+    let client_for_second_bind = client.clone();
+    let mut second_bind =
+        tokio::spawn(async move { client_for_second_bind.bind(RESOLVER_LINKED_RECORD.id).await });
+    let second_result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut second_bind)
+        .await
+        .expect("the second caller should use a bounded wait on the existing resolution")
+        .unwrap();
+    assert!(matches!(
+        second_result,
+        Err(failure) if failure.kind == ModuleCallError::TransportFailed
+    ));
+    assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        reports.0.lock().unwrap().as_slice(),
+        &[Reason::TransportFailed, Reason::TransportFailed]
     );
 
     release.send(()).unwrap();
@@ -565,7 +620,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         reports.0.lock().unwrap().as_slice(),
-        &[Reason::TransportFailed]
+        &[Reason::TransportFailed, Reason::TransportFailed]
     );
     drop(pinned);
 }
