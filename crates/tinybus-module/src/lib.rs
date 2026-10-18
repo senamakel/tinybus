@@ -1018,7 +1018,11 @@ where
 
 /// Export a tinybus module's descriptor, manifest and initialization entrypoint.
 ///
-/// ```ignore
+/// ```
+/// async fn setup(_: tinybus::Connection) -> tinybus::Result<()> {
+///     Ok(())
+/// }
+///
 /// tinybus_module::module_export! { setup = setup, worker_threads = 1 }
 /// ```
 ///

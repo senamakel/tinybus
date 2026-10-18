@@ -109,6 +109,40 @@ impl<K, S, E> ModuleServiceSlot<K, S, E> {
         (old.close)(old.service).await
     }
 
+    /// Run a host-owned explicit close against the installed service while
+    /// serializing it with operations, replacement, and other closes.
+    ///
+    /// An empty slot is a successful no-op and does not call `close`. If the
+    /// callback returns an error or this future is cancelled, the entry and
+    /// its stored closer remain installed. Cancellation does not establish
+    /// whether a remote module acknowledged the close, so the host owns the
+    /// decision about whether another attempt is safe. Once the callback
+    /// returns success, the entry is retired without invoking its stored
+    /// closer; the callback owns the close operation and its acknowledgement.
+    ///
+    /// Unlike [`Self::close`], this method borrows the service so the host can
+    /// perform policy-specific cleanup before the slot drops it. The callback
+    /// future may borrow the service for its duration.
+    pub async fn try_close_with<Close>(&self, close: Close) -> Result<(), E>
+    where
+        K: Send,
+        S: Send,
+        Close: for<'service> FnOnce(
+                &'service mut S,
+            )
+                -> Pin<Box<dyn Future<Output = Result<(), E>> + Send + 'service>>
+            + Send,
+    {
+        let mut entry = self.entry.lock().await;
+        let Some(current) = entry.as_mut() else {
+            return Ok(());
+        };
+
+        close(&mut current.service).await?;
+        let _retired = entry.take();
+        Ok(())
+    }
+
     /// Register one host-provided shutdown callback for this slot.
     ///
     /// The host supplies its own registrar, such as its process shutdown hook

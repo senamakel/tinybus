@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4
+
+### Added
+
+- `ModuleServiceSlot::try_close_with` runs a borrowed host close callback under
+  the slot lock. Errors and cancellation retain the entry; acknowledged success
+  retires it without calling the stored closer a second time.
+
 ## 0.3.3
 
 ### Fixed
