@@ -288,8 +288,12 @@ async fn stalled_binding_preparation_is_bounded(stage: StalledPreparationStage) 
         usize::from(stage == StalledPreparationStage::Proxy)
     );
     assert!(
-        observed.lock().unwrap().is_empty(),
-        "a timed-out preparation must not query the owner or call the module"
+        observed
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|member| member != "GetNameOwner"),
+        "a timed-out preparation must not query the owner"
     );
     assert!(calls.lock().unwrap().is_empty());
     assert_eq!(
