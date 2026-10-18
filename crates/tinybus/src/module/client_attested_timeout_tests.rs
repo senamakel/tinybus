@@ -247,7 +247,7 @@ async fn ordinary_binding_uses_the_fixture_proxy_deadline_for_owner_lookup() {
     tokio::time::timeout(Duration::from_millis(100), async {
         tokio::select! {
             _ = held_request => {},
-            joined = &mut binding => panic!("bind returned before owner lookup was held: {joined:?}; observed={:?}", observed.lock().unwrap()),
+            _joined = &mut binding => panic!("bind returned before owner lookup was held; observed={:?}", observed.lock().unwrap()),
         }
     })
     .await
