@@ -11,7 +11,6 @@ use std::sync::{
 use tokio::sync::{mpsc, oneshot};
 
 const CALLBACK_NAME: &str = "ai.tinyhumans.tinybus.tests.RuntimeLease";
-const CALLBACK_PATH: &str = "/ai/tinyhumans/tinybus/tests/RuntimeLease";
 
 #[derive(Clone, Debug)]
 struct Identity(Arc<()>, usize);
@@ -241,15 +240,82 @@ impl Harness {
     }
 
     async fn callback(&self) -> crate::Result<serde_json::Value> {
+        self.callback_at(self.driver.identity.1).await
+    }
+
+    async fn callback_at(&self, id: usize) -> crate::Result<serde_json::Value> {
         self.runtime
             .proxy(
                 CALLBACK_NAME,
-                &format!("/ai/tinyhumans/tinybus/tests/RuntimeLease{}", self.driver.identity.1),
+                &format!("/ai/tinyhumans/tinybus/tests/RuntimeLease{id}"),
             )
             .unwrap()
             .call("Touch", ())
             .await
     }
+}
+
+#[tokio::test]
+async fn acknowledged_close_removes_only_its_exact_callback_registration() {
+    let mut harness = Harness::new();
+    let first = harness.opened().await;
+    let second_driver = ControlledDriver {
+        identity: Identity(Arc::new(()), 2),
+        ..harness.driver.clone()
+    };
+    let callback_calls = harness.callback_calls.clone();
+    let reports = harness.report_sender.clone();
+    let policy = RetryPolicy::new(
+        std::time::Duration::from_millis(20),
+        vec![std::time::Duration::ZERO],
+    )
+    .unwrap();
+    let opening = tokio::spawn(harness.runtime.lease(
+        second_driver.clone(),
+        move |reservation: &Reservation, object: &Object| {
+            if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
+                return Err(DriverError("reservation/object mismatch"));
+            }
+            Ok(Callback(callback_calls))
+        },
+        policy,
+        move |report| { let _ = reports.send(report); },
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(second_driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("second reservation begins independently"),
+    }
+    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("second object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("second callback is registered before start"),
+    }
+    let second = opening.await.unwrap().unwrap();
+    assert_eq!(harness.callback_at(1).await.unwrap(), serde_json::json!(1));
+    assert_eq!(harness.callback_at(2).await.unwrap(), serde_json::json!(2));
+
+    let first_close = tokio::spawn(async move { first.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("first close stops only its reservation"),
+    }
+    assert!(first_close.await.unwrap().is_ok());
+    assert!(harness.callback_at(1).await.is_err());
+    assert_eq!(harness.callback_at(2).await.unwrap(), serde_json::json!(3));
+
+    let second_close = tokio::spawn(async move { second.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("second close stops its own reservation"),
+    }
+    assert!(second_close.await.unwrap().is_ok());
+    assert!(harness.callback_at(2).await.is_err());
 }
 
 #[tokio::test]
