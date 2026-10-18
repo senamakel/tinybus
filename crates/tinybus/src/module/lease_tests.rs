@@ -1,8 +1,6 @@
 use super::*;
 
-// These tests are a source draft against the approved RuntimeLease API shape.
-// They are intentionally not compiled while U5 is unpublished and the API
-// implementation has not been authorized.
+// RuntimeLease lifecycle and callback ownership behavior tests.
 
 use std::sync::{
     Arc,
@@ -175,6 +173,61 @@ impl crate::Interface for Callback {
         _: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
         Ok(serde_json::json!(self.0.fetch_add(1, Ordering::AcqRel) + 1))
+    }
+}
+
+struct PanickingNameCallback {
+    calls: Arc<AtomicUsize>,
+    armed: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl crate::Interface for PanickingNameCallback {
+    fn name(&self) -> crate::InterfaceName {
+        assert!(!self.armed.load(Ordering::Acquire), "name called during removal");
+        CALLBACK_NAME.parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Touch".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(serde_json::json!(self.calls.fetch_add(1, Ordering::AcqRel) + 1))
+    }
+}
+
+struct PanickingDropCallback {
+    calls: Arc<AtomicUsize>,
+    armed: Arc<AtomicBool>,
+}
+
+impl Drop for PanickingDropCallback {
+    fn drop(&mut self) {
+        assert!(!self.armed.load(Ordering::Acquire), "callback destructor panic");
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::Interface for PanickingDropCallback {
+    fn name(&self) -> crate::InterfaceName {
+        CALLBACK_NAME.parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Touch".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(serde_json::json!(self.calls.fetch_add(1, Ordering::AcqRel) + 1))
     }
 }
 
@@ -1103,6 +1156,112 @@ async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
         _ => panic!("close sends STOP"),
     }
     assert!(closing.await.unwrap().is_ok());
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn callback_name_is_not_reinvoked_during_acknowledged_withdrawal() {
+    let mut harness = Harness::new();
+    let calls = harness.callback_calls.clone();
+    let armed = Arc::new(AtomicBool::new(false));
+    let name_armed = armed.clone();
+    let opening = tokio::spawn(harness.runtime.lease(
+        harness.driver.clone(),
+        move |_, _| {
+            Ok(PanickingNameCallback {
+                calls,
+                armed: name_armed,
+            })
+        },
+        RetryPolicy::new(
+            std::time::Duration::from_millis(100),
+            vec![std::time::Duration::ZERO],
+        )
+        .unwrap(),
+        |_| {},
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("start follows callback registration"),
+    }
+    let lease = opening.await.unwrap().unwrap();
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+    armed.store(true, Ordering::Release);
+
+    let closing = tokio::spawn(async move { lease.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("close sends STOP"),
+    }
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), closing)
+        .await
+        .expect("close waiter must finish after callback removal")
+        .unwrap();
+    assert!(closed.is_ok());
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn callback_destructor_panic_does_not_interrupt_acknowledged_withdrawal() {
+    let mut harness = Harness::new();
+    let calls = harness.callback_calls.clone();
+    let armed = Arc::new(AtomicBool::new(false));
+    let drop_armed = armed.clone();
+    let opening = tokio::spawn(harness.runtime.lease(
+        harness.driver.clone(),
+        move |_, _| {
+            Ok(PanickingDropCallback {
+                calls,
+                armed: drop_armed,
+            })
+        },
+        RetryPolicy::new(
+            std::time::Duration::from_millis(100),
+            vec![std::time::Duration::ZERO],
+        )
+        .unwrap(),
+        |_| {},
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("start follows callback registration"),
+    }
+    let lease = opening.await.unwrap().unwrap();
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+    armed.store(true, Ordering::Release);
+
+    let closing = tokio::spawn(async move { lease.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("close sends STOP"),
+    }
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), closing)
+        .await
+        .expect("close waiter must finish when callback Drop panics")
+        .unwrap();
+    assert!(closed.is_ok());
     assert!(harness.callback().await.is_err());
 }
 
