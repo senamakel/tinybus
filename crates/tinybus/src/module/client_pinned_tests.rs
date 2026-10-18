@@ -30,9 +30,19 @@ fn reporter() -> FailureReporter {
     FailureReporter::new(Arc::new(DiscardReports))
 }
 
+#[derive(Default)]
+struct RecordedReports(Mutex<Vec<Reason>>);
+
+impl FailureSink for RecordedReports {
+    fn capture(&self, report: &FailureReport<'_>) {
+        self.0.lock().unwrap().push(report.reason);
+    }
+}
+
 struct Access {
     connection: Connection,
     reporter: FailureReporter,
+    enabled: bool,
 }
 
 impl ModuleAccess for Access {
@@ -41,7 +51,7 @@ impl ModuleAccess for Access {
     }
 
     fn enabled(&self) -> bool {
-        true
+        self.enabled
     }
 
     fn reporter(&self) -> &FailureReporter {
@@ -164,6 +174,7 @@ async fn an_ordinary_fixture_with_no_release_assets_can_bind() {
     let client = ModuleClient::new(Access {
         connection: caller,
         reporter: reporter(),
+        enabled: true,
     })
     .with_fixture(proxy);
 
@@ -194,6 +205,7 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
     let client = ModuleClient::new(Access {
         connection: caller,
         reporter: reporter(),
+        enabled: true,
     })
     .with_fixture(proxy);
     let pinned = client.bind(RECORD.id).await.unwrap();
@@ -244,4 +256,48 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
     assert!(events_b.lock().unwrap().is_empty());
     assert!(received_b_rx.try_recv().is_err());
     broker_task.abort();
+}
+
+#[tokio::test]
+async fn ordinary_binding_refuses_disabled_unknown_and_unowned_modules() {
+    let bus = MemoryBus::new();
+    let _broker = Broker::new().spawn(bus.clone());
+    let caller = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+
+    let disabled_reports = Arc::new(RecordedReports::default());
+    let disabled = ModuleClient::new(Access {
+        connection: caller.clone(),
+        reporter: FailureReporter::new(disabled_reports.clone()),
+        enabled: false,
+    });
+    let disabled_result = disabled.bind(RECORD.id).await;
+    assert!(matches!(disabled_result, Err(failure) if failure.kind == ModuleCallError::Unavailable));
+    assert_eq!(disabled_reports.0.lock().unwrap().as_slice(), &[Reason::Disabled]);
+
+    let unknown_reports = Arc::new(RecordedReports::default());
+    let unknown = ModuleClient::new(Access {
+        connection: caller.clone(),
+        reporter: FailureReporter::new(unknown_reports.clone()),
+        enabled: true,
+    });
+    let unknown_result = unknown.bind("not-registered").await;
+    assert!(matches!(unknown_result, Err(failure) if failure.kind == ModuleCallError::Unavailable));
+    assert_eq!(unknown_reports.0.lock().unwrap().len(), 1);
+
+    // The broker has no peer advertising the registered well-known name.
+    let unowned_reports = Arc::new(RecordedReports::default());
+    let unowned_proxy = caller
+        .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+        .unwrap();
+    let unowned = ModuleClient::new(Access {
+        connection: caller,
+        reporter: FailureReporter::new(unowned_reports.clone()),
+        enabled: true,
+    })
+    .with_fixture(unowned_proxy);
+    let unowned_result = unowned.bind(RECORD.id).await;
+    assert!(matches!(unowned_result, Err(failure) if failure.kind == ModuleCallError::Unavailable));
+    assert_eq!(unowned_reports.0.lock().unwrap().as_slice(), &[Reason::ModuleUnavailable]);
 }
