@@ -217,7 +217,11 @@ pub type RuntimeFuture =
     Pin<Box<dyn Future<Output = crate::Result<&'static ModuleRuntime>> + Send>>;
 
 /// Starts (or returns) the host's process-wide [`ModuleRuntime`], lazily, so a
-/// refusal or a cached outcome never starts a broker.
+/// refusal or a cached outcome never starts a broker. The SDK polls this future
+/// on a dedicated startup executor, independent of any caller runtime. Tasks
+/// that must outlive the provider future must be owned by the returned
+/// [`ModuleRuntime`] or another retained host executor; detached tasks on this
+/// temporary executor stop when startup finishes.
 pub type RuntimeProvider = Arc<dyn Fn() -> RuntimeFuture + Send + Sync>;
 
 /// Builds the configuration blob handed to a module when it is initialised.
