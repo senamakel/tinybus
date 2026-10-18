@@ -545,7 +545,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         proxy_calls: proxy_calls.clone(),
     })
     .with_timeout(std::time::Duration::from_millis(50));
-    let runtime_provider_started_wait = runtime_provider_started.notified();
+    let runtime_provider_started_for_runtime = runtime_provider_started.clone();
     let client_for_abandoned_runtime = client.clone();
     let (runtime_dropped_tx, runtime_dropped_rx) = tokio::sync::oneshot::channel();
     let abandoned_runtime = std::thread::spawn(move || {
@@ -561,7 +561,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         caller_runtime.block_on(async {
             tokio::time::timeout(
                 std::time::Duration::from_secs(2),
-                runtime_provider_started_wait,
+                runtime_provider_started_for_runtime.notified(),
             )
             .await
             .expect("the first runtime-provider request should enter its gate");
