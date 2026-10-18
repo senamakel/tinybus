@@ -13,10 +13,12 @@ use tokio::sync::{mpsc, oneshot};
 const CALLBACK_NAME: &str = "ai.tinyhumans.tinybus.tests.RuntimeLease";
 const CALLBACK_PATH: &str = "/ai/tinyhumans/tinybus/tests/RuntimeLease";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Identity(Arc<()>);
 
+#[derive(Debug)]
 struct Reservation(Identity);
+#[derive(Debug)]
 struct Object(Identity);
 
 #[derive(Debug)]
