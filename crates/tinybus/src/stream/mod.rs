@@ -252,6 +252,8 @@ pub(crate) struct StreamRegistry {
     limits: std::sync::RwLock<StreamLimits>,
     inbound: std::sync::Mutex<HashMap<String, Arc<Inbound>>>,
     next_id: AtomicU64,
+    #[cfg(test)]
+    after_close_seal: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl StreamRegistry {
@@ -260,6 +262,8 @@ impl StreamRegistry {
             limits: std::sync::RwLock::new(StreamLimits::default()),
             inbound: std::sync::Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            #[cfg(test)]
+            after_close_seal: std::sync::Mutex::new(None),
         }
     }
 
@@ -463,6 +467,16 @@ impl StreamRegistry {
         let received = stream.received.load(Ordering::Relaxed);
         stream.touch();
         stream.seal();
+
+        #[cfg(test)]
+        if let Some(hook) = self
+            .after_close_seal
+            .lock()
+            .expect("stream close test hook lock")
+            .take()
+        {
+            hook();
+        }
 
         if received != total_len {
             stream.finish(Outcome::Aborted("the sender closed a truncated stream"));
