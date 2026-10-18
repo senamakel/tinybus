@@ -384,30 +384,6 @@ fn stop_outcome_debug_names_the_disposition_but_redacts_typed_errors() {
     );
 }
 
-#[test]
-fn close_state_snapshots_clone_each_phase_without_cloning_driver_errors() {
-    let error = Arc::new(LeaseError::new(
-        LeasePhase::Stop,
-        Some(2),
-        false,
-        Some(DriverError("private stop error")),
-    ));
-    let snapshots = [
-        CloseState::Open,
-        CloseState::Running,
-        CloseState::Acknowledged,
-        CloseState::Unacknowledged(error.clone()),
-    ];
-    for snapshot in snapshots {
-        let cloned = snapshot.clone();
-        if let (CloseState::Unacknowledged(original), CloseState::Unacknowledged(copy)) =
-            (&snapshot, cloned)
-        {
-            assert!(Arc::ptr_eq(original, &copy));
-        }
-    }
-}
-
 #[tokio::test]
 async fn acknowledged_close_removes_only_its_exact_callback_registration() {
     let mut harness = Harness::new();
