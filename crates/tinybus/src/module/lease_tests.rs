@@ -1123,6 +1123,30 @@ async fn exhausted_stop_parks_the_callback_until_an_acknowledgement() {
 }
 
 #[tokio::test]
+async fn cloned_close_waiters_share_the_same_unacknowledged_typed_result() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    let first = lease.clone();
+    let second = lease.clone();
+    drop(lease);
+    let first_waiter = tokio::spawn(async move { first.close().await });
+    let second_waiter = tokio::spawn(async move { second.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply
+            .send(StopOutcome::Unacknowledged(DriverError("private uncertain result")))
+            .unwrap(),
+        _ => panic!("close starts the single STOP worker"),
+    }
+    let first_error = first_waiter.await.unwrap().unwrap_err();
+    let second_error = second_waiter.await.unwrap().unwrap_err();
+    assert!(Arc::ptr_eq(&first_error, &second_error));
+    assert_eq!(first_error.driver_error().unwrap().0, "private uncertain result");
+    assert!(!format!("{first_error:?}").contains("private uncertain result"));
+    assert!(harness.callback().await.is_ok());
+    assert!(harness.calls.try_recv().is_err(), "joined waiters never duplicate STOP");
+}
+
+#[tokio::test]
 async fn retryable_stop_uses_the_configured_nonzero_backoff_sequence_in_order() {
     let mut harness = Harness::new();
     let first_delay = std::time::Duration::from_millis(40);
