@@ -1465,11 +1465,11 @@ async fn a_stop_deadline_keeps_the_remote_operation_owned_until_its_late_ack() {
         harness.calls.try_recv().is_err(),
         "unresolved STOP remains the only remote operation"
     );
-    first_reply.send(StopOutcome::Acknowledged).unwrap();
     assert!(
         closing.await.unwrap().is_err(),
         "close observes the deadline as unacknowledged"
     );
+    first_reply.send(StopOutcome::Acknowledged).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             if harness.callback().await.is_err() {
