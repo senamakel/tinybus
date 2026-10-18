@@ -887,6 +887,76 @@ struct LifecyclePeer {
 }
 
 #[cfg(feature = "modules")]
+struct CountedArguments(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(feature = "modules")]
+impl serde::Serialize for CountedArguments {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        serializer.serialize_unit()
+    }
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn a_ready_unattested_peer_is_refused_before_arguments_or_business_delivery() {
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = strict_record();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    service
+        .serve_at(
+            crate::ObjectPath::new(record.object_path).unwrap(),
+            AttestedReceiver {
+                label: "ready",
+                calls: calls.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    service.request_name(record.bus_name).await.unwrap();
+    let preparations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let client = ModuleClient::new(PreparedAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        preparations: preparations.clone(),
+    });
+    let serializations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let refusal = client
+        .call_attested_detailed::<String>(
+            record.id,
+            "Consume",
+            CountedArguments(serializations.clone()),
+        )
+        .await;
+    assert_eq!(refusal.unwrap_err().kind, ModuleCallError::Unavailable);
+    assert_eq!(serializations.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(preparations.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(calls.lock().unwrap().is_empty());
+
+    assert_eq!(
+        client
+            .call::<String>(record.id, "Consume", ())
+            .await
+            .unwrap(),
+        "ready"
+    );
+    assert_eq!(calls.lock().unwrap().len(), 1, "the peer remains ready");
+    broker_task.abort();
+}
+
+#[cfg(feature = "modules")]
 #[async_trait::async_trait]
 impl crate::Interface for LifecyclePeer {
     fn name(&self) -> crate::InterfaceName {
