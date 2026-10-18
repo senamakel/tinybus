@@ -279,6 +279,9 @@ fn close_signal() -> watch::Sender<bool> {
 #[async_trait]
 impl Transport for ModuleTransport {
     async fn send(&self, message: Message) -> Result<()> {
+        if *self.closed.borrow() {
+            return Err(Error::ConnectionClosed);
+        }
         let panicked = message.header.error_name.as_deref() == Some(MODULE_PANIC_ERROR);
         let bytes = serde_json::to_vec(&message)?;
         if bytes.len() > MAX_FRAME_LEN {
