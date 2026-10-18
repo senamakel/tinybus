@@ -455,9 +455,11 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     let runtime_provider_started = Arc::new(tokio::sync::Notify::new());
     let runtime_provider_gate = Arc::new(tokio::sync::Notify::new());
     let first_runtime_request = Arc::new(AtomicBool::new(true));
+    let runtime_provider_calls = Arc::new(AtomicUsize::new(0));
     let started_runtime_provider = runtime_provider_started.clone();
     let release_runtime_provider = runtime_provider_gate.clone();
     let first_runtime_request_for_provider = first_runtime_request.clone();
+    let runtime_provider_calls_for_provider = runtime_provider_calls.clone();
     let linked = Arc::new(LinkedRegistry::new());
     linked.register(RESOLVER_LINKED_RECORD.id, resolver_linked_factory);
     let reports = Arc::new(RecordedReports::default());
@@ -475,6 +477,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         records: vec![&RESOLVER_LINKED_RECORD],
         terminal_marker: String::new(),
         runtime: Arc::new(move || {
+            runtime_provider_calls_for_provider.fetch_add(1, Ordering::SeqCst);
             let first = first_runtime_request_for_provider.swap(false, Ordering::SeqCst);
             let started = started_runtime_provider.clone();
             let gate = release_runtime_provider.clone();
@@ -566,6 +569,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         Err(failure) if failure.kind == ModuleCallError::TransportFailed
     ));
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 1);
     assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
@@ -583,6 +587,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     .expect("the process-owned resolver should start linked initialization")
     .unwrap();
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 1);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
 
     let client_for_second_bind = client.clone();
@@ -597,6 +602,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         Err(failure) if failure.kind == ModuleCallError::TransportFailed
     ));
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 1);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         reports.0.lock().unwrap().as_slice(),
@@ -616,6 +622,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     .expect("the existing resolver attempt should finish after readiness opens");
     let pinned = client.bind(RESOLVER_LINKED_RECORD.id).await.unwrap();
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 2);
     assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
