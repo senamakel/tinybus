@@ -286,15 +286,19 @@ class CoverageScriptPlatformTests(unittest.TestCase):
         )
         case_start = lines.index(case_line)
         windows_branch = next(
-            index for index, line in enumerate(lines) if line.startswith("  Windows|")
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("  Windows|")
         )
         posix_branch = next(
-            index for index, line in enumerate(lines[windows_branch + 1 :], windows_branch + 1)
-            if line.strip() == "*)"
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == "Linux|Darwin|macOS)"
         )
-        case_end = next(
-            index for index, line in enumerate(lines[posix_branch + 1 :], posix_branch + 1)
-            if line.strip() == "esac"
+        posix_end = next(
+            index
+            for index, line in enumerate(lines[posix_branch + 1 :], posix_branch + 1)
+            if line.strip() == ";;"
         )
         invocations = [
             index
@@ -304,11 +308,12 @@ class CoverageScriptPlatformTests(unittest.TestCase):
 
         self.assertEqual(len(invocations), 1)
         self.assertGreater(invocations[0], posix_branch)
-        self.assertLess(invocations[0], case_end)
+        self.assertLess(invocations[0], posix_end)
         self.assertNotIn(
             "python3 scripts/test_check_coverage.py",
-            [line.strip() for line in lines[windows_branch + 1 : posix_branch]],
+            [line.strip() for line in lines[case_start + 1 : windows_branch]],
         )
+        self.assertGreater(windows_branch, case_start)
         self.assertEqual(
             [line.strip() for line in lines if line.strip().startswith("cargo ")],
             [
