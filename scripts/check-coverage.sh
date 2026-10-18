@@ -4,11 +4,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 cargo build --locked --example module_clock --example module_clock_two --example module_wrong_target --example module_context --example module_context_eager --example module_host_callback --example module_controlled_init --example module_terminal --no-default-features --features modules,macros,__native-fixture-support
 set -euo pipefail
 target_dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f -name 'libmodule_clock.so' -print -quit)
-module_two=$(find "$target_dir/debug/examples" -maxdepth 1 -type f -name 'libmodule_clock_two.so' -print -quit)
-wrong_target=$(find "$target_dir/debug/examples" -maxdepth 1 -type f -name 'libmodule_wrong_target.so' -print -quit)
-context_module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f -name 'libmodule_context.so' -print -quit)
-context_eager_module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f -name 'libmodule_context_eager.so' -print -quit)
+module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_clock.so' -o -name 'libmodule_clock.dylib' \) -print -quit)
+module_two=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_clock_two.so' -o -name 'libmodule_clock_two.dylib' \) -print -quit)
+wrong_target=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_wrong_target.so' -o -name 'libmodule_wrong_target.dylib' \) -print -quit)
+context_module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_context.so' -o -name 'libmodule_context.dylib' \) -print -quit)
+context_eager_module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_context_eager.so' -o -name 'libmodule_context_eager.dylib' \) -print -quit)
 host_callback_module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_host_callback.so' -o -name 'libmodule_host_callback.dylib' \) -print -quit)
 controlled_init_module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_controlled_init.so' -o -name 'libmodule_controlled_init.dylib' \) -print -quit)
 terminal_module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_terminal.so' -o -name 'libmodule_terminal.dylib' \) -print -quit)

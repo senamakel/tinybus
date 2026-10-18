@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3
+
+### Fixed
+
+- Publish a stream's completion or truncation verdict before closing its reader
+  channel, so a reader that has drained the payload observes the correct end.
+
 ## 0.3.2
 
 ### Added
