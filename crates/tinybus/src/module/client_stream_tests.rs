@@ -20,6 +20,7 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     assets: &[],
 };
 
+#[cfg(feature = "modules")]
 fn bound_stream_record() -> &'static ReleaseRecord {
     let host_key = Box::leak(
         crate::module::platform::host_candidates()
@@ -47,12 +48,14 @@ fn bound_stream_record() -> &'static ReleaseRecord {
     }))
 }
 
+#[cfg(feature = "modules")]
 struct HandoverStreamArguments {
     stream: StreamRef,
     started: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     barrier: Arc<std::sync::Barrier>,
 }
 
+#[cfg(feature = "modules")]
 impl serde::Serialize for HandoverStreamArguments {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -168,6 +171,7 @@ impl crate::ports::Transport for ObservedTransport {
 #[derive(Clone)]
 enum Behavior {
     Consume(tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
+    #[cfg(feature = "modules")]
     Bound {
         label: &'static str,
         received: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
@@ -220,12 +224,14 @@ impl Interface for StreamService {
                 received.send(bytes.clone()).unwrap();
                 Ok(serde_json::json!(bytes.len()))
             }
+            #[cfg(feature = "modules")]
             (Behavior::Bound { received, .. }, "Generate") => {
                 let (stream,): (StreamRef,) = serde_json::from_value(args)?;
                 let bytes = self.connection.read_stream(&stream).await?;
                 received.send(bytes).unwrap();
                 Ok(serde_json::json!("/child"))
             }
+            #[cfg(feature = "modules")]
             (Behavior::Bound { label, .. }, "Read" | "Release") => Ok(serde_json::json!(label)),
             (Behavior::Invalid, "InvalidInput") => Err(Error::MethodFailed {
                 name: "ai.tinyhumans.tinydocs.Error.InvalidInput".to_string(),
