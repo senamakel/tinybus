@@ -305,7 +305,6 @@ impl ModuleRuntime {
     ) -> std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>> {
         self.host_objects.clone()
     }
-
 }
 
 pub(super) async fn serve_host_object_transaction(

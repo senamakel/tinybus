@@ -905,16 +905,20 @@ impl crate::Interface for LifecyclePeer {
         member: &crate::MemberName,
         _: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
-        self.events.lock().unwrap().push(member.as_str().to_string());
+        self.events
+            .lock()
+            .unwrap()
+            .push(member.as_str().to_string());
         if member.as_str() == "Reserve" {
             let started = self.reserve_started.lock().unwrap().take();
             if let Some(started) = started {
                 let _ = started.send(());
             }
             if let Some(release) = &self.reserve_release {
-                let permit = release.acquire().await.map_err(|_| {
-                    crate::Error::failed("test reservation gate closed")
-                })?;
+                let permit = release
+                    .acquire()
+                    .await
+                    .map_err(|_| crate::Error::failed("test reservation gate closed"))?;
                 permit.forget();
             }
         }
@@ -985,11 +989,10 @@ impl crate::module::RuntimeLeaseDriver for BoundLifecycleDriver {
     }
 
     async fn start(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
-        self.client
-            .call::<String>("Start", ())
-            .await
-            .and_then(|peer| (peer == "peer-a").then_some(()).ok_or(ModuleCallError::TransportFailed))
-            .map_err(|_| BoundLifecycleError)
+        match self.client.call::<String>("Start", ()).await {
+            Ok(peer) if peer == "peer-a" => Ok(()),
+            _ => Err(BoundLifecycleError),
+        }
     }
 
     async fn stop(&self, _: &Self::Reservation) -> crate::module::StopOutcome<Self::Error> {
@@ -1088,19 +1091,14 @@ async fn a_bound_lease_driver_keeps_all_lifecycle_calls_on_the_attested_peer() {
         preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     });
     let bound = client.bind_attested(record.id).await.unwrap();
-    let runtime = crate::module::ModuleRuntime::start(
-        &crate::module::RuntimeNames::default(),
-        None,
-    )
-    .unwrap();
+    let runtime =
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap();
     let opening = runtime.lease(
-        BoundLifecycleDriver { client: bound.clone() },
+        BoundLifecycleDriver {
+            client: bound.clone(),
+        },
         |_, _| Ok(BoundLeaseCallback),
-        crate::module::RetryPolicy::new(
-            std::time::Duration::from_millis(100),
-            vec![],
-        )
-        .unwrap(),
+        crate::module::RetryPolicy::new(std::time::Duration::from_millis(100), vec![]).unwrap(),
         |_| {},
     );
     let opening = tokio::spawn(opening);
