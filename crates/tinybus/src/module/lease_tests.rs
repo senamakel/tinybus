@@ -447,6 +447,15 @@ fn stop_outcome_debug_names_the_disposition_but_redacts_typed_errors() {
     );
 }
 
+#[test]
+fn start_outcome_debug_redacts_typed_errors() {
+    let settled = StartOutcome::SettledFailure(DriverError("private settled start detail"));
+    let uncertain = StartOutcome::Unacknowledged(DriverError("private start timeout"));
+    assert_eq!(format!("{settled:?}"), "SettledFailure(<redacted>)");
+    assert_eq!(format!("{uncertain:?}"), "Unacknowledged(<redacted>)");
+    assert_eq!(format!("{:?}", StartOutcome::<DriverError>::Started), "Started");
+}
+
 #[tokio::test]
 async fn acknowledged_close_removes_only_its_exact_callback_registration() {
     let mut harness = Harness::new();
