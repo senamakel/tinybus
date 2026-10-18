@@ -734,6 +734,11 @@ async fn validation_failure_after_reserve_still_stops_and_never_starts() {
     let Err(error) = opening.await.unwrap() else {
         panic!("invalid reservation must fail activation");
     };
+    assert_eq!(error.phase(), LeasePhase::Validate);
+    assert!(
+        error.acknowledged(),
+        "successful rollback STOP is reflected in the error"
+    );
     assert!(!format!("{error:?}").contains("private validation detail"));
     assert!(!error.to_string().contains("private validation detail"));
     assert!(
