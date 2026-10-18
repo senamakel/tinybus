@@ -81,6 +81,27 @@ impl<E> std::fmt::Debug for StopOutcome<E> {
     }
 }
 
+/// Result of a driver START operation, with remote settlement stated explicitly.
+pub enum StartOutcome<E> {
+    /// The driver has authoritative evidence that START completed successfully.
+    Started,
+    /// START completed without starting work, so rollback STOP is safe.
+    SettledFailure(E),
+    /// START may still be active or its completion is unknown; do not issue STOP.
+    Unacknowledged(E),
+}
+
+impl<E> std::fmt::Debug for StartOutcome<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let variant = match self {
+            Self::Started => "Started",
+            Self::SettledFailure(_) => "SettledFailure(<redacted>)",
+            Self::Unacknowledged(_) => "Unacknowledged(<redacted>)",
+        };
+        formatter.write_str(variant)
+    }
+}
+
 /// Content-free lifecycle metadata; it never includes a reservation, object, or driver error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaseReport {
@@ -254,7 +275,12 @@ pub trait RuntimeLeaseDriver: Send + Sync + 'static {
     /// Construct the host-side object or handle after validation.
     async fn object(&self, reservation: &Self::Reservation) -> Result<Self::Object, Self::Error>;
     /// Start work associated with this reservation.
-    async fn start(&self, reservation: &Self::Reservation) -> Result<(), Self::Error>;
+    ///
+    /// Only return [`StartOutcome::SettledFailure`] when the driver can prove
+    /// that no START work remains in flight. Timeouts, lost replies,
+    /// cancellation, panics, malformed responses, and opaque transport errors
+    /// must be unacknowledged unless separate evidence proves settlement.
+    async fn start(&self, reservation: &Self::Reservation) -> StartOutcome<Self::Error>;
     /// Stop work associated with this reservation.
     ///
     /// STOP must be idempotent for this reservation so a proven-settled failure can be retried.
