@@ -32,7 +32,7 @@ impl std::error::Error for DriverError {}
 enum DriverCall {
     Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
     Object(Identity, oneshot::Sender<Result<Object, DriverError>>),
-    Start(oneshot::Sender<Result<(), DriverError>>),
+    Start(oneshot::Sender<StartOutcome<DriverError>>),
     Stop(
         std::time::Instant,
         oneshot::Sender<StopOutcome<DriverError>>,
@@ -113,18 +113,18 @@ impl RuntimeLeaseDriver for ControlledDriver {
         result.await.unwrap()
     }
 
-    async fn start(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
+    async fn start(&self, _: &Self::Reservation) -> StartOutcome<Self::Error> {
         let (reply, result) = oneshot::channel();
         self.calls.send(DriverCall::Start(reply)).unwrap();
-        result.await.unwrap()?;
+        let outcome = result.await.unwrap();
         assert!(
             !self.start_panic.load(Ordering::Acquire),
             "private start panic payload"
         );
         if self.start_error.load(Ordering::Acquire) {
-            Err(DriverError("private start detail"))
+            StartOutcome::SettledFailure(DriverError("private start detail"))
         } else {
-            Ok(())
+            outcome
         }
     }
 
@@ -389,7 +389,7 @@ impl Harness {
             _ => panic!("object creation follows validation"),
         }
         match self.calls.recv().await.unwrap() {
-            DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+            DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
             _ => panic!("start follows callback registration"),
         }
         opening.await.unwrap().unwrap()
@@ -447,6 +447,18 @@ fn stop_outcome_debug_names_the_disposition_but_redacts_typed_errors() {
     );
 }
 
+#[test]
+fn start_outcome_debug_redacts_typed_errors() {
+    let settled = StartOutcome::SettledFailure(DriverError("private settled start detail"));
+    let uncertain = StartOutcome::Unacknowledged(DriverError("private start timeout"));
+    assert_eq!(format!("{settled:?}"), "SettledFailure(<redacted>)");
+    assert_eq!(format!("{uncertain:?}"), "Unacknowledged(<redacted>)");
+    assert_eq!(
+        format!("{:?}", StartOutcome::<DriverError>::Started),
+        "Started"
+    );
+}
+
 #[tokio::test]
 async fn acknowledged_close_removes_only_its_exact_callback_registration() {
     let mut harness = Harness::new();
@@ -490,7 +502,7 @@ async fn acknowledged_close_removes_only_its_exact_callback_registration() {
         _ => panic!("second object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("second callback is registered before start"),
     }
     let second = opening.await.unwrap().unwrap();
@@ -567,7 +579,7 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         _ => panic!("object creation follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
     match harness.calls.recv().await.unwrap() {
@@ -624,7 +636,7 @@ async fn cancelling_during_object_creation_keeps_activation_and_one_rollback_own
     match harness.calls.recv().await.unwrap() {
         DriverCall::Start(reply) => {
             assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
-            reply.send(Ok(())).unwrap();
+            reply.send(StartOutcome::Started).unwrap();
         }
         _ => panic!("owned activation continues through start"),
     }
@@ -666,7 +678,7 @@ async fn cancelling_during_start_retains_the_export_until_rollback_ack() {
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
     opening.abort();
     assert!(matches!(opening.await, Err(error) if error.is_cancelled()));
-    start_reply.send(Ok(())).unwrap();
+    start_reply.send(StartOutcome::Started).unwrap();
     let stop = match harness.calls.recv().await.unwrap() {
         DriverCall::Stop(_, reply) => reply,
         _ => panic!("owned activation rollback survives waiter cancellation"),
@@ -737,7 +749,7 @@ async fn callback_address_panic_after_object_creation_still_stops_the_reservatio
 }
 
 #[tokio::test]
-async fn start_panic_keeps_the_exported_callback_until_rollback_ack() {
+async fn start_panic_after_submission_parks_the_exported_callback_without_stop() {
     let mut harness = Harness::new();
     harness.driver.start_panic.store(true, Ordering::Release);
     let opening = tokio::spawn(harness.open());
@@ -756,20 +768,19 @@ async fn start_panic_keeps_the_exported_callback_until_rollback_ack() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
-    let stop = tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
-        .await
-        .expect("start panic must retain rollback ownership")
-        .unwrap();
-    let DriverCall::Stop(_, reply) = stop else {
-        panic!("panic rollback uses STOP")
+    let Err(error) = opening.await.unwrap() else {
+        panic!("a panicking START is not a successful lease");
     };
+    assert_eq!(error.phase(), LeasePhase::Start);
+    assert!(!error.acknowledged());
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
-    reply.send(StopOutcome::Acknowledged).unwrap();
-    assert!(opening.await.unwrap().is_err());
-    assert!(harness.callback().await.is_err());
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "a panicking START has unknown settlement and must not issue STOP"
+    );
 }
 
 #[tokio::test]
@@ -903,7 +914,7 @@ async fn start_failure_keeps_the_exported_callback_until_stop_ack() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback export"),
     }
     let stop_reply = match harness.calls.recv().await.unwrap() {
@@ -917,6 +928,10 @@ async fn start_failure_keeps_the_exported_callback_until_stop_ack() {
     };
     assert_eq!(error.phase(), LeasePhase::Start);
     assert_eq!(error.driver_error().unwrap().0, "private start detail");
+    assert!(
+        error.acknowledged(),
+        "settled START failure rolls back to STOP ACK"
+    );
     assert!(harness.callback().await.is_err());
     assert!(harness.calls.try_recv().is_err());
 }
@@ -1156,7 +1171,7 @@ async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("callback registers before start"),
     }
     let lease = opening.await.unwrap().unwrap();
@@ -1207,7 +1222,7 @@ async fn callback_name_is_not_reinvoked_during_acknowledged_withdrawal() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
     let lease = opening.await.unwrap().unwrap();
@@ -1265,7 +1280,7 @@ async fn callback_destructor_panic_does_not_interrupt_acknowledged_withdrawal() 
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
     let lease = opening.await.unwrap().unwrap();

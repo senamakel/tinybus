@@ -19,7 +19,7 @@ pub mod lease;
 pub use lease::RuntimeLease;
 pub use lease::{
     LeaseError, LeasePhase, LeaseReport, LeaseReportOutcome, RetryPolicy, RetryPolicyError,
-    RuntimeLeaseDriver, StopOutcome,
+    RuntimeLeaseDriver, StartOutcome, StopOutcome,
 };
 pub mod manifest;
 pub mod platform;
