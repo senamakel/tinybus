@@ -132,8 +132,8 @@ impl serde::Serialize for HandoverArguments {
         if let Some(started) = self.started.lock().unwrap().take() {
             let _ = started.send(());
         }
-        // Keep the upload unopened until the test has reassigned the public
-        // alias; this proves the stream producer uses the pinned destination.
+        // Delay method argument construction after the stream has opened, then
+        // reassign the public alias before the upload method is sent.
         self.barrier.wait();
         serde::Serialize::serialize(&self.stream, serializer)
     }
@@ -406,6 +406,17 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
     assert_eq!(received_a_rx.recv().await.unwrap(), payload);
     assert!(received_b_rx.try_recv().is_err());
 
+    // This opens a new stream after B already owns the alias, proving the
+    // stream endpoint itself is selected from the bound unique destination.
+    let second_payload = b"opened after handover".to_vec();
+    let response: String = pinned
+        .call_with_stream("Upload", |stream| (stream.clone(),), &second_payload)
+        .await
+        .unwrap();
+    assert_eq!(response, "peer-a");
+    assert_eq!(received_a_rx.recv().await.unwrap(), second_payload);
+    assert!(received_b_rx.try_recv().is_err());
+
     let root: String = pinned.call("Who", ()).await.unwrap();
     assert_eq!(root, "peer-a");
     let object = pinned.object_client("/child").unwrap();
@@ -415,15 +426,19 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
     assert_eq!(response, "peer-a");
     assert_eq!(
         events_a.lock().unwrap().as_slice(),
-        &["Upload", "Who", "Read", "Release"]
+        &["Upload", "Upload", "Who", "Read", "Release"]
     );
     assert!(events_b.lock().unwrap().is_empty());
 
     service_a.close().await.unwrap();
     let root_after_close: Result<String, _> = pinned.call("Who", ()).await;
     let object_after_close: Result<String, _> = object.call("Read", ()).await;
+    let stream_after_close: Result<String, _> = pinned
+        .call_with_stream("Upload", |stream| (stream.clone(),), b"after close")
+        .await;
     assert!(root_after_close.is_err());
     assert!(object_after_close.is_err());
+    assert!(stream_after_close.is_err());
     assert!(events_b.lock().unwrap().is_empty());
     assert!(received_b_rx.try_recv().is_err());
     broker_task.abort();
