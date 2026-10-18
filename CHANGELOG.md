@@ -2,6 +2,11 @@
 
 ## 0.3.5
 
+### Added
+
+- Expose `module::Availability` and its stable serialized status names without
+  enabling the optional module loader.
+
 ### Fixed
 
 - Make the rejected native-worker spawn test deterministic when another

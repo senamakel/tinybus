@@ -3,8 +3,11 @@
 //! The ABI and manifest types are always compiled so a module can depend on
 //! tinybus with no default features. Loading is behind `modules`: in-process
 //! modules are trusted code with the host's full address-space privileges.
+//! The coarse `Availability` status is available even when loading is disabled.
 
 pub mod abi;
+mod availability;
+pub use availability::Availability;
 #[cfg(feature = "modules")]
 mod cache;
 pub mod client;
@@ -76,9 +79,9 @@ pub use reconfigure::{ConfigFingerprint, ReconfigurableModule, Reconfigure, Reco
 pub use release::{ReleaseAsset, ReleaseRecord};
 #[cfg(feature = "modules")]
 pub use resolve::{
-    Availability, LinkedFactory, LinkedRegistry, LoadError, ModuleConfigProvider, ModuleGate,
-    ModuleSource, ResolvedHook, Resolver, ResolverInputs, RuntimeFuture, RuntimeProvider,
-    resolve_bundled_dir, set_bundled_releases_dir,
+    LinkedFactory, LinkedRegistry, LoadError, ModuleConfigProvider, ModuleGate, ModuleSource,
+    ResolvedHook, Resolver, ResolverInputs, RuntimeFuture, RuntimeProvider, resolve_bundled_dir,
+    set_bundled_releases_dir,
 };
 #[cfg(feature = "modules")]
 pub use runtime::{
