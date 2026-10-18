@@ -149,16 +149,15 @@ async fn explicit_close_returns_its_error_and_clears_the_slot() {
 #[tokio::test]
 async fn a_failed_open_leaves_the_slot_empty() {
     let slot = slot::<u8, u8>();
-    assert!(
-        slot.with(
+    assert!(slot
+        .with(
             1,
             || async { Err(crate::Error::failed("open failed")) },
             |_| async { Ok(()) },
             |_| Box::pin(async { Ok::<_, crate::Error>(()) }),
         )
         .await
-        .is_err()
-    );
+        .is_err());
 
     let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let observed = opens.clone();
