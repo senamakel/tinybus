@@ -162,6 +162,170 @@ async fn client_waiting_on_metadata(
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StalledPreparationStage {
+    Readiness,
+    Proxy,
+}
+
+struct StalledPreparationAccess {
+    record: &'static ReleaseRecord,
+    connection: crate::Connection,
+    reporter: FailureReporter,
+    stage: StalledPreparationStage,
+    stall: Arc<std::sync::atomic::AtomicBool>,
+    entered: Arc<Notify>,
+    readiness_calls: Arc<std::sync::atomic::AtomicUsize>,
+    proxy_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ModuleAccess for StalledPreparationAccess {
+    fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
+        (id == self.record.id).then_some(self.record)
+    }
+
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    fn reporter(&self) -> &FailureReporter {
+        &self.reporter
+    }
+
+    fn ensure_loaded<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        self.readiness_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.stage == StalledPreparationStage::Readiness
+            && self.stall.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            Box::pin(std::future::pending())
+        } else {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn proxy<'a>(
+        &'a self,
+        bus_name: &'a str,
+        object_path: &'a str,
+    ) -> AccessFuture<'a, Result<crate::Proxy, ProxyFailure>> {
+        self.proxy_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.stage == StalledPreparationStage::Proxy
+            && self.stall.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            return Box::pin(std::future::pending());
+        }
+        Box::pin(async move {
+            self.connection
+                .proxy(bus_name, object_path, bus_name)
+                .map_err(|_| ProxyFailure::Contract)
+        })
+    }
+}
+
+async fn stalled_binding_preparation_is_bounded(stage: StalledPreparationStage) {
+    let bus = HeldMetadataBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let (service, _, _) = bus.connect(None).await;
+    let (caller, _, observed) = bus.connect(None).await;
+    let record = strict_record();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    service
+        .serve_at(
+            crate::ObjectPath::new(record.object_path).unwrap(),
+            AttestedReceiver {
+                label: "ready-after-timeout",
+                calls: calls.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    service.request_name(record.bus_name).await.unwrap();
+
+    let sink = Arc::new(Recording::default());
+    let stall = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let entered = Arc::new(Notify::new());
+    let readiness_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let proxy_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let client = ModuleClient::new(StalledPreparationAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(sink.clone()),
+        stage,
+        stall: stall.clone(),
+        entered: entered.clone(),
+        readiness_calls: readiness_calls.clone(),
+        proxy_calls: proxy_calls.clone(),
+    })
+    .with_timeout(Duration::from_millis(5));
+
+    let entered_wait = entered.notified();
+    let client_for_bind = client.clone();
+    let mut binding = tokio::spawn(async move { client_for_bind.bind(record.id).await });
+    tokio::time::timeout(Duration::from_millis(100), entered_wait)
+        .await
+        .expect("the configured preparation stage should begin");
+    tokio::time::advance(Duration::from_millis(5)).await;
+    let result = match tokio::time::timeout(Duration::from_millis(100), &mut binding).await {
+        Ok(joined) => joined.unwrap(),
+        Err(_) => {
+            binding.abort();
+            panic!("explicit client timeout must bound module preparation");
+        }
+    };
+
+    assert!(matches!(
+        result,
+        Err(failure) if failure.kind == ModuleCallError::TransportFailed
+    ));
+    assert_eq!(readiness_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        proxy_calls.load(std::sync::atomic::Ordering::SeqCst),
+        usize::from(stage == StalledPreparationStage::Proxy)
+    );
+    assert!(
+        observed.lock().unwrap().is_empty(),
+        "a timed-out preparation must not query the owner or call the module"
+    );
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(record.id.to_string(), Reason::TransportFailed)]
+    );
+
+    // Preparation is an invocation deadline, not a terminal loader failure.
+    stall.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(client.bind(record.id).await.is_ok());
+    let observed = observed.lock().unwrap();
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|member| member.as_str() == "GetNameOwner")
+            .count(),
+        1
+    );
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(record.id.to_string(), Reason::TransportFailed)]
+    );
+    broker_task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn ordinary_binding_timeout_bounds_stalled_readiness_without_poisoning_it() {
+    stalled_binding_preparation_is_bounded(StalledPreparationStage::Readiness).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn ordinary_binding_timeout_bounds_stalled_proxy_preparation_without_poisoning_it() {
+    stalled_binding_preparation_is_bounded(StalledPreparationStage::Proxy).await;
+}
+
 async fn stalled_metadata_call_is_bounded(member: &'static str) {
     let (client, _service, record, held, calls, sink, observed, broker_task) =
         client_waiting_on_metadata(member).await;
