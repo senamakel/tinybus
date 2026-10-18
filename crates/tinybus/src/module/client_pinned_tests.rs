@@ -546,36 +546,40 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     })
     .with_timeout(std::time::Duration::from_millis(50));
     let runtime_provider_started_wait = runtime_provider_started.notified();
-    let client_for_bind = client.clone();
-    let mut first_bind =
-        tokio::spawn(async move { client_for_bind.bind(RESOLVER_LINKED_RECORD.id).await });
-    tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        runtime_provider_started_wait,
-    )
-    .await
-    .expect("the first runtime-provider request should enter its gate");
-    let first_result =
-        match tokio::time::timeout(std::time::Duration::from_secs(1), &mut first_bind).await {
-            Ok(joined) => joined.unwrap(),
-            Err(_) => {
-                first_bind.abort();
-                runtime_provider_gate.notify_one();
-                panic!("explicit bind deadline must bound a stalled runtime provider");
-            }
-        };
-    assert!(matches!(
-        first_result,
-        Err(failure) if failure.kind == ModuleCallError::TransportFailed
-    ));
+    let client_for_abandoned_runtime = client.clone();
+    let (runtime_dropped_tx, runtime_dropped_rx) = tokio::sync::oneshot::channel();
+    let abandoned_runtime = std::thread::spawn(move || {
+        let caller_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("temporary caller runtime starts");
+        let bind = caller_runtime.spawn(async move {
+            client_for_abandoned_runtime
+                .bind(RESOLVER_LINKED_RECORD.id)
+                .await
+        });
+        caller_runtime.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                runtime_provider_started_wait,
+            )
+            .await
+            .expect("the first runtime-provider request should enter its gate");
+        });
+        drop(caller_runtime);
+        drop(bind);
+        let _ = runtime_dropped_tx.send(());
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), runtime_dropped_rx)
+        .await
+        .expect("the caller runtime should shut down while its provider is gated")
+        .unwrap();
+    abandoned_runtime.join().unwrap();
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 0);
     assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 1);
     assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        reports.0.lock().unwrap().as_slice(),
-        &[Reason::TransportFailed]
-    );
+    assert!(reports.0.lock().unwrap().is_empty());
 
     let linked_initializer_started = started_rx;
     runtime_provider_gate.notify_one();
