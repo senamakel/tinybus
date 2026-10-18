@@ -90,15 +90,10 @@ impl ObjectTree {
         interface: &InterfaceName,
         id: u64,
     ) -> Option<Arc<dyn Interface>> {
-        let Some(entries) = self.objects.get_mut(path) else {
-            return None;
-        };
-        let Some(index) = entries
+        let entries = self.objects.get_mut(path)?;
+        let index = entries
             .iter()
-            .position(|entry| entry.id == id && entry.name == *interface)
-        else {
-            return None;
-        };
+            .position(|entry| entry.id == id && entry.name == *interface)?;
         let removed = entries.remove(index).interface;
         if entries.is_empty() {
             self.objects.remove(path);
