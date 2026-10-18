@@ -20,6 +20,52 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     assets: &[],
 };
 
+fn bound_stream_record() -> &'static ReleaseRecord {
+    let host_key = Box::leak(
+        crate::module::platform::host_candidates()
+            .into_iter()
+            .next()
+            .expect("the test host has a published module key")
+            .into_boxed_str(),
+    );
+    let assets = Box::leak(
+        vec![crate::module::ReleaseAsset {
+            host_key,
+            archive: Box::leak("bound-stream-test.tar.gz".to_string().into_boxed_str()),
+            sha256: Box::leak("a".repeat(64).into_boxed_str()),
+            library_sha256: Some(Box::leak("b".repeat(64).into_boxed_str())),
+        }]
+        .into_boxed_slice(),
+    );
+    Box::leak(Box::new(ReleaseRecord {
+        id: "bound-stream-test",
+        bus_name: "ai.tinyhumans.test.BoundStreamClient",
+        object_path: "/ai/tinyhumans/test/BoundStreamClient",
+        version: "0.3.1",
+        release_url: "https://example.invalid/tinybus",
+        assets,
+    }))
+}
+
+struct HandoverStreamArguments<'a> {
+    stream: &'a StreamRef,
+    started: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    barrier: Arc<std::sync::Barrier>,
+}
+
+impl serde::Serialize for HandoverStreamArguments<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if let Some(started) = self.started.lock().unwrap().take() {
+            let _ = started.send(());
+        }
+        self.barrier.wait();
+        self.stream.serialize(serializer)
+    }
+}
+
 #[derive(Default)]
 struct Reports(Mutex<Vec<Reason>>);
 
@@ -218,9 +264,11 @@ async fn fixture(behavior: Behavior) -> Fixture {
         .serve_at(
             ObjectPath::new(RECORD.object_path).unwrap(),
             StreamService {
+                interface_name: RECORD.bus_name,
                 connection: service.clone(),
                 behavior: behavior.clone(),
                 calls: calls.clone(),
+                events: None,
             },
         )
         .await
@@ -229,9 +277,11 @@ async fn fixture(behavior: Behavior) -> Fixture {
         .serve_at(
             ObjectPath::new("/child").unwrap(),
             StreamService {
+                interface_name: RECORD.bus_name,
                 connection: service.clone(),
                 behavior,
                 calls: calls.clone(),
+                events: None,
             },
         )
         .await
@@ -247,6 +297,7 @@ async fn fixture(behavior: Behavior) -> Fixture {
     let connection = Connection::connect(Box::new(observed)).await.unwrap();
     let reports = Arc::new(Reports::default());
     let access = StreamAccess {
+        record: &RECORD,
         connection: connection.clone(),
         reporter: FailureReporter::new(reports.clone()),
         enabled: true,
@@ -326,6 +377,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
 
     let proxy = fixture.client.fixture_proxy().unwrap();
     let disabled = ModuleClient::new(StreamAccess {
+        record: &RECORD,
         connection: fixture.connection.clone(),
         reporter: FailureReporter::new(Arc::new(Reports::default())),
         enabled: false,
@@ -351,6 +403,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
     );
 
     let unready = ModuleClient::new(StreamAccess {
+        record: &RECORD,
         connection: fixture.connection.clone(),
         reporter: FailureReporter::new(Arc::new(Reports::default())),
         enabled: true,
