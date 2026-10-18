@@ -334,6 +334,19 @@ impl Harness {
             .call("Touch", ())
             .await
     }
+
+    async fn wait_callback_removed(&self) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if self.callback().await.is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("acknowledged cleanup did not withdraw its callback");
+    }
 }
 
 #[tokio::test]
@@ -431,7 +444,7 @@ async fn acknowledged_close_preserves_a_newer_registration_at_its_callback_path(
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(2));
     assert_eq!(replacement_calls.load(Ordering::Acquire), 2);
     drop(replacement);
-    assert!(harness.callback().await.is_err());
+    harness.wait_callback_removed().await;
 }
 
 #[tokio::test]
@@ -464,6 +477,84 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         _ => panic!("a lease whose result was abandoned is rolled back"),
     }
     assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn cancelling_during_object_creation_keeps_activation_and_one_rollback_owner() {
+    let mut harness = Harness::new();
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => {
+            opening.abort();
+            assert!(opening.await.unwrap_err().is_cancelled());
+            reply.send(Ok(Object(identity))).unwrap();
+        }
+        _ => panic!("object creation follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => {
+            assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+            reply.send(Ok(())).unwrap();
+        }
+        _ => panic!("owned activation continues through start"),
+    }
+    let stop = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply,
+        _ => panic!("abandoned open result drops exactly one lease owner"),
+    };
+    assert!(harness.callback().await.is_ok());
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "only one cleanup worker is active"
+    );
+    stop.send(StopOutcome::Acknowledged).unwrap();
+    harness.wait_callback_removed().await;
+}
+
+#[tokio::test]
+async fn cancelling_during_start_retains_the_export_until_rollback_ack() {
+    let mut harness = Harness::new();
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    let start_reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => reply,
+        _ => panic!("start follows callback export"),
+    };
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+    opening.abort();
+    assert!(opening.await.unwrap_err().is_cancelled());
+    start_reply.send(Ok(())).unwrap();
+    let stop = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply,
+        _ => panic!("owned activation rollback survives waiter cancellation"),
+    };
+    assert!(harness.callback().await.is_ok());
+    assert!(harness.calls.try_recv().is_err());
+    stop.send(StopOutcome::Acknowledged).unwrap();
+    harness.wait_callback_removed().await;
 }
 
 #[tokio::test]
@@ -707,6 +798,99 @@ async fn callback_factory_error_rolls_back_before_start_or_export() {
     );
     assert!(harness.calls.try_recv().is_err());
     assert!(harness.callback().await.is_err());
+}
+
+unsafe extern "C" fn collision_module_init(
+    _: *const crate::module::abi::TbHostVtable,
+    _: *mut crate::module::abi::TbModuleVtable,
+) -> i32 {
+    crate::module::abi::TB_BAD_ARGUMENT
+}
+
+#[tokio::test]
+async fn callback_name_collision_rolls_back_without_export_or_start() {
+    let mut harness = Harness::new();
+    let path = "/ai/tinyhumans/tinybus/tests/RuntimeLease1";
+    let manifest = crate::module::manifest::ModuleManifest {
+        schema: crate::module::manifest::MANIFEST_SCHEMA,
+        module: crate::module::manifest::ModuleIdentity {
+            name: "runtime-lease-callback-collision".to_string(),
+            version: crate::version::Version::new(0, 1, 0),
+            description: String::new(),
+            homepage: None,
+            license: String::new(),
+        },
+        bus_name: CALLBACK_NAME.parse().unwrap(),
+        object_path: path.parse().unwrap(),
+        provides: Vec::new(),
+        requires: Vec::new(),
+        environment: Vec::new(),
+        capabilities: Vec::new(),
+        lazy_init: true,
+        worker_threads: 1,
+        on_panic: crate::module::manifest::PanicPolicy::Detach,
+    };
+    harness
+        .runtime
+        .host()
+        .attach_linked_with_config(
+            crate::module::LinkedModule {
+                descriptor: crate::module::abi::TbAbiDescriptor::current(
+                    "runtime-lease-callback-collision",
+                    "0.1.0",
+                ),
+                manifest,
+                init: collision_module_init,
+                init_with_setup: None,
+            },
+            serde_json::Value::Null,
+        )
+        .unwrap();
+    let owner = harness
+        .runtime
+        .connection()
+        .name_owner(CALLBACK_NAME)
+        .await
+        .unwrap();
+    assert!(owner.is_some(), "the linked module owns the callback name");
+
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve precedes export collision"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("export collision rolls back the reservation"),
+    }
+    let Err(error) = opening.await.unwrap() else {
+        panic!("a name collision cannot yield a started lease");
+    };
+    assert_eq!(error.phase(), LeasePhase::Export);
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "business start never ran"
+    );
+    assert_eq!(
+        harness
+            .runtime
+            .connection()
+            .name_owner(CALLBACK_NAME)
+            .await
+            .unwrap(),
+        owner,
+        "rollback preserves the existing peer's name"
+    );
 }
 
 #[tokio::test]
