@@ -496,7 +496,7 @@ async fn cancelling_during_object_creation_keeps_activation_and_one_rollback_own
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => {
             opening.abort();
-            assert!(opening.await.unwrap_err().is_cancelled());
+            assert!(matches!(opening.await, Err(error) if error.is_cancelled()));
             reply.send(Ok(Object(identity))).unwrap();
         }
         _ => panic!("object creation follows validation"),
@@ -545,7 +545,7 @@ async fn cancelling_during_start_retains_the_export_until_rollback_ack() {
     };
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
     opening.abort();
-    assert!(opening.await.unwrap_err().is_cancelled());
+    assert!(matches!(opening.await, Err(error) if error.is_cancelled()));
     start_reply.send(Ok(())).unwrap();
     let stop = match harness.calls.recv().await.unwrap() {
         DriverCall::Stop(_, reply) => reply,
