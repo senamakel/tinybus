@@ -190,6 +190,150 @@ async fn an_ordinary_fixture_with_no_release_assets_can_bind() {
     assert_eq!(response, "fixture");
 }
 
+#[cfg(feature = "modules")]
+struct LinkedOrdinaryContext {
+    sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+}
+
+#[cfg(feature = "modules")]
+unsafe extern "C" fn linked_ordinary_deliver(
+    context: *mut std::ffi::c_void,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    let context = unsafe { &*(context.cast::<LinkedOrdinaryContext>()) };
+    let bytes = unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec();
+    context
+        .sender
+        .send(bytes)
+        .map_or(-1, |_| crate::module::abi::TB_OK)
+}
+
+#[cfg(feature = "modules")]
+unsafe extern "C" fn linked_ordinary_shutdown(context: *mut std::ffi::c_void, _: u64) -> i32 {
+    drop(unsafe { Box::from_raw(context.cast::<LinkedOrdinaryContext>()) });
+    crate::module::abi::TB_OK
+}
+
+#[cfg(feature = "modules")]
+unsafe extern "C" fn linked_ordinary_init(
+    host: *const crate::module::abi::TbHostVtable,
+    out: *mut crate::module::abi::TbModuleVtable,
+) -> i32 {
+    let host = unsafe { *host };
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let context = Box::into_raw(Box::new(LinkedOrdinaryContext { sender }));
+    unsafe {
+        *out = crate::module::abi::TbModuleVtable {
+            size: std::mem::size_of::<crate::module::abi::TbModuleVtable>() as u32,
+            _reserved: 0,
+            module_ctx: context.cast(),
+            deliver: linked_ordinary_deliver,
+            shutdown: linked_ordinary_shutdown,
+            reinitialize: None,
+        };
+    }
+    let host_context = host.host_ctx as usize;
+    let send = host.send;
+    std::thread::spawn(move || {
+        while let Some(bytes) = receiver.blocking_recv() {
+            let Ok(message) = serde_json::from_slice::<crate::Message>(&bytes) else {
+                continue;
+            };
+            if message.header.kind != crate::message::MessageKind::MethodCall {
+                continue;
+            }
+            let value = message
+                .body
+                .as_array()
+                .and_then(|values| values.first())
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let reply = crate::Message::method_return(&message.header, value);
+            let bytes = serde_json::to_vec(&reply).unwrap();
+            let _ = unsafe {
+                send(
+                    host_context as *mut std::ffi::c_void,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                )
+            };
+        }
+    });
+    unsafe { (host.ready)(host.host_ctx) };
+    crate::module::abi::TB_OK
+}
+
+#[cfg(feature = "modules")]
+fn linked_ordinary_factory() -> crate::Result<crate::module::LinkedModule> {
+    use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, PanicPolicy};
+    use crate::{BusName, ObjectPath, Version};
+
+    Ok(crate::module::LinkedModule {
+        descriptor: crate::module::abi::TbAbiDescriptor::current(RECORD.id, RECORD.version),
+        manifest: crate::module::manifest::ModuleManifest {
+            schema: MANIFEST_SCHEMA,
+            module: ModuleIdentity {
+                name: RECORD.id.to_owned(),
+                version: Version::new(0, 3, 2),
+                description: String::new(),
+                homepage: None,
+                license: String::new(),
+            },
+            bus_name: BusName::new(RECORD.bus_name).unwrap(),
+            object_path: ObjectPath::new(RECORD.object_path).unwrap(),
+            provides: Vec::new(),
+            requires: Vec::new(),
+            environment: Vec::new(),
+            capabilities: Vec::new(),
+            lazy_init: false,
+            worker_threads: 1,
+            on_panic: PanicPolicy::Detach,
+        },
+        init: linked_ordinary_init,
+        init_with_setup: None,
+    })
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn ordinary_binding_accepts_a_resolver_owned_linked_factory_without_library_proof() {
+    use crate::module::runtime::{ModuleRuntime, RuntimeNames};
+    use crate::module::{LinkedRegistry, ModuleSource, Resolver, ResolverInputs};
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    static RUNTIME: OnceLock<ModuleRuntime> = OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| {
+        ModuleRuntime::start(&RuntimeNames::default(), None).expect("test runtime starts")
+    });
+    let linked = Arc::new(LinkedRegistry::new());
+    linked.register(RECORD.id, linked_ordinary_factory);
+    let resolver = Resolver::new(ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources: HashMap::from([(RECORD.id.to_owned(), ModuleSource::Linked)]),
+        linked,
+        search_paths: None,
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: vec![&RECORD],
+        terminal_marker: String::new(),
+        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        module_config: Arc::new(|_| serde_json::Value::Null),
+        reporter: Arc::new(FailureReporter::new(Arc::new(DiscardReports))),
+    });
+
+    assert!(RECORD.assets.is_empty());
+    let client = ModuleClient::new(resolver);
+    let pinned = client.bind(RECORD.id).await.unwrap();
+    let response: String = pinned.call("Echo", "linked-host-factory").await.unwrap();
+    assert_eq!(response, "linked-host-factory");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() {
     let bus = MemoryBus::new();
@@ -252,7 +396,10 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
     assert_eq!(response, "peer-a");
     let response: String = object.call("Release", ()).await.unwrap();
     assert_eq!(response, "peer-a");
-    assert_eq!(events_a.lock().unwrap().as_slice(), &["Upload", "Read", "Release"]);
+    assert_eq!(
+        events_a.lock().unwrap().as_slice(),
+        &["Upload", "Read", "Release"]
+    );
     assert!(events_b.lock().unwrap().is_empty());
 
     service_a.close().await.unwrap();
@@ -280,8 +427,13 @@ async fn ordinary_binding_refuses_disabled_unknown_and_unowned_modules() {
         enabled: false,
     });
     let disabled_result = disabled.bind(RECORD.id).await;
-    assert!(matches!(disabled_result, Err(failure) if failure.kind == ModuleCallError::Unavailable));
-    assert_eq!(disabled_reports.0.lock().unwrap().as_slice(), &[Reason::Disabled]);
+    assert!(
+        matches!(disabled_result, Err(failure) if failure.kind == ModuleCallError::Unavailable)
+    );
+    assert_eq!(
+        disabled_reports.0.lock().unwrap().as_slice(),
+        &[Reason::Disabled]
+    );
 
     let unknown_reports = Arc::new(RecordedReports::default());
     let unknown = ModuleClient::new(Access {
@@ -306,7 +458,10 @@ async fn ordinary_binding_refuses_disabled_unknown_and_unowned_modules() {
     .with_fixture(unowned_proxy);
     let unowned_result = unowned.bind(RECORD.id).await;
     assert!(matches!(unowned_result, Err(failure) if failure.kind == ModuleCallError::Unavailable));
-    assert_eq!(unowned_reports.0.lock().unwrap().as_slice(), &[Reason::ModuleUnavailable]);
+    assert_eq!(
+        unowned_reports.0.lock().unwrap().as_slice(),
+        &[Reason::ModuleUnavailable]
+    );
 }
 
 #[tokio::test]
@@ -314,7 +469,13 @@ async fn ordinary_bound_detailed_failures_keep_fields_and_sanitize_renderings() 
     let bus = MemoryBus::new();
     let _broker = Broker::new().spawn(bus.clone());
     let (received, _received_rx) = tokio::sync::mpsc::unbounded_channel();
-    let service = peer(&bus, "failure-peer", received, Arc::new(Mutex::new(Vec::new()))).await;
+    let service = peer(
+        &bus,
+        "failure-peer",
+        received,
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
     service.request_name(RECORD.bus_name).await.unwrap();
     let caller = Connection::connect(bus.connect().await.unwrap())
         .await
@@ -332,7 +493,10 @@ async fn ordinary_bound_detailed_failures_keep_fields_and_sanitize_renderings() 
     .await
     .unwrap();
 
-    let failure = pinned.call_detailed::<String>("Fail", ()).await.unwrap_err();
+    let failure = pinned
+        .call_detailed::<String>("Fail", ())
+        .await
+        .unwrap_err();
     assert_eq!(failure.kind, ModuleCallError::ModuleFault);
     assert_eq!(failure.wire_name, "ai.tinyhumans.docs.Error.Rejected");
     assert_eq!(failure.message, REMOTE_DETAIL);
@@ -345,7 +509,13 @@ async fn ordinary_bound_calls_keep_the_configured_deadline_and_report_timeout() 
     let bus = MemoryBus::new();
     let _broker = Broker::new().spawn(bus.clone());
     let (received, _received_rx) = tokio::sync::mpsc::unbounded_channel();
-    let service = peer(&bus, "slow-peer", received, Arc::new(Mutex::new(Vec::new()))).await;
+    let service = peer(
+        &bus,
+        "slow-peer",
+        received,
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
     service.request_name(RECORD.bus_name).await.unwrap();
     let caller = Connection::connect(bus.connect().await.unwrap())
         .await
@@ -367,7 +537,10 @@ async fn ordinary_bound_calls_keep_the_configured_deadline_and_report_timeout() 
 
     let result: Result<String, _> = pinned.call("Hang", ()).await;
     assert!(matches!(result, Err(ModuleCallError::TransportFailed)));
-    assert_eq!(reports.0.lock().unwrap().as_slice(), &[Reason::TransportFailed]);
+    assert_eq!(
+        reports.0.lock().unwrap().as_slice(),
+        &[Reason::TransportFailed]
+    );
 }
 
 #[test]
