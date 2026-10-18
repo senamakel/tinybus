@@ -466,6 +466,12 @@ impl StreamRegistry {
         // the *fast* case — into "no such stream".
         let received = stream.received.load(Ordering::Relaxed);
         stream.touch();
+        let truncated = received != total_len;
+        if truncated {
+            stream.finish(Outcome::Aborted("the sender closed a truncated stream"));
+        } else {
+            stream.finish(Outcome::Complete);
+        }
         stream.seal();
 
         #[cfg(test)]
@@ -478,13 +484,11 @@ impl StreamRegistry {
             hook();
         }
 
-        if received != total_len {
-            stream.finish(Outcome::Aborted("the sender closed a truncated stream"));
+        if truncated {
             return Err(Error::protocol(format!(
                 "stream closed after {received} bytes, {total_len} declared"
             )));
         }
-        stream.finish(Outcome::Complete);
         Ok(Value::Null)
     }
 
