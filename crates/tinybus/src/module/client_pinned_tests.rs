@@ -284,7 +284,7 @@ fn linked_ordinary_factory() -> crate::Result<crate::module::LinkedModule> {
             schema: MANIFEST_SCHEMA,
             module: ModuleIdentity {
                 name: RECORD.id.to_owned(),
-                version: Version::new(0, 3, 2),
+                version: Version::new(0, 3, 3),
                 description: String::new(),
                 homepage: None,
                 license: String::new(),
@@ -411,7 +411,7 @@ fn resolver_linked_factory() -> crate::Result<crate::module::LinkedModule> {
             schema: MANIFEST_SCHEMA,
             module: ModuleIdentity {
                 name: record.id.to_owned(),
-                version: Version::new(0, 3, 2),
+                version: Version::new(0, 3, 3),
                 description: String::new(),
                 homepage: None,
                 license: String::new(),
