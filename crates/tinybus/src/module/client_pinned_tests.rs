@@ -580,7 +580,13 @@ async fn ordinary_binding_preserves_fixture_proxy_deadlines_for_root_and_objects
     let bus = MemoryBus::new();
     let _broker = Broker::new().spawn(bus.clone());
     let (received, _received_rx) = tokio::sync::mpsc::unbounded_channel();
-    let service = peer(&bus, "deadline-peer", received, Arc::new(Mutex::new(Vec::new()))).await;
+    let service = peer(
+        &bus,
+        "deadline-peer",
+        received,
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
     service.request_name(RECORD.bus_name).await.unwrap();
     let caller = Connection::connect(bus.connect().await.unwrap())
         .await
@@ -614,7 +620,10 @@ async fn ordinary_binding_preserves_fixture_proxy_deadlines_for_root_and_objects
     )
     .await
     .expect("held-object calls inherit the fixture proxy deadline");
-    assert!(matches!(object_result, Err(ModuleCallError::TransportFailed)));
+    assert!(matches!(
+        object_result,
+        Err(ModuleCallError::TransportFailed)
+    ));
 }
 
 #[test]
@@ -628,5 +637,96 @@ fn unsupported_module_availability_keeps_the_unavailable_classification() {
     assert_eq!(
         classify(&error),
         (ModuleCallError::Unavailable, Reason::ModuleUnavailable)
+    );
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn ordinary_binding_refuses_an_unsupported_resolver_without_proxy_or_business_calls() {
+    use crate::module::runtime::{ModuleRuntime, RuntimeNames};
+    use crate::module::{Availability, LinkedRegistry, Resolver, ResolverInputs};
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static RECORD: ReleaseRecord = ReleaseRecord {
+        id: "ordinary-binding-unsupported",
+        bus_name: "ai.tinyhumans.test.OrdinaryBindingUnsupported",
+        object_path: "/ai/tinyhumans/test/OrdinaryBindingUnsupported",
+        version: "0.3.1",
+        release_url: "https://example.invalid/tinybus",
+        assets: &[],
+    };
+    static RUNTIME: OnceLock<ModuleRuntime> = OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| {
+        ModuleRuntime::start(&RuntimeNames::default(), None).expect("test runtime starts")
+    });
+    let reports = Arc::new(RecordedReports::default());
+    let resolver = Resolver::new(ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources: HashMap::new(),
+        linked: Arc::new(LinkedRegistry::new()),
+        search_paths: None,
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: vec![&RECORD],
+        terminal_marker: String::new(),
+        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        module_config: Arc::new(|_| serde_json::Value::Null),
+        reporter: Arc::new(FailureReporter::new(reports.clone())),
+    });
+
+    assert_eq!(resolver.status_of(&RECORD).0, Availability::Unsupported);
+    let proxy_calls = Arc::new(AtomicUsize::new(0));
+    struct CountedAccess {
+        resolver: Resolver,
+        proxy_calls: Arc<AtomicUsize>,
+    }
+    impl ModuleAccess for CountedAccess {
+        fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
+            self.resolver.find(id)
+        }
+
+        fn enabled(&self) -> bool {
+            self.resolver.enabled()
+        }
+
+        fn reporter(&self) -> &FailureReporter {
+            self.resolver.reporter()
+        }
+
+        fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
+            Box::pin(self.resolver.ensure_loaded(id))
+        }
+
+        fn proxy<'a>(
+            &'a self,
+            bus_name: &'a str,
+            object_path: &'a str,
+        ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
+            let calls = Arc::clone(&self.proxy_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                self.resolver.proxy(bus_name, object_path).await
+            })
+        }
+    }
+    let client = ModuleClient::new(CountedAccess {
+        resolver: resolver.clone(),
+        proxy_calls: proxy_calls.clone(),
+    });
+
+    for _ in 0..2 {
+        let result = client.bind(RECORD.id).await;
+        assert!(matches!(result, Err(failure) if failure.kind == ModuleCallError::Unavailable));
+    }
+    assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        reports.0.lock().unwrap().as_slice(),
+        &[Reason::ResolutionFailed]
     );
 }
