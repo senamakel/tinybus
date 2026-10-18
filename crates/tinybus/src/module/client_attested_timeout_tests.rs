@@ -211,6 +211,65 @@ async fn a_stalled_name_owner_lookup_uses_the_client_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn ordinary_binding_uses_the_fixture_proxy_deadline_for_owner_lookup() {
+    let bus = HeldMetadataBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let (service, _, _) = bus.connect(None).await;
+    let (caller, held, observed) = bus.connect(Some("GetNameOwner")).await;
+    let record = strict_record();
+    service
+        .serve_at(
+            crate::ObjectPath::new(record.object_path).unwrap(),
+            AttestedReceiver {
+                label: "linked",
+                calls: Arc::new(Mutex::new(Vec::new())),
+            },
+        )
+        .await
+        .unwrap();
+    service.request_name(record.bus_name).await.unwrap();
+
+    let sink = Arc::new(Recording::default());
+    let proxy = caller
+        .proxy(record.bus_name, record.object_path, record.bus_name)
+        .unwrap()
+        .with_timeout(Duration::from_millis(5));
+    let client = ModuleClient::new(PreparedAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(sink.clone()),
+        preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    })
+    .with_fixture(proxy);
+    let mut binding = tokio::spawn(async move { client.bind(record.id).await });
+    let held_request = held.notified();
+    tokio::time::timeout(Duration::from_millis(100), async {
+        tokio::select! {
+            _ = held_request => {},
+            joined = &mut binding => panic!("bind returned before owner lookup was held: {joined:?}; observed={:?}", observed.lock().unwrap()),
+        }
+    })
+    .await
+    .expect("owner lookup should reach the holding transport");
+
+    tokio::time::advance(Duration::from_millis(5)).await;
+    let result = match tokio::time::timeout(Duration::from_millis(100), &mut binding).await {
+        Ok(joined) => joined.unwrap(),
+        Err(_) => {
+            binding.abort();
+            panic!("bind must use the fixture proxy deadline for owner lookup");
+        }
+    };
+    assert!(matches!(result, Err(failure) if failure.kind == ModuleCallError::TransportFailed));
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(record.id.to_string(), Reason::TransportFailed)]
+    );
+    broker_task.abort();
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_stalled_attestation_lookup_uses_the_client_timeout() {
     stalled_metadata_call_is_bounded("GetAttestation").await;
 }

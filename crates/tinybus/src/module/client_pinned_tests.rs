@@ -546,7 +546,7 @@ async fn ordinary_bound_calls_keep_the_configured_deadline_and_report_timeout() 
         reporter: FailureReporter::new(reports.clone()),
         enabled: true,
     })
-    .with_fixture(proxy)
+    .with_fixture(proxy.with_timeout(std::time::Duration::from_secs(2)))
     .with_timeout(std::time::Duration::from_millis(20))
     .bind(RECORD.id)
     .await
@@ -558,6 +558,48 @@ async fn ordinary_bound_calls_keep_the_configured_deadline_and_report_timeout() 
         reports.0.lock().unwrap().as_slice(),
         &[Reason::TransportFailed]
     );
+}
+
+#[tokio::test]
+async fn ordinary_binding_preserves_fixture_proxy_deadlines_for_root_and_objects() {
+    let bus = MemoryBus::new();
+    let _broker = Broker::new().spawn(bus.clone());
+    let (received, _received_rx) = tokio::sync::mpsc::unbounded_channel();
+    let service = peer(&bus, "deadline-peer", received, Arc::new(Mutex::new(Vec::new()))).await;
+    service.request_name(RECORD.bus_name).await.unwrap();
+    let caller = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = caller
+        .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+        .unwrap()
+        .with_timeout(std::time::Duration::from_millis(20));
+    let pinned = ModuleClient::new(Access {
+        connection: caller,
+        reporter: reporter(),
+        enabled: true,
+    })
+    .with_fixture(proxy)
+    .bind(RECORD.id)
+    .await
+    .unwrap();
+
+    let root_result = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        pinned.call::<String>("Hang", ()),
+    )
+    .await
+    .expect("root calls inherit the fixture proxy deadline");
+    assert!(matches!(root_result, Err(ModuleCallError::TransportFailed)));
+
+    let object = pinned.object_client("/child").unwrap();
+    let object_result = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        object.call::<String>("Hang", ()),
+    )
+    .await
+    .expect("held-object calls inherit the fixture proxy deadline");
+    assert!(matches!(object_result, Err(ModuleCallError::TransportFailed)));
 }
 
 #[test]
