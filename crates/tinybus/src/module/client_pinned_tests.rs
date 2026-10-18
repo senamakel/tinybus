@@ -313,6 +313,10 @@ static RESOLVER_LINKED_DELIVERIES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(feature = "modules")]
+static RESOLVER_LINKED_FACTORY_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(feature = "modules")]
 static RESOLVER_LINKED_GATE: std::sync::OnceLock<Mutex<Option<std::sync::mpsc::Receiver<()>>>> =
     std::sync::OnceLock::new();
 
@@ -399,6 +403,7 @@ fn resolver_linked_factory() -> crate::Result<crate::module::LinkedModule> {
     use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, PanicPolicy};
     use crate::{BusName, ObjectPath, Version};
 
+    RESOLVER_LINKED_FACTORY_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let record = &RESOLVER_LINKED_RECORD;
     Ok(crate::module::LinkedModule {
         descriptor: crate::module::abi::TbAbiDescriptor::current(record.id, record.version),
@@ -437,6 +442,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
 
     RESOLVER_LINKED_STARTS.store(0, Ordering::SeqCst);
     RESOLVER_LINKED_DELIVERIES.store(0, Ordering::SeqCst);
+    RESOLVER_LINKED_FACTORY_CALLS.store(0, Ordering::SeqCst);
     let (release, gate) = std::sync::mpsc::channel();
     *RESOLVER_LINKED_GATE
         .get_or_init(|| Mutex::new(None))
@@ -589,14 +595,28 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     )
     .await
     .unwrap_or_else(|_| {
+        let runtime_worker_alive = if let Some(runtime) = RUNTIME.get() {
+            let (probe_tx, probe_rx) = tokio::sync::oneshot::channel();
+            runtime.spawn(async move {
+                let _ = probe_tx.send(());
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(1), probe_rx)
+                .await
+                .is_ok()
+        } else {
+            false
+        };
         panic!(
-            "the process-owned resolver should start linked initialization; availability={:?}, runtime_provider_calls={}",
+            "the process-owned resolver should start linked initialization; availability={:?}, runtime_provider_calls={}, linked_factory_calls={}, runtime_worker_alive={}",
             resolver.state_of(RESOLVER_LINKED_RECORD.id),
             runtime_provider_calls.load(Ordering::SeqCst),
+            RESOLVER_LINKED_FACTORY_CALLS.load(Ordering::SeqCst),
+            runtime_worker_alive,
         )
     })
     .unwrap();
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(RESOLVER_LINKED_FACTORY_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 3);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
 
