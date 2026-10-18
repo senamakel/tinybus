@@ -305,6 +305,272 @@ fn linked_ordinary_factory() -> crate::Result<crate::module::LinkedModule> {
 }
 
 #[cfg(feature = "modules")]
+static RESOLVER_LINKED_STARTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(feature = "modules")]
+static RESOLVER_LINKED_DELIVERIES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(feature = "modules")]
+static RESOLVER_LINKED_GATE: std::sync::OnceLock<Mutex<Option<std::sync::mpsc::Receiver<()>>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(feature = "modules")]
+static RESOLVER_LINKED_STARTED: std::sync::OnceLock<
+    Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(feature = "modules")]
+static RESOLVER_LINKED_RECORD: ReleaseRecord = ReleaseRecord {
+    id: "ordinary-binding-linked-readiness",
+    bus_name: "ai.tinyhumans.test.OrdinaryBindingLinkedReadiness",
+    object_path: "/ai/tinyhumans/test/OrdinaryBindingLinkedReadiness",
+    version: "0.3.2",
+    release_url: "https://example.invalid/tinybus",
+    assets: &[],
+};
+
+#[cfg(feature = "modules")]
+unsafe extern "C" fn resolver_linked_deliver(
+    _: *mut std::ffi::c_void,
+    _: *const u8,
+    _: usize,
+) -> i32 {
+    RESOLVER_LINKED_DELIVERIES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    crate::module::abi::TB_OK
+}
+
+#[cfg(feature = "modules")]
+unsafe extern "C" fn resolver_linked_shutdown(context: *mut std::ffi::c_void, _: u64) -> i32 {
+    drop(unsafe { Box::from_raw(context.cast::<u8>()) });
+    crate::module::abi::TB_OK
+}
+
+#[cfg(feature = "modules")]
+unsafe extern "C" fn resolver_linked_reinitialize(
+    _: *mut std::ffi::c_void,
+    _: *const u8,
+    _: usize,
+) -> i32 {
+    crate::module::abi::TB_OK
+}
+
+#[cfg(feature = "modules")]
+unsafe extern "C" fn resolver_linked_init(
+    host: *const crate::module::abi::TbHostVtable,
+    out: *mut crate::module::abi::TbModuleVtable,
+) -> i32 {
+    RESOLVER_LINKED_STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let host = unsafe { *host };
+    let context = Box::into_raw(Box::new(0_u8));
+    unsafe {
+        *out = crate::module::abi::TbModuleVtable {
+            size: std::mem::size_of::<crate::module::abi::TbModuleVtable>() as u32,
+            _reserved: 0,
+            module_ctx: context.cast(),
+            deliver: resolver_linked_deliver,
+            shutdown: resolver_linked_shutdown,
+            reinitialize: Some(resolver_linked_reinitialize),
+        };
+    }
+    if let Some(started) = RESOLVER_LINKED_STARTED
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .take()
+    {
+        let _ = started.send(());
+    }
+    if let Some(gate) = RESOLVER_LINKED_GATE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .take()
+    {
+        let _ = gate.recv();
+    }
+    unsafe { (host.ready)(host.host_ctx) };
+    crate::module::abi::TB_OK
+}
+
+#[cfg(feature = "modules")]
+fn resolver_linked_factory() -> crate::Result<crate::module::LinkedModule> {
+    use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, PanicPolicy};
+    use crate::{BusName, ObjectPath, Version};
+
+    let record = &RESOLVER_LINKED_RECORD;
+    Ok(crate::module::LinkedModule {
+        descriptor: crate::module::abi::TbAbiDescriptor::current(record.id, record.version),
+        manifest: crate::module::manifest::ModuleManifest {
+            schema: MANIFEST_SCHEMA,
+            module: ModuleIdentity {
+                name: record.id.to_owned(),
+                version: Version::new(0, 3, 2),
+                description: String::new(),
+                homepage: None,
+                license: String::new(),
+            },
+            bus_name: BusName::new(record.bus_name).unwrap(),
+            object_path: ObjectPath::new(record.object_path).unwrap(),
+            provides: Vec::new(),
+            requires: Vec::new(),
+            environment: Vec::new(),
+            capabilities: Vec::new(),
+            lazy_init: false,
+            worker_threads: 1,
+            on_panic: PanicPolicy::Detach,
+        },
+        init: resolver_linked_init,
+        init_with_setup: None,
+    })
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry() {
+    use crate::module::runtime::{ModuleRuntime, RuntimeNames};
+    use crate::module::{Availability, LinkedRegistry, ModuleSource, Resolver, ResolverInputs};
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    RESOLVER_LINKED_STARTS.store(0, Ordering::SeqCst);
+    RESOLVER_LINKED_DELIVERIES.store(0, Ordering::SeqCst);
+    let (release, gate) = std::sync::mpsc::channel();
+    *RESOLVER_LINKED_GATE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = Some(gate);
+    let (started, started_rx) = tokio::sync::oneshot::channel();
+    *RESOLVER_LINKED_STARTED
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = Some(started);
+
+    static RUNTIME: OnceLock<crate::module::ModuleRuntime> = OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| {
+        ModuleRuntime::start(&RuntimeNames::default(), None).expect("test runtime starts")
+    });
+    let linked = Arc::new(LinkedRegistry::new());
+    linked.register(RESOLVER_LINKED_RECORD.id, resolver_linked_factory);
+    let reports = Arc::new(RecordedReports::default());
+    let resolver = Resolver::new(ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources: HashMap::from([(RESOLVER_LINKED_RECORD.id.to_owned(), ModuleSource::Linked)]),
+        linked,
+        search_paths: None,
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: vec![&RESOLVER_LINKED_RECORD],
+        terminal_marker: String::new(),
+        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        module_config: Arc::new(|_| serde_json::Value::Null),
+        reporter: Arc::new(FailureReporter::new(reports.clone())),
+    });
+
+    let proxy_calls = Arc::new(AtomicUsize::new(0));
+    struct CountedResolverAccess {
+        resolver: Resolver,
+        proxy_calls: Arc<AtomicUsize>,
+    }
+    impl ModuleAccess for CountedResolverAccess {
+        fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
+            self.resolver.find(id)
+        }
+
+        fn enabled(&self) -> bool {
+            self.resolver.enabled()
+        }
+
+        fn reporter(&self) -> &FailureReporter {
+            self.resolver.reporter()
+        }
+
+        fn ensure_loaded<'a>(&'a self, id: &'a str) -> AccessFuture<'a, Result<(), String>> {
+            Box::pin(self.resolver.ensure_loaded(id))
+        }
+
+        fn ensure_loaded_within<'a>(
+            &'a self,
+            id: &'a str,
+            within: Option<std::time::Duration>,
+        ) -> AccessFuture<'a, Result<(), crate::module::ReadinessFailure>> {
+            Box::pin(ModuleAccess::ensure_loaded_within(
+                &self.resolver,
+                id,
+                within,
+            ))
+        }
+
+        fn proxy<'a>(
+            &'a self,
+            bus_name: &'a str,
+            object_path: &'a str,
+        ) -> AccessFuture<'a, Result<Proxy, ProxyFailure>> {
+            let calls = Arc::clone(&self.proxy_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                ModuleAccess::proxy(&self.resolver, bus_name, object_path).await
+            })
+        }
+    }
+
+    let client = ModuleClient::new(CountedResolverAccess {
+        resolver: resolver.clone(),
+        proxy_calls: proxy_calls.clone(),
+    })
+    .with_timeout(std::time::Duration::from_millis(50));
+    let client_for_bind = client.clone();
+    let mut first_bind =
+        tokio::spawn(async move { client_for_bind.bind(RESOLVER_LINKED_RECORD.id).await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), started_rx)
+        .await
+        .expect("linked initializer should enter its gate")
+        .unwrap();
+    let first_result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut first_bind)
+        .await
+        .expect("explicit bind deadline should stop this caller waiting")
+        .unwrap();
+    assert!(matches!(
+        first_result,
+        Err(failure) if failure.kind == ModuleCallError::TransportFailed
+    ));
+    assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
+    assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        reports.0.lock().unwrap().as_slice(),
+        &[Reason::TransportFailed]
+    );
+
+    release.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if resolver.state_of(RESOLVER_LINKED_RECORD.id) == Availability::Ready {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the existing resolver attempt should finish after readiness opens");
+    let pinned = client.bind(RESOLVER_LINKED_RECORD.id).await.unwrap();
+    assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
+    assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
+    assert_eq!(proxy_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        reports.0.lock().unwrap().as_slice(),
+        &[Reason::TransportFailed]
+    );
+    drop(pinned);
+}
+
+#[cfg(feature = "modules")]
 #[tokio::test]
 async fn ordinary_binding_accepts_a_resolver_owned_linked_factory_without_library_proof() {
     use crate::module::runtime::{ModuleRuntime, RuntimeNames};
