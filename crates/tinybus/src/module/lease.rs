@@ -346,6 +346,21 @@ impl<E: Send + Sync + 'static> LeaseControl<E> {
     }
 }
 
+#[cfg(feature = "modules")]
+struct ActivationRollback<E: Send + Sync + 'static> {
+    control: Arc<LeaseControl<E>>,
+    armed: bool,
+}
+
+#[cfg(feature = "modules")]
+impl<E: Send + Sync + 'static> Drop for ActivationRollback<E> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.control.start();
+        }
+    }
+}
+
 /// A cloneable owner of a started module reservation and its callback object.
 #[cfg(feature = "modules")]
 pub struct RuntimeLease<T, E: Send + Sync + 'static> {
@@ -482,6 +497,10 @@ where
         ))
     });
     let control = Arc::new(LeaseControl::new(runtime.clone(), starter));
+    let mut rollback = ActivationRollback {
+        control: control.clone(),
+        armed: true,
+    };
 
     if let Err(error) = driver.validate(&reservation) {
         let _ = control.wait().await;
@@ -560,6 +579,7 @@ where
         return Err(LeaseError::new(LeasePhase::Start, None, false, Some(error)));
     }
 
+    rollback.armed = false;
     Ok(RuntimeLease { object, control })
 }
 
