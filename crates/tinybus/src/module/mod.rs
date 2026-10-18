@@ -15,12 +15,12 @@ mod first_admitted;
 mod github;
 mod hash;
 pub mod lease;
-#[cfg(feature = "modules")]
-pub use lease::RuntimeLease;
 pub use lease::{
     LeaseError, LeasePhase, LeaseReport, LeaseReportOutcome, RetryPolicy, RetryPolicyError,
     RuntimeLeaseDriver, StopOutcome,
 };
+#[cfg(feature = "modules")]
+pub use lease::{RuntimeLease, RuntimeLeaseFuture};
 pub mod manifest;
 pub mod platform;
 #[cfg(feature = "modules")]

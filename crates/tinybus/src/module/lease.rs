@@ -370,6 +370,11 @@ pub struct RuntimeLease<T, E: Send + Sync + 'static> {
     control: Arc<LeaseControl<E>>,
 }
 
+/// Owned activation result future returned by [`ModuleRuntime::lease`].
+#[cfg(feature = "modules")]
+pub type RuntimeLeaseFuture<T: Send + Sync + 'static, E: Send + Sync + 'static> =
+    Pin<Box<dyn Future<Output = Result<RuntimeLease<T, E>, LeaseError<E>>> + Send + 'static>>;
+
 #[cfg(feature = "modules")]
 impl<T, E: Send + Sync + 'static> RuntimeLease<T, E> {
     /// The object or host handle created for this reservation.
@@ -420,9 +425,7 @@ impl ModuleRuntime {
         make_callback: F,
         policy: RetryPolicy,
         reporter: R,
-    ) -> impl Future<Output = Result<RuntimeLease<D::Object, D::Error>, LeaseError<D::Error>>>
-    + Send
-    + 'static
+    ) -> RuntimeLeaseFuture<D::Object, D::Error>
     where
         D: RuntimeLeaseDriver,
         F: FnOnce(&D::Reservation, &D::Object) -> Result<I, D::Error> + Send + 'static,
@@ -444,11 +447,11 @@ impl ModuleRuntime {
             .await;
             let _ = response.send(activated);
         });
-        async move {
+        Box::pin(async move {
             result
                 .await
                 .unwrap_or_else(|_| Err(LeaseError::new(LeasePhase::Runtime, None, false, None)))
-        }
+        })
     }
 }
 
