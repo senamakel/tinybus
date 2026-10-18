@@ -764,7 +764,9 @@ async fn park_unacknowledged<E: Send + Sync + 'static>(
         false,
         error,
     ))));
-    std::future::pending::<()>().await
+    loop {
+        std::future::pending::<()>().await;
+    }
 }
 
 #[cfg(feature = "modules")]
