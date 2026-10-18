@@ -6,6 +6,7 @@ use crate::module::failure::{FailureReport, FailureSink};
 use crate::transport::memory::MemoryBus;
 use crate::{Connection, Error, Interface, InterfaceName, MemberName, ObjectPath, StreamRef};
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -349,6 +350,159 @@ async fn module_calls_stream_empty_and_past_window_payloads() {
     assert_eq!(empty_length, 0);
     assert!(received_rx.recv().await.unwrap().is_empty());
     assert_eq!(fixture.opens.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service_a = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service_b = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = bound_stream_record();
+    let events_a = Arc::new(Mutex::new(Vec::new()));
+    let events_b = Arc::new(Mutex::new(Vec::new()));
+    let (received_a_tx, mut received_a_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (received_b_tx, mut received_b_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    for (service, label, events, received) in [
+        (
+            &service_a,
+            "peer-a",
+            events_a.clone(),
+            received_a_tx,
+        ),
+        (
+            &service_b,
+            "peer-b",
+            events_b.clone(),
+            received_b_tx,
+        ),
+    ] {
+        service
+            .serve_at(
+                ObjectPath::new(record.object_path).unwrap(),
+                StreamService {
+                    interface_name: record.bus_name,
+                    connection: service.clone(),
+                    behavior: Behavior::Bound {
+                        label,
+                        received: received.clone(),
+                    },
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    events: Some(events.clone()),
+                },
+            )
+            .await
+            .unwrap();
+        service
+            .serve_at(
+                ObjectPath::new("/child").unwrap(),
+                StreamService {
+                    interface_name: record.bus_name,
+                    connection: service.clone(),
+                    behavior: Behavior::Bound {
+                        label,
+                        received,
+                    },
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    events: Some(events),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    service_a.request_name(record.bus_name).await.unwrap();
+    broker.attest_module(
+        &service_a.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::name::BusName::new(record.bus_name).unwrap(),
+            sha256: record.assets[0].sha256.to_string(),
+            library_sha256: record.assets[0].library_sha256.map(str::to_string),
+        },
+    );
+    let client = ModuleClient::new(StreamAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Reports::default())),
+        enabled: true,
+        ready: true,
+    });
+    let bound = client.bind_attested(record.id).await.unwrap();
+
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started = Arc::new(Mutex::new(Some(started_tx)));
+    let call_client = bound.clone();
+    let call_barrier = barrier.clone();
+    let call_started = started.clone();
+    let payload = b"bound stream payload".to_vec();
+    let call_payload = payload.clone();
+    let generating = tokio::spawn(async move {
+        call_client
+            .call_with_stream_detailed::<String, _, _>(
+                "Generate",
+                move |stream| HandoverStreamArguments {
+                    stream,
+                    started: call_started,
+                    barrier: call_barrier,
+                },
+                &call_payload,
+            )
+            .await
+    });
+    started_rx.await.unwrap();
+    service_a.release_name(record.bus_name).await.unwrap();
+    service_b.request_name(record.bus_name).await.unwrap();
+    barrier.wait();
+
+    let child_path = generating.await.unwrap().unwrap();
+    assert_eq!(child_path, "/child");
+    assert_eq!(received_a_rx.recv().await.unwrap(), payload);
+    assert!(received_b_rx.try_recv().is_err());
+
+    let child = bound.object_client(&child_path).unwrap();
+    assert_eq!(child.call::<String>("Read", ()).await.unwrap(), "peer-a");
+    assert_eq!(child.call::<String>("Release", ()).await.unwrap(), "peer-a");
+
+    let sanitized_bytes = b"sanitized bound stream";
+    assert_eq!(
+        bound
+            .call_with_stream::<String, _, _>(
+                "Generate",
+                |stream| serde_json::json!([stream]),
+                sanitized_bytes,
+            )
+            .await
+            .unwrap(),
+        "/child"
+    );
+    assert_eq!(received_a_rx.recv().await.unwrap(), sanitized_bytes);
+    assert_eq!(
+        events_a.lock().unwrap().as_slice(),
+        &["Generate", "Read", "Release", "Generate"]
+    );
+    assert!(events_b.lock().unwrap().is_empty());
+
+    drop(service_a);
+    assert!(bound
+        .call_with_stream::<String, _, _>(
+            "Generate",
+            |stream| serde_json::json!([stream]),
+            b"after disconnect",
+        )
+        .await
+        .is_err());
+    assert!(events_b.lock().unwrap().is_empty());
+    assert!(received_b_rx.try_recv().is_err());
+    broker_task.abort();
 }
 
 #[tokio::test]
