@@ -506,11 +506,11 @@ where
     };
 
     if let Err(error) = driver.validate(&reservation) {
-        let _ = control.wait().await;
+        let acknowledged = control.wait().await.is_ok();
         return Err(LeaseError::new(
             LeasePhase::Validate,
             None,
-            false,
+            acknowledged,
             Some(error),
         ));
     }
@@ -518,11 +518,11 @@ where
     let object = match driver.object(&reservation).await {
         Ok(object) => Arc::new(object),
         Err(error) => {
-            let _ = control.wait().await;
+            let acknowledged = control.wait().await.is_ok();
             return Err(LeaseError::new(
                 LeasePhase::Object,
                 None,
-                false,
+                acknowledged,
                 Some(error),
             ));
         }
@@ -531,28 +531,33 @@ where
     let callback = match catch_unwind(AssertUnwindSafe(|| make_callback(&reservation, &object))) {
         Ok(Ok(callback)) => callback,
         Ok(Err(error)) => {
-            let _ = control.wait().await;
+            let acknowledged = control.wait().await.is_ok();
             return Err(LeaseError::new(
                 LeasePhase::Callback,
                 None,
-                false,
+                acknowledged,
                 Some(error),
             ));
         }
         Err(_) => {
-            let _ = control.wait().await;
-            return Err(LeaseError::new(LeasePhase::Callback, None, false, None));
+            let acknowledged = control.wait().await.is_ok();
+            return Err(LeaseError::new(
+                LeasePhase::Callback,
+                None,
+                acknowledged,
+                None,
+            ));
         }
     };
 
     let (name, path) = match driver.callback_address(&reservation, &object) {
         Ok(address) => address,
         Err(error) => {
-            let _ = control.wait().await;
+            let acknowledged = control.wait().await.is_ok();
             return Err(LeaseError::new(
                 LeasePhase::Address,
                 None,
-                false,
+                acknowledged,
                 Some(error),
             ));
         }
@@ -572,14 +577,24 @@ where
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard)
         }
         Err(_) => {
-            let _ = control.wait().await;
-            return Err(LeaseError::new(LeasePhase::Export, None, false, None));
+            let acknowledged = control.wait().await.is_ok();
+            return Err(LeaseError::new(
+                LeasePhase::Export,
+                None,
+                acknowledged,
+                None,
+            ));
         }
     }
 
     if let Err(error) = driver.start(&reservation).await {
-        let _ = control.wait().await;
-        return Err(LeaseError::new(LeasePhase::Start, None, false, Some(error)));
+        let acknowledged = control.wait().await.is_ok();
+        return Err(LeaseError::new(
+            LeasePhase::Start,
+            None,
+            acknowledged,
+            Some(error),
+        ));
     }
 
     rollback.armed = false;

@@ -768,7 +768,9 @@ async fn validation_error_reports_unacknowledged_when_rollback_is_uncertain() {
     ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Stop(_, reply) => reply
-            .send(StopOutcome::Unacknowledged(DriverError("uncertain rollback")))
+            .send(StopOutcome::Unacknowledged(DriverError(
+                "uncertain rollback",
+            )))
             .unwrap(),
         _ => panic!("validation error starts rollback"),
     }
