@@ -925,6 +925,7 @@ async fn start_failure_keeps_the_exported_callback_until_stop_ack() {
     };
     assert_eq!(error.phase(), LeasePhase::Start);
     assert_eq!(error.driver_error().unwrap().0, "private start detail");
+    assert!(error.acknowledged(), "settled START failure rolls back to STOP ACK");
     assert!(harness.callback().await.is_err());
     assert!(harness.calls.try_recv().is_err());
 }
