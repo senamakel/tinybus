@@ -453,7 +453,10 @@ fn start_outcome_debug_redacts_typed_errors() {
     let uncertain = StartOutcome::Unacknowledged(DriverError("private start timeout"));
     assert_eq!(format!("{settled:?}"), "SettledFailure(<redacted>)");
     assert_eq!(format!("{uncertain:?}"), "Unacknowledged(<redacted>)");
-    assert_eq!(format!("{:?}", StartOutcome::<DriverError>::Started), "Started");
+    assert_eq!(
+        format!("{:?}", StartOutcome::<DriverError>::Started),
+        "Started"
+    );
 }
 
 #[tokio::test]
@@ -925,7 +928,10 @@ async fn start_failure_keeps_the_exported_callback_until_stop_ack() {
     };
     assert_eq!(error.phase(), LeasePhase::Start);
     assert_eq!(error.driver_error().unwrap().0, "private start detail");
-    assert!(error.acknowledged(), "settled START failure rolls back to STOP ACK");
+    assert!(
+        error.acknowledged(),
+        "settled START failure rolls back to STOP ACK"
+    );
     assert!(harness.callback().await.is_err());
     assert!(harness.calls.try_recv().is_err());
 }
