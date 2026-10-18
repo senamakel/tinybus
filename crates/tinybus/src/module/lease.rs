@@ -779,3 +779,7 @@ fn report(reporter: &Arc<dyn Fn(LeaseReport) + Send + Sync>, event: LeaseReport)
 #[cfg(all(test, feature = "modules"))]
 #[path = "lease_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lease_contract_tests.rs"]
+mod contract_tests;
