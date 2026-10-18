@@ -599,8 +599,9 @@ async fn cleanup_worker<D, E>(
     E: StdError + Send + Sync + 'static,
 {
     let max_attempts = policy.retry_delays.len() + 1;
-    for attempt in 1..=max_attempts {
-        if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
+    let mut attempt = 1;
+    loop {
+        if !check_fault(&*driver, &reservation, &state, &reporter, attempt) {
             std::future::pending::<()>().await;
         }
 
@@ -705,17 +706,17 @@ async fn cleanup_worker<D, E>(
         }
 
         if attempt < max_attempts {
-            if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
+            if !check_fault(&*driver, &reservation, &state, &reporter, attempt) {
                 std::future::pending::<()>().await;
             }
             tokio::time::sleep(policy.retry_delays[attempt - 1]).await;
+            attempt += 1;
         }
     }
-    unreachable!("finite retry sequence always terminates in the loop")
 }
 
 #[cfg(feature = "modules")]
-async fn check_fault<D, E>(
+fn check_fault<D, E>(
     driver: &D,
     reservation: &D::Reservation,
     state: &watch::Sender<CloseState<E>>,
@@ -729,31 +730,30 @@ where
     match catch_unwind(AssertUnwindSafe(|| driver.failed(reservation))) {
         Ok(false) => true,
         Ok(true) => {
-            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Faulted).await;
+            mark_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Faulted);
             false
         }
         Err(_) => {
-            park_unacknowledged(
+            mark_unacknowledged(
                 state,
                 reporter,
                 attempt,
                 None,
                 LeaseReportOutcome::Unacknowledged,
-            )
-            .await;
+            );
             false
         }
     }
 }
 
 #[cfg(feature = "modules")]
-async fn park_unacknowledged<E: Send + Sync + 'static>(
+fn mark_unacknowledged<E: Send + Sync + 'static>(
     state: &watch::Sender<CloseState<E>>,
     reporter: &Arc<dyn Fn(LeaseReport) + Send + Sync>,
     attempt: usize,
     error: Option<E>,
     outcome: LeaseReportOutcome,
-) -> StopOutcome<E> {
+) {
     report(
         reporter,
         LeaseReport {
@@ -768,6 +768,17 @@ async fn park_unacknowledged<E: Send + Sync + 'static>(
         false,
         error,
     ))));
+}
+
+#[cfg(feature = "modules")]
+async fn park_unacknowledged<E: Send + Sync + 'static>(
+    state: &watch::Sender<CloseState<E>>,
+    reporter: &Arc<dyn Fn(LeaseReport) + Send + Sync>,
+    attempt: usize,
+    error: Option<E>,
+    outcome: LeaseReportOutcome,
+) -> ! {
+    mark_unacknowledged(state, reporter, attempt, error, outcome);
     loop {
         std::future::pending::<()>().await;
     }

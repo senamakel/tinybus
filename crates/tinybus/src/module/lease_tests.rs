@@ -53,6 +53,7 @@ struct ControlledDriver {
     address_panic: Arc<AtomicBool>,
     start_panic: Arc<AtomicBool>,
     stop_panic: Arc<AtomicBool>,
+    stop_panic_after_reply: Arc<AtomicBool>,
     failed_panic: Arc<AtomicBool>,
     identity: Identity,
 }
@@ -66,7 +67,12 @@ impl RuntimeLeaseDriver for ControlledDriver {
     async fn reserve(&self) -> Result<Self::Reservation, Self::Error> {
         let (reply, result) = oneshot::channel();
         self.calls.send(DriverCall::Reserve(reply)).unwrap();
-        result.await.unwrap()
+        let outcome = result.await.unwrap();
+        assert!(
+            !self.stop_panic_after_reply.load(Ordering::Acquire),
+            "private delayed STOP panic payload"
+        );
+        outcome
     }
 
     fn validate(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
@@ -200,6 +206,7 @@ impl Harness {
                 address_panic: Arc::new(AtomicBool::new(false)),
                 start_panic: Arc::new(AtomicBool::new(false)),
                 stop_panic: Arc::new(AtomicBool::new(false)),
+                stop_panic_after_reply: Arc::new(AtomicBool::new(false)),
                 failed_panic: Arc::new(AtomicBool::new(false)),
                 identity: Identity(Arc::new(()), 1),
             },
