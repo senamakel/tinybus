@@ -347,7 +347,11 @@ async fn module_transport_close_wakes_an_idle_pending_receive() {
     }
     assert!(receiving.await.unwrap().unwrap().is_none());
     transport.close().await.unwrap();
-    assert!(sender.try_send((serde_json::to_vec(&message()).unwrap(), false)).is_err());
+    assert!(
+        sender
+            .try_send((serde_json::to_vec(&message()).unwrap(), false))
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -376,7 +380,11 @@ async fn module_transport_close_before_recv_drains_queued_frames_and_rejects_new
     assert_eq!(transport.recv().await.unwrap(), Some(first));
     assert_eq!(transport.recv().await.unwrap(), Some(second));
     assert!(transport.recv().await.unwrap().is_none());
-    assert!(sender.try_send((serde_json::to_vec(&message()).unwrap(), false)).is_err());
+    assert!(
+        sender
+            .try_send((serde_json::to_vec(&message()).unwrap(), false))
+            .is_err()
+    );
 }
 
 #[tokio::test]
