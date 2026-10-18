@@ -134,7 +134,10 @@ async fn close_verdict_is_published_before_reader_observes_eof(
         )
         .await
         .unwrap();
-    assert_eq!(reader.next_chunk().await.unwrap().as_deref(), Some(b"abc"));
+    assert_eq!(
+        reader.next_chunk().await.unwrap().as_deref(),
+        Some(b"abc".as_slice())
+    );
 
     let (close_sealed_tx, close_sealed_rx) = tokio::sync::oneshot::channel();
     let release_close = Arc::new(std::sync::Barrier::new(2));
