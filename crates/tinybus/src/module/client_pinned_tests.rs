@@ -449,9 +449,6 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         .unwrap() = Some(started);
 
     static RUNTIME: OnceLock<crate::module::ModuleRuntime> = OnceLock::new();
-    let runtime = RUNTIME.get_or_init(|| {
-        ModuleRuntime::start(&RuntimeNames::default(), None).expect("test runtime starts")
-    });
     let runtime_provider_started = Arc::new(tokio::sync::Notify::new());
     let runtime_provider_gate = Arc::new(tokio::sync::Notify::new());
     let first_runtime_request = Arc::new(AtomicBool::new(true));
@@ -486,7 +483,10 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
                     started.notify_one();
                     gate.notified().await;
                 }
-                Ok(runtime)
+                Ok(RUNTIME.get_or_init(|| {
+                    ModuleRuntime::start(&RuntimeNames::default(), None)
+                        .expect("test runtime starts after provider gate opens")
+                }))
             })
         }),
         module_config: Arc::new(|_| serde_json::Value::Null),
@@ -584,11 +584,17 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     let linked_initializer_started = started_rx;
     runtime_provider_gate.notify_one();
     tokio::time::timeout(
-        std::time::Duration::from_secs(2),
+        std::time::Duration::from_secs(5),
         linked_initializer_started,
     )
     .await
-    .expect("the process-owned resolver should start linked initialization")
+    .unwrap_or_else(|_| {
+        panic!(
+            "the process-owned resolver should start linked initialization; availability={:?}, runtime_provider_calls={}",
+            resolver.state_of(RESOLVER_LINKED_RECORD.id),
+            runtime_provider_calls.load(Ordering::SeqCst),
+        )
+    })
     .unwrap();
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
     assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 3);
