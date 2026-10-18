@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+
+- `ModuleRuntime::lease` owns reservation activation on the dedicated runtime and
+  returns a cloneable `RuntimeLease` with a shared acknowledged-stop worker.
+- `RuntimeLeaseDriver` and `StopOutcome` expose a protocol-neutral lifecycle
+  contract on the slim build; only proven-settled failures are retried.
+- Unacknowledged and faulted cleanup retains the exact callback registration
+  until STOP acknowledgement.
+
 ## 0.3.0
 
 ### Breaking changes

@@ -595,167 +595,98 @@ async fn cleanup_worker<D, E>(
     D: RuntimeLeaseDriver<Error = E>,
     E: StdError + Send + Sync + 'static,
 {
-    for attempt in 1..=policy.retry_delays.len() + 1 {
-        if driver.failed(&reservation) {
-            report(
-                &reporter,
-                LeaseReport {
-                    phase: LeasePhase::Stop,
-                    attempt: Some(attempt),
-                    outcome: LeaseReportOutcome::Faulted,
-                },
-            );
-            let error = Arc::new(LeaseError::new(
-                LeasePhase::Stop,
-                Some(attempt),
-                false,
-                None,
-            ));
-            state.send_replace(CloseState::Unacknowledged(error));
+    let max_attempts = policy.retry_delays.len() + 1;
+    for attempt in 1..=max_attempts {
+        if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
             std::future::pending::<()>().await;
         }
-        let mut stop = Box::pin(driver.stop(&reservation));
+
+        let stop_driver = driver.clone();
+        let stop_reservation = reservation.clone();
+        let mut stop = tokio::spawn(async move { stop_driver.stop(&stop_reservation).await });
         let result = match tokio::time::timeout(policy.per_attempt_timeout, &mut stop).await {
-            Ok(result) => result,
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) => {
+                park_unacknowledged(&state, &reporter, attempt, None, LeaseReportOutcome::Unacknowledged);
+                std::future::pending::<()>().await;
+            }
             Err(_) => {
-                report(
-                    &reporter,
-                    LeaseReport {
-                        phase: LeasePhase::Stop,
-                        attempt: Some(attempt),
-                        outcome: LeaseReportOutcome::TimedOut,
-                    },
-                );
-                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
-                    LeasePhase::Stop,
-                    Some(attempt),
-                    false,
-                    None,
-                ))));
-                // A local deadline cannot cancel remote work. Keep the original operation alive;
-                // only its eventual result can acknowledge cleanup or permit a later retry.
+                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::TimedOut });
+                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, None))));
                 match stop.await {
-                    StopOutcome::Acknowledged => {
-                        report(
-                            &reporter,
-                            LeaseReport {
-                                phase: LeasePhase::Stop,
-                                attempt: Some(attempt),
-                                outcome: LeaseReportOutcome::Acknowledged,
-                            },
-                        );
-                        let guard = callback_guard
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .take();
-                        if let Some(guard) = guard {
-                            guard.remove().await;
-                        }
-                        state.send_replace(CloseState::Acknowledged);
-                        return;
-                    }
-                    StopOutcome::RetryableFailure(error) => {
-                        state.send_replace(CloseState::Running);
-                        StopOutcome::RetryableFailure(error)
-                    }
-                    StopOutcome::Unacknowledged(error) => {
-                        report(
-                            &reporter,
-                            LeaseReport {
-                                phase: LeasePhase::Stop,
-                                attempt: Some(attempt),
-                                outcome: LeaseReportOutcome::Unacknowledged,
-                            },
-                        );
-                        state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
-                            LeasePhase::Stop,
-                            Some(attempt),
-                            false,
-                            Some(error),
-                        ))));
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        park_unacknowledged(&state, &reporter, attempt, None, LeaseReportOutcome::Unacknowledged);
                         std::future::pending::<()>().await;
-                        unreachable!("unacknowledged cleanup remains parked")
                     }
                 }
             }
         };
         match result {
             StopOutcome::Acknowledged => {
-                report(
-                    &reporter,
-                    LeaseReport {
-                        phase: LeasePhase::Stop,
-                        attempt: Some(attempt),
-                        outcome: LeaseReportOutcome::Acknowledged,
-                    },
-                );
-                let guard = callback_guard
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take();
-                if let Some(guard) = guard {
-                    guard.remove().await;
-                }
+                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
+                let guard = callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+                if let Some(guard) = guard { guard.remove().await; }
                 state.send_replace(CloseState::Acknowledged);
                 return;
             }
             StopOutcome::RetryableFailure(error) => {
-                report(
-                    &reporter,
-                    LeaseReport {
-                        phase: LeasePhase::Stop,
-                        attempt: Some(attempt),
-                        outcome: LeaseReportOutcome::Failed,
-                    },
-                );
-                if attempt == policy.retry_delays.len() + 1 {
-                    state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
-                        LeasePhase::Stop,
-                        Some(attempt),
-                        false,
-                        Some(error),
-                    ))));
+                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Failed });
+                if attempt == max_attempts {
+                    park_unacknowledged(&state, &reporter, attempt, Some(error), LeaseReportOutcome::Exhausted);
                     std::future::pending::<()>().await;
                 }
             }
             StopOutcome::Unacknowledged(error) => {
-                report(
-                    &reporter,
-                    LeaseReport {
-                        phase: LeasePhase::Stop,
-                        attempt: Some(attempt),
-                        outcome: LeaseReportOutcome::Unacknowledged,
-                    },
-                );
-                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
-                    LeasePhase::Stop,
-                    Some(attempt),
-                    false,
-                    Some(error),
-                ))));
+                park_unacknowledged(&state, &reporter, attempt, Some(error), LeaseReportOutcome::Unacknowledged);
                 std::future::pending::<()>().await;
             }
         }
-        if driver.failed(&reservation) {
-            report(
-                &reporter,
-                LeaseReport {
-                    phase: LeasePhase::Stop,
-                    attempt: Some(attempt),
-                    outcome: LeaseReportOutcome::Faulted,
-                },
-            );
-            state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
-                LeasePhase::Stop,
-                Some(attempt),
-                false,
-                None,
-            ))));
-            std::future::pending::<()>().await;
+        if attempt < max_attempts {
+            if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
+                std::future::pending::<()>().await;
+            }
+            tokio::time::sleep(policy.retry_delays[attempt - 1]).await;
         }
-        tokio::time::sleep(policy.retry_delays[attempt - 1]).await;
     }
     unreachable!("finite retry sequence always terminates in the loop")
+}
+
+#[cfg(feature = "modules")]
+async fn check_fault<D, E>(
+    driver: &D,
+    reservation: &D::Reservation,
+    state: &watch::Sender<CloseState<E>>,
+    reporter: &Arc<dyn Fn(LeaseReport) + Send + Sync>,
+    attempt: usize,
+) -> bool
+where
+    D: RuntimeLeaseDriver<Error = E>,
+    E: StdError + Send + Sync + 'static,
+{
+    match catch_unwind(AssertUnwindSafe(|| driver.failed(reservation))) {
+        Ok(false) => true,
+        Ok(true) => {
+            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Faulted);
+            false
+        }
+        Err(_) => {
+            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Unacknowledged);
+            false
+        }
+    }
+}
+
+#[cfg(feature = "modules")]
+fn park_unacknowledged<E: Send + Sync + 'static>(
+    state: &watch::Sender<CloseState<E>>,
+    reporter: &Arc<dyn Fn(LeaseReport) + Send + Sync>,
+    attempt: usize,
+    error: Option<E>,
+    outcome: LeaseReportOutcome,
+) {
+    report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome });
+    state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, error))));
 }
 
 #[cfg(feature = "modules")]
