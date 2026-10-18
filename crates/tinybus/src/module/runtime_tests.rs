@@ -264,7 +264,6 @@ async fn replacing_a_host_object_contains_the_retired_callback_drop_panic() {
         .expect("retiring a panicking callback must preserve the new registration");
     let proxy = runtime
         .connection()
-        .connection()
         .proxy(name.as_str(), path.as_str(), "org.example.ModuleRuntimeHostObject")
         .unwrap();
     let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
