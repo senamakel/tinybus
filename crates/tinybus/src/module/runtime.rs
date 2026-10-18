@@ -306,9 +306,6 @@ impl ModuleRuntime {
         self.host_objects.clone()
     }
 
-    pub(super) fn dedicated_handle(&self) -> tokio::runtime::Handle {
-        self.handle.clone()
-    }
 }
 
 pub(super) async fn serve_host_object_transaction(

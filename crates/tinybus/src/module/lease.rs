@@ -428,10 +428,10 @@ impl ModuleRuntime {
         I: crate::Interface,
         R: Fn(LeaseReport) + Send + Sync + 'static,
     {
-        let runtime = self.dedicated_handle();
         let host_objects = self.lease_host_object_registry();
         let (response, result) = oneshot::channel();
         self.spawn(async move {
+            let runtime = Handle::current();
             let activated = activate(
                 runtime,
                 host_objects,
