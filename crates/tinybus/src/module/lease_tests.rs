@@ -529,6 +529,25 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
 }
 
 #[tokio::test]
+async fn reserve_error_returns_the_typed_failure_without_starting_cleanup() {
+    let mut harness = Harness::new();
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Err(DriverError("private reserve detail")))
+            .unwrap(),
+        _ => panic!("reserve is the first lifecycle operation"),
+    }
+    let Err(error) = opening.await.unwrap() else {
+        panic!("reserve error cannot produce a lease");
+    };
+    assert_eq!(error.phase(), LeasePhase::Reserve);
+    assert_eq!(error.driver_error().unwrap().0, "private reserve detail");
+    assert!(!error.to_string().contains("private reserve detail"));
+    assert!(harness.calls.try_recv().is_err(), "no reservation means no STOP or START");
+}
+
+#[tokio::test]
 async fn cancelling_during_object_creation_keeps_activation_and_one_rollback_owner() {
     let mut harness = Harness::new();
     let opening = tokio::spawn(harness.open());
@@ -970,6 +989,35 @@ async fn callback_factory_panic_still_rolls_back_the_reserved_resource() {
         panic!("panicking callback factory cannot create a lease");
     };
     assert_eq!(error.phase(), LeasePhase::Callback);
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn callback_address_error_rolls_back_before_export_or_start() {
+    let mut harness = Harness::new();
+    harness.driver.address_error.store(true, Ordering::Release);
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("address error rolls back before export"),
+    }
+    let Err(error) = opening.await.unwrap() else {
+        panic!("callback address error cannot produce a lease");
+    };
+    assert_eq!(error.phase(), LeasePhase::Address);
+    assert_eq!(error.driver_error().unwrap().0, "private address error detail");
+    assert!(harness.calls.try_recv().is_err(), "address error prevents START");
     assert!(harness.callback().await.is_err());
 }
 

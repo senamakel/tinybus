@@ -869,7 +869,46 @@ async fn a_bound_attested_client_and_its_objects_never_rebind_after_alias_handov
         held_object.call::<String>("Consume", ()).await.unwrap(),
         "attested"
     );
-    assert_eq!(calls_a.lock().unwrap().len(), 2);
+    assert_eq!(
+        bound
+            .call_detailed::<String>("Consume", ())
+            .await
+            .unwrap(),
+        "attested"
+    );
+    assert_eq!(
+        bound
+            .call_confidential::<String>("Consume", ())
+            .await
+            .unwrap(),
+        "attested"
+    );
+    assert_eq!(
+        bound
+            .call_confidential_detailed::<String>("Consume", ())
+            .await
+            .unwrap(),
+        "attested"
+    );
+    assert_eq!(
+        held_object
+            .call_detailed::<String>("Consume", ())
+            .await
+            .unwrap(),
+        "attested"
+    );
+    assert_eq!(
+        held_object
+            .call_confidential::<String>("Consume", ())
+            .await
+            .unwrap(),
+        "attested"
+    );
+    assert!(matches!(
+        bound.object_client("invalid object path"),
+        Err(ModuleCallError::IncompatibleContract)
+    ));
+    assert_eq!(calls_a.lock().unwrap().len(), 7);
     assert!(calls_b.lock().unwrap().is_empty());
 
     drop(service_a);
