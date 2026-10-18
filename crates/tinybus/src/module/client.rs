@@ -815,6 +815,65 @@ impl BoundModuleClient {
         invoke_proxy_detailed(&*self.access, self.record, &self.proxy, member, args, true).await
     }
 
+    /// Upload a bulk payload while calling a member on this same unique peer.
+    ///
+    /// The stream open, method call, and payload retain the pinned destination
+    /// even if the public bus name changes owners during argument construction.
+    /// This is ordinary bus delivery; it does not add a confidential stream
+    /// fallback.
+    ///
+    /// # Errors
+    ///
+    /// A detailed [`ModuleCallFailure`]. Its remote fields remain available to
+    /// the caller while `Debug`, `Display`, and reports stay sanitized.
+    pub async fn call_with_stream_detailed<R, F, A>(
+        &self,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallFailure>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        let member = crate::MemberName::new(member).map_err(|error| {
+            report_proxy_failure_detailed(self.access.reporter(), self.record, &error)
+        })?;
+        self.proxy
+            .connection()
+            .call_with_stream_serialized(
+                self.proxy.destination().clone(),
+                self.proxy.path().clone(),
+                self.proxy.interface().clone(),
+                member,
+                args,
+                bytes,
+                self.proxy.timeout(),
+            )
+            .await
+            .map_err(|error| {
+                report_proxy_failure_detailed(self.access.reporter(), self.record, &error)
+            })
+    }
+
+    /// Sanitized counterpart to [`Self::call_with_stream_detailed`].
+    pub async fn call_with_stream<R, F, A>(
+        &self,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallError>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        self.call_with_stream_detailed(member, args, bytes)
+            .await
+            .map_err(|failure| failure.kind)
+    }
+
     /// Create a held-object client pinned to this same unique module peer.
     pub fn object_client(&self, object_path: &str) -> Result<ModuleObjectClient, ModuleCallError> {
         let proxy = self
