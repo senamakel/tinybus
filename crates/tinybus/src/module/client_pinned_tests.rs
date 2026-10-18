@@ -536,7 +536,7 @@ async fn ordinary_bound_detailed_failures_keep_fields_and_sanitize_renderings() 
     assert!(!failure.to_string().contains(REMOTE_DETAIL));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn ordinary_bound_calls_keep_the_configured_deadline_and_report_timeout() {
     let bus = MemoryBus::new();
     let _broker = Broker::new().spawn(bus.clone());
@@ -567,8 +567,12 @@ async fn ordinary_bound_calls_keep_the_configured_deadline_and_report_timeout() 
     .await
     .unwrap();
 
-    let result: Result<String, _> = pinned.call("Hang", ()).await;
-    assert!(matches!(result, Err(ModuleCallError::TransportFailed)));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(21),
+        pinned.call::<String>("Hang", ()),
+    )
+    .await;
+    assert!(matches!(result, Ok(Err(ModuleCallError::TransportFailed))));
     assert_eq!(
         reports.0.lock().unwrap().as_slice(),
         &[Reason::TransportFailed]
