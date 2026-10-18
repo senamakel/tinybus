@@ -154,6 +154,7 @@ pub struct LeaseError<E> {
 }
 
 impl<E> LeaseError<E> {
+    #[cfg(feature = "modules")]
     fn new(
         phase: LeasePhase,
         attempt: Option<usize>,
