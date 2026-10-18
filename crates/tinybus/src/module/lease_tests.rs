@@ -1093,7 +1093,7 @@ async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
 async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
     let mut harness = Harness::new();
     let lease = harness.opened().await;
-    assert_eq!(lease.object().identity.1, 1);
+    assert_eq!(lease.object().0.1, 1);
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
 
     let closing = tokio::spawn(async move { lease.close().await });
