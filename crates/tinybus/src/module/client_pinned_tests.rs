@@ -406,6 +406,8 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
     assert_eq!(received_a_rx.recv().await.unwrap(), payload);
     assert!(received_b_rx.try_recv().is_err());
 
+    let root: String = pinned.call("Who", ()).await.unwrap();
+    assert_eq!(root, "peer-a");
     let object = pinned.object_client("/child").unwrap();
     let response: String = object.call("Read", ()).await.unwrap();
     assert_eq!(response, "peer-a");
@@ -413,7 +415,7 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
     assert_eq!(response, "peer-a");
     assert_eq!(
         events_a.lock().unwrap().as_slice(),
-        &["Upload", "Read", "Release"]
+        &["Upload", "Who", "Read", "Release"]
     );
     assert!(events_b.lock().unwrap().is_empty());
 
