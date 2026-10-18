@@ -92,7 +92,7 @@ impl Interface for Peer {
     }
 
     fn members(&self) -> Vec<MemberName> {
-        ["Who", "Upload", "Read", "Release", "Fail"]
+        ["Who", "Upload", "Read", "Release", "Fail", "Hang"]
             .map(|member| MemberName::new(member).unwrap())
             .to_vec()
     }
@@ -111,6 +111,7 @@ impl Interface for Peer {
                 name: "ai.tinyhumans.docs.Error.Rejected".to_owned(),
                 message: REMOTE_DETAIL.to_owned(),
             }),
+            "Hang" => std::future::pending().await,
             _ => Err(crate::Error::failed("unexpected test method")),
         }
     }
@@ -337,4 +338,48 @@ async fn ordinary_bound_detailed_failures_keep_fields_and_sanitize_renderings() 
     assert_eq!(failure.message, REMOTE_DETAIL);
     assert!(!format!("{failure:?}").contains(REMOTE_DETAIL));
     assert!(!failure.to_string().contains(REMOTE_DETAIL));
+}
+
+#[tokio::test]
+async fn ordinary_bound_calls_keep_the_configured_deadline_and_report_timeout() {
+    let bus = MemoryBus::new();
+    let _broker = Broker::new().spawn(bus.clone());
+    let (received, _received_rx) = tokio::sync::mpsc::unbounded_channel();
+    let service = peer(&bus, "slow-peer", received, Arc::new(Mutex::new(Vec::new()))).await;
+    service.request_name(RECORD.bus_name).await.unwrap();
+    let caller = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = caller
+        .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+        .unwrap();
+    let reports = Arc::new(RecordedReports::default());
+    let pinned = ModuleClient::new(Access {
+        connection: caller,
+        reporter: FailureReporter::new(reports.clone()),
+        enabled: true,
+    })
+    .with_fixture(proxy)
+    .with_timeout(std::time::Duration::from_millis(20))
+    .bind(RECORD.id)
+    .await
+    .unwrap();
+
+    let result: Result<String, _> = pinned.call("Hang", ()).await;
+    assert!(matches!(result, Err(ModuleCallError::TransportFailed)));
+    assert_eq!(reports.0.lock().unwrap().as_slice(), &[Reason::TransportFailed]);
+}
+
+#[test]
+fn unsupported_module_availability_keeps_the_unavailable_classification() {
+    let error = crate::Error::ModuleUnavailable {
+        module: RECORD.id.to_owned(),
+        state: "unsupported".to_owned(),
+        detail: "the host does not support this module source".to_owned(),
+    };
+
+    assert_eq!(
+        classify(&error),
+        (ModuleCallError::Unavailable, Reason::ModuleUnavailable)
+    );
 }
