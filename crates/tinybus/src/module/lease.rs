@@ -677,12 +677,7 @@ where
         }
         Ok(StartOutcome::Unacknowledged(error)) => {
             rollback.park();
-            Err(LeaseError::new(
-                LeasePhase::Start,
-                None,
-                false,
-                Some(error),
-            ))
+            Err(LeaseError::new(LeasePhase::Start, None, false, Some(error)))
         }
         Err(_) => {
             rollback.park();

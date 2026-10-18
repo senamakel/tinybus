@@ -1086,6 +1086,7 @@ impl crate::Interface for LifecyclePeer {
 #[cfg(feature = "modules")]
 struct BoundLifecycleDriver {
     client: crate::module::BoundModuleClient,
+    panic_after_accept: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 #[cfg(feature = "modules")]
@@ -1146,10 +1147,17 @@ impl crate::module::RuntimeLeaseDriver for BoundLifecycleDriver {
     }
 
     async fn start(&self, _: &Self::Reservation) -> crate::module::StartOutcome<Self::Error> {
-        match self.client.call::<String>("Start", ()).await {
-            Ok(peer) if peer == "peer-a" => crate::module::StartOutcome::Started,
-            Ok(_) => crate::module::StartOutcome::SettledFailure(BoundLifecycleError),
-            Err(_) => crate::module::StartOutcome::Unacknowledged(BoundLifecycleError),
+        let panic_after_accept = self.panic_after_accept.lock().unwrap().take();
+        if let Some(panic_after_accept) = panic_after_accept {
+            let call = self.client.call::<String>("Start", ());
+            tokio::pin!(call);
+            tokio::select! {
+                biased;
+                _ = panic_after_accept => panic!("private START panic after remote acceptance"),
+                result = &mut call => map_bound_start(result),
+            }
+        } else {
+            map_bound_start(self.client.call::<String>("Start", ()).await)
         }
     }
 
@@ -1162,6 +1170,17 @@ impl crate::module::RuntimeLeaseDriver for BoundLifecycleDriver {
 
     fn failed(&self, _: &Self::Reservation) -> bool {
         false
+    }
+}
+
+#[cfg(feature = "modules")]
+fn map_bound_start(
+    result: Result<String, ModuleCallError>,
+) -> crate::module::StartOutcome<BoundLifecycleError> {
+    match result {
+        Ok(peer) if peer == "peer-a" => crate::module::StartOutcome::Started,
+        Ok(_) => crate::module::StartOutcome::SettledFailure(BoundLifecycleError),
+        Err(_) => crate::module::StartOutcome::Unacknowledged(BoundLifecycleError),
     }
 }
 
@@ -1254,6 +1273,7 @@ async fn a_bound_lease_driver_keeps_all_lifecycle_calls_on_the_attested_peer() {
     let opening = runtime.lease(
         BoundLifecycleDriver {
             client: bound.clone(),
+            panic_after_accept: Mutex::new(None),
         },
         |_, _| Ok(BoundLeaseCallback),
         crate::module::RetryPolicy::new(std::time::Duration::from_millis(100), vec![]).unwrap(),
@@ -1334,7 +1354,10 @@ async fn a_timed_out_bound_start_does_not_stop_before_late_provider_completion()
         )
         .unwrap();
     let opening = tokio::spawn(runtime.lease(
-        BoundLifecycleDriver { client: bound },
+        BoundLifecycleDriver {
+            client: bound,
+            panic_after_accept: Mutex::new(None),
+        },
         |_, _| Ok(BoundLeaseCallback),
         crate::module::RetryPolicy::new(Duration::from_millis(100), vec![]).unwrap(),
         |_| {},
@@ -1368,6 +1391,92 @@ async fn a_timed_out_bound_start_does_not_stop_before_late_provider_completion()
         callback_before_late_completion.is_ok(),
         callback_after_late_completion.is_ok(),
     );
+    broker_task.abort();
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_start_panic_after_remote_acceptance_parks_without_stop() {
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = strict_record();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (start_accepted, start_accepted_rx) = tokio::sync::oneshot::channel();
+    let (start_completed, start_completed_rx) = tokio::sync::oneshot::channel();
+    let (panic_after_accept, panic_after_accept_rx) = tokio::sync::oneshot::channel();
+    let start_release = Arc::new(tokio::sync::Semaphore::new(0));
+    service
+        .serve_at(
+            crate::ObjectPath::new(record.object_path).unwrap(),
+            LateStartPeer {
+                events: events.clone(),
+                start_accepted: Mutex::new(Some(start_accepted)),
+                start_release: start_release.clone(),
+                start_completed: Mutex::new(Some(start_completed)),
+            },
+        )
+        .await
+        .unwrap();
+    service.request_name(record.bus_name).await.unwrap();
+    // This fixture proves broker behavior through the private host attestation
+    // helper, not the separate native artifact-admission path.
+    broker.attest_module(
+        &service.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::BusName::new(record.bus_name).unwrap(),
+            sha256: record.assets[0].sha256.to_string(),
+            library_sha256: record.assets[0].library_sha256.map(str::to_string),
+        },
+    );
+    let client = ModuleClient::new(PreparedAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    });
+    let bound = client.bind_attested(record.id).await.unwrap();
+    let runtime =
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap();
+    let callback = runtime
+        .proxy(
+            "ai.tinyhumans.test.BoundLeaseCallback",
+            "/ai/tinyhumans/test/BoundLeaseCallback",
+        )
+        .unwrap();
+    let opening = tokio::spawn(runtime.lease(
+        BoundLifecycleDriver {
+            client: bound,
+            panic_after_accept: Mutex::new(Some(panic_after_accept_rx)),
+        },
+        |_, _| Ok(BoundLeaseCallback),
+        crate::module::RetryPolicy::new(Duration::from_millis(100), vec![]).unwrap(),
+        |_| {},
+    ));
+    start_accepted_rx.await.unwrap();
+    panic_after_accept.send(()).unwrap();
+    let opened = tokio::time::timeout(Duration::from_secs(2), opening)
+        .await
+        .expect("the START child panic is reported to activation")
+        .unwrap();
+    let Err(error) = opened else {
+        panic!("a panicking START cannot produce a lease");
+    };
+    assert_eq!(error.phase(), crate::module::LeasePhase::Start);
+
+    start_release.add_permits(1);
+    start_completed_rx.await.unwrap();
+    let observed_calls = events.lock().unwrap().clone();
+    let callback_live: Result<serde_json::Value, _> = callback.call("Ping", ()).await;
+    assert!(!error.acknowledged());
+    assert_eq!(observed_calls, vec!["Reserve", "Start"]);
+    assert!(callback_live.is_ok());
     broker_task.abort();
 }
 
