@@ -388,6 +388,26 @@ async fn module_transport_close_before_recv_drains_queued_frames_and_rejects_new
 }
 
 #[tokio::test]
+async fn module_transport_send_after_close_is_refused_before_host_delivery() {
+    let _host_state = host_state_guard().await;
+    let (_sender, receiver) = mpsc::channel(1);
+    let transport = ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        closed: close_signal(),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    };
+    HOST_SEND_CODE.store(TB_OK, Ordering::Release);
+    transport.close().await.unwrap();
+
+    assert!(matches!(
+        transport.send(message()).await,
+        Err(Error::ConnectionClosed)
+    ));
+}
+
+#[tokio::test]
 async fn a_cancelled_module_transport_close_leaves_a_persistent_wakeup() {
     let _host_state = host_state_guard().await;
     let (sender, receiver) = mpsc::channel(1);
