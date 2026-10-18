@@ -13,7 +13,7 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     id: "ordinary-pinned-client-test",
     bus_name: "ai.tinyhumans.test.OrdinaryPinnedClient",
     object_path: "/ai/tinyhumans/test/OrdinaryPinnedClient",
-    version: "0.3.1",
+    version: "0.3.2",
     release_url: "https://example.invalid/tinybus",
     // Ordinary fixtures and linked host factories intentionally have no
     // release archive/library pair to attest.
@@ -284,7 +284,7 @@ fn linked_ordinary_factory() -> crate::Result<crate::module::LinkedModule> {
             schema: MANIFEST_SCHEMA,
             module: ModuleIdentity {
                 name: RECORD.id.to_owned(),
-                version: Version::new(0, 3, 1),
+                version: Version::new(0, 3, 2),
                 description: String::new(),
                 homepage: None,
                 license: String::new(),
@@ -653,7 +653,7 @@ async fn ordinary_binding_refuses_an_unsupported_resolver_without_proxy_or_busin
         id: "ordinary-binding-unsupported",
         bus_name: "ai.tinyhumans.test.OrdinaryBindingUnsupported",
         object_path: "/ai/tinyhumans/test/OrdinaryBindingUnsupported",
-        version: "0.3.1",
+        version: "0.3.2",
         release_url: "https://example.invalid/tinybus",
         assets: &[],
     };

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.2
+
+### Added
+
+- `ModuleClient::bind` returns a private ordinary client pinned to the serving
+  peer for root calls, streamed uploads, and held object paths. It supports
+  linked modules and fixtures without making an artifact-attestation claim.
+
+### Fixed
+
+- Ordinary bindings preserve the selected proxy's deadline for owner lookup
+  and later calls unless the client supplies an explicit override.
+
 ## 0.3.1
 
 ### Added
