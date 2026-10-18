@@ -749,6 +749,40 @@ async fn validation_failure_after_reserve_still_stops_and_never_starts() {
 }
 
 #[tokio::test]
+async fn validation_error_reports_unacknowledged_when_rollback_is_uncertain() {
+    let mut harness = Harness::new();
+    harness
+        .driver
+        .validation_error
+        .store(true, Ordering::Release);
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve must be first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply
+            .send(StopOutcome::Unacknowledged(DriverError("uncertain rollback")))
+            .unwrap(),
+        _ => panic!("validation error starts rollback"),
+    }
+    let Err(error) = opening.await.unwrap() else {
+        panic!("failed validation cannot produce a lease");
+    };
+    assert_eq!(error.phase(), LeasePhase::Validate);
+    assert!(!error.acknowledged());
+    assert_eq!(error.driver_error().unwrap().0, "private validation detail");
+    assert!(!format!("{error:?}").contains("uncertain rollback"));
+    assert!(harness.calls.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn object_failure_after_reserve_keeps_the_cleanup_owner_until_stop_ack() {
     let mut harness = Harness::new();
     let opening = tokio::spawn(harness.open());
