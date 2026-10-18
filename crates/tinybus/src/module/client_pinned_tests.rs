@@ -185,7 +185,12 @@ async fn an_ordinary_fixture_with_no_release_assets_can_bind() {
     })
     .with_fixture(proxy);
 
-    let pinned = client.bind(RECORD.id).await.unwrap();
+    let pinned = client.bind(RECORD.id).await.unwrap_or_else(|failure| {
+        panic!(
+            "ordinary linked factory binding failed ({failure:?}); resolver state: {:?}",
+            client.access.find(RECORD.id).map(|record| record.id)
+        )
+    });
     let response: String = pinned.call("Who", ()).await.unwrap();
     assert_eq!(response, "fixture");
 }
