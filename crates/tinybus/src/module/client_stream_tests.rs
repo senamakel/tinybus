@@ -196,9 +196,17 @@ impl Interface for StreamService {
     }
 
     fn members(&self) -> Vec<MemberName> {
-        ["Upload", "Generate", "Read", "Release", "InvalidInput", "Unavailable", "Stall"]
-            .map(|name| MemberName::new(name).unwrap())
-            .to_vec()
+        [
+            "Upload",
+            "Generate",
+            "Read",
+            "Release",
+            "InvalidInput",
+            "Unavailable",
+            "Stall",
+        ]
+        .map(|name| MemberName::new(name).unwrap())
+        .to_vec()
     }
 
     async fn call(&self, member: &MemberName, args: Value) -> crate::Result<Value> {
@@ -219,9 +227,7 @@ impl Interface for StreamService {
                 received.send(bytes).unwrap();
                 Ok(serde_json::json!("/child"))
             }
-            (Behavior::Bound { label, .. }, "Read" | "Release") => {
-                Ok(serde_json::json!(label))
-            }
+            (Behavior::Bound { label, .. }, "Read" | "Release") => Ok(serde_json::json!(label)),
             (Behavior::Invalid, "InvalidInput") => Err(Error::MethodFailed {
                 name: "ai.tinyhumans.tinydocs.Error.InvalidInput".to_string(),
                 message: "secret document detail".to_string(),
@@ -373,18 +379,8 @@ async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
     let (received_b_tx, mut received_b_rx) = tokio::sync::mpsc::unbounded_channel();
 
     for (service, label, events, received) in [
-        (
-            &service_a,
-            "peer-a",
-            events_a.clone(),
-            received_a_tx,
-        ),
-        (
-            &service_b,
-            "peer-b",
-            events_b.clone(),
-            received_b_tx,
-        ),
+        (&service_a, "peer-a", events_a.clone(), received_a_tx),
+        (&service_b, "peer-b", events_b.clone(), received_b_tx),
     ] {
         service
             .serve_at(
@@ -408,10 +404,7 @@ async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
                 StreamService {
                     interface_name: record.bus_name,
                     connection: service.clone(),
-                    behavior: Behavior::Bound {
-                        label,
-                        received,
-                    },
+                    behavior: Behavior::Bound { label, received },
                     calls: Arc::new(AtomicUsize::new(0)),
                     events: Some(events),
                 },
@@ -492,14 +485,16 @@ async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
     assert!(events_b.lock().unwrap().is_empty());
 
     drop(service_a);
-    assert!(bound
-        .call_with_stream::<String, _, _>(
-            "Generate",
-            |stream| serde_json::json!([stream]),
-            b"after disconnect",
-        )
-        .await
-        .is_err());
+    assert!(
+        bound
+            .call_with_stream::<String, _, _>(
+                "Generate",
+                |stream| serde_json::json!([stream]),
+                b"after disconnect",
+            )
+            .await
+            .is_err()
+    );
     assert!(events_b.lock().unwrap().is_empty());
     assert!(received_b_rx.try_recv().is_err());
     broker_task.abort();
