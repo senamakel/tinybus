@@ -483,7 +483,7 @@ async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
     );
     assert!(events_b.lock().unwrap().is_empty());
 
-    drop(service_a);
+    service_a.close().await.unwrap();
     assert!(
         bound
             .call_with_stream::<String, _, _>(
