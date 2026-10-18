@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.5
+
+### Fixed
+
+- Make the rejected native-worker spawn test deterministic when another
+  request callback is already in flight, while retaining the uncertain
+  instance's resources until callback settlement.
+
 ## 0.3.4
 
 ### Added
