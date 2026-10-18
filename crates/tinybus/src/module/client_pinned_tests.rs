@@ -216,6 +216,15 @@ unsafe extern "C" fn linked_ordinary_shutdown(context: *mut std::ffi::c_void, _:
 }
 
 #[cfg(feature = "modules")]
+unsafe extern "C" fn linked_ordinary_reinitialize(
+    _: *mut std::ffi::c_void,
+    _: *const u8,
+    _: usize,
+) -> i32 {
+    crate::module::abi::TB_OK
+}
+
+#[cfg(feature = "modules")]
 unsafe extern "C" fn linked_ordinary_init(
     host: *const crate::module::abi::TbHostVtable,
     out: *mut crate::module::abi::TbModuleVtable,
@@ -230,7 +239,7 @@ unsafe extern "C" fn linked_ordinary_init(
             module_ctx: context.cast(),
             deliver: linked_ordinary_deliver,
             shutdown: linked_ordinary_shutdown,
-            reinitialize: None,
+            reinitialize: Some(linked_ordinary_reinitialize),
         };
     }
     let host_context = host.host_ctx as usize;
@@ -328,11 +337,6 @@ async fn ordinary_binding_accepts_a_resolver_owned_linked_factory_without_librar
     });
 
     assert!(RECORD.assets.is_empty());
-    let load_result = resolver.ensure_loaded(RECORD.id).await;
-    assert!(
-        load_result.is_ok(),
-        "linked resolver failed to load: {load_result:?}"
-    );
     let diagnostic_resolver = resolver.clone();
     let client = ModuleClient::new(resolver);
     let pinned = client.bind(RECORD.id).await.unwrap_or_else(|failure| {
