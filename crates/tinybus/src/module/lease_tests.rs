@@ -184,7 +184,10 @@ struct PanickingNameCallback {
 #[async_trait::async_trait]
 impl crate::Interface for PanickingNameCallback {
     fn name(&self) -> crate::InterfaceName {
-        assert!(!self.armed.load(Ordering::Acquire), "name called during removal");
+        assert!(
+            !self.armed.load(Ordering::Acquire),
+            "name called during removal"
+        );
         CALLBACK_NAME.parse().unwrap()
     }
 
@@ -197,7 +200,9 @@ impl crate::Interface for PanickingNameCallback {
         _: &crate::MemberName,
         _: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
-        Ok(serde_json::json!(self.calls.fetch_add(1, Ordering::AcqRel) + 1))
+        Ok(serde_json::json!(
+            self.calls.fetch_add(1, Ordering::AcqRel) + 1
+        ))
     }
 }
 
@@ -208,7 +213,10 @@ struct PanickingDropCallback {
 
 impl Drop for PanickingDropCallback {
     fn drop(&mut self) {
-        assert!(!self.armed.load(Ordering::Acquire), "callback destructor panic");
+        assert!(
+            !self.armed.load(Ordering::Acquire),
+            "callback destructor panic"
+        );
     }
 }
 
@@ -227,7 +235,9 @@ impl crate::Interface for PanickingDropCallback {
         _: &crate::MemberName,
         _: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
-        Ok(serde_json::json!(self.calls.fetch_add(1, Ordering::AcqRel) + 1))
+        Ok(serde_json::json!(
+            self.calls.fetch_add(1, Ordering::AcqRel) + 1
+        ))
     }
 }
 
@@ -1165,28 +1175,33 @@ async fn callback_name_is_not_reinvoked_during_acknowledged_withdrawal() {
     let calls = harness.callback_calls.clone();
     let armed = Arc::new(AtomicBool::new(false));
     let name_armed = armed.clone();
-    let opening = tokio::spawn(harness.runtime.lease(
-        harness.driver.clone(),
-        move |_, _| {
-            Ok(PanickingNameCallback {
-                calls,
-                armed: name_armed,
-            })
-        },
-        RetryPolicy::new(
-            std::time::Duration::from_millis(100),
-            vec![std::time::Duration::ZERO],
-        )
-        .unwrap(),
-        |_| {},
-    ));
+    let opening = tokio::spawn(
+        harness.runtime.lease(
+            harness.driver.clone(),
+            move |_, _| {
+                Ok(PanickingNameCallback {
+                    calls,
+                    armed: name_armed,
+                })
+            },
+            RetryPolicy::new(
+                std::time::Duration::from_millis(100),
+                vec![std::time::Duration::ZERO],
+            )
+            .unwrap(),
+            |_| {},
+        ),
+    );
     match harness.calls.recv().await.unwrap() {
         DriverCall::Reserve(reply) => reply
             .send(Ok(Reservation(harness.driver.identity.clone())))
             .unwrap(),
         _ => panic!("reserve is first"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),
@@ -1218,28 +1233,33 @@ async fn callback_destructor_panic_does_not_interrupt_acknowledged_withdrawal() 
     let calls = harness.callback_calls.clone();
     let armed = Arc::new(AtomicBool::new(false));
     let drop_armed = armed.clone();
-    let opening = tokio::spawn(harness.runtime.lease(
-        harness.driver.clone(),
-        move |_, _| {
-            Ok(PanickingDropCallback {
-                calls,
-                armed: drop_armed,
-            })
-        },
-        RetryPolicy::new(
-            std::time::Duration::from_millis(100),
-            vec![std::time::Duration::ZERO],
-        )
-        .unwrap(),
-        |_| {},
-    ));
+    let opening = tokio::spawn(
+        harness.runtime.lease(
+            harness.driver.clone(),
+            move |_, _| {
+                Ok(PanickingDropCallback {
+                    calls,
+                    armed: drop_armed,
+                })
+            },
+            RetryPolicy::new(
+                std::time::Duration::from_millis(100),
+                vec![std::time::Duration::ZERO],
+            )
+            .unwrap(),
+            |_| {},
+        ),
+    );
     match harness.calls.recv().await.unwrap() {
         DriverCall::Reserve(reply) => reply
             .send(Ok(Reservation(harness.driver.identity.clone())))
             .unwrap(),
         _ => panic!("reserve is first"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),

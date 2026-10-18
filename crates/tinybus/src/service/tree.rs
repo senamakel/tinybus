@@ -74,7 +74,11 @@ impl ObjectTree {
             }
         }
         *entry = retained;
-        entry.push(ObjectRegistration { id, name, interface });
+        entry.push(ObjectRegistration {
+            id,
+            name,
+            interface,
+        });
         (id, replaced)
     }
 
