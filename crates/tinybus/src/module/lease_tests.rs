@@ -48,6 +48,7 @@ struct ControlledDriver {
     failed: Arc<AtomicBool>,
     validation_error: Arc<AtomicBool>,
     start_error: Arc<AtomicBool>,
+    address_error: Arc<AtomicBool>,
     validation_panic: Arc<AtomicBool>,
     address_panic: Arc<AtomicBool>,
     start_panic: Arc<AtomicBool>,
@@ -90,6 +91,9 @@ impl RuntimeLeaseDriver for ControlledDriver {
             !self.address_panic.load(Ordering::Acquire),
             "private address panic payload"
         );
+        if self.address_error.load(Ordering::Acquire) {
+            return Err(DriverError("private address error detail"));
+        }
         assert!(Arc::ptr_eq(&self.identity.0, &reservation.0.0));
         Ok((
             CALLBACK_NAME.parse().unwrap(),
@@ -191,6 +195,7 @@ impl Harness {
                 failed: Arc::new(AtomicBool::new(false)),
                 validation_error: Arc::new(AtomicBool::new(false)),
                 start_error: Arc::new(AtomicBool::new(false)),
+                address_error: Arc::new(AtomicBool::new(false)),
                 validation_panic: Arc::new(AtomicBool::new(false)),
                 address_panic: Arc::new(AtomicBool::new(false)),
                 start_panic: Arc::new(AtomicBool::new(false)),
@@ -346,6 +351,50 @@ impl Harness {
         })
         .await
         .expect("acknowledged cleanup did not withdraw its callback");
+    }
+}
+
+#[test]
+fn retry_policy_validates_positive_timeouts_and_exposes_its_schedule() {
+    let invalid = RetryPolicy::new(std::time::Duration::ZERO, vec![]).unwrap_err();
+    assert_eq!(invalid.to_string(), "STOP attempt timeout must be positive");
+    let timeout = std::time::Duration::from_millis(17);
+    let delays = vec![std::time::Duration::from_millis(3)];
+    let policy = RetryPolicy::new(timeout, delays.clone()).unwrap();
+    assert_eq!(policy.per_attempt_timeout(), timeout);
+    assert_eq!(policy.retry_delays(), delays);
+}
+
+#[test]
+fn stop_outcome_debug_names_the_disposition_but_redacts_typed_errors() {
+    let retry = StopOutcome::RetryableFailure(DriverError("private retry detail"));
+    let uncertain = StopOutcome::Unacknowledged(DriverError("private timeout detail"));
+    assert_eq!(format!("{retry:?}"), "RetryableFailure(<redacted>)");
+    assert_eq!(format!("{uncertain:?}"), "Unacknowledged(<redacted>)");
+    assert_eq!(format!("{:?}", StopOutcome::<DriverError>::Acknowledged), "Acknowledged");
+}
+
+#[test]
+fn close_state_snapshots_clone_each_phase_without_cloning_driver_errors() {
+    let error = Arc::new(LeaseError::new(
+        LeasePhase::Stop,
+        Some(2),
+        false,
+        Some(DriverError("private stop error")),
+    ));
+    let snapshots = [
+        CloseState::Open,
+        CloseState::Running,
+        CloseState::Acknowledged,
+        CloseState::Unacknowledged(error.clone()),
+    ];
+    for snapshot in snapshots {
+        let cloned = snapshot.clone();
+        if let (CloseState::Unacknowledged(original), CloseState::Unacknowledged(copy)) =
+            (&snapshot, cloned)
+        {
+            assert!(Arc::ptr_eq(original, &copy));
+        }
     }
 }
 
@@ -974,6 +1023,7 @@ async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
 async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
     let mut harness = Harness::new();
     let lease = harness.opened().await;
+    assert_eq!(lease.object().identity.1, 1);
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
 
     let closing = tokio::spawn(async move { lease.close().await });
@@ -1071,6 +1121,9 @@ async fn ambiguous_stop_failure_is_reported_without_retry_or_callback_withdrawal
     let Err(error) = closing.await.unwrap() else {
         panic!("an uncertain result is not an acknowledgement");
     };
+    assert_eq!(error.phase(), LeasePhase::Stop);
+    assert_eq!(error.attempt(), Some(1));
+    assert!(!error.acknowledged());
     assert_eq!(error.driver_error().unwrap().0, "private transport timeout");
     assert!(!format!("{error:?}").contains("private transport timeout"));
     assert!(!error.to_string().contains("private transport timeout"));
