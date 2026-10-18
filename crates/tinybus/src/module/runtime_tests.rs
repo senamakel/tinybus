@@ -6,6 +6,14 @@ struct HostObjectValue(&'static str);
 
 struct PanickingHostObjectName;
 
+struct PanickingHostObjectDrop(Arc<AtomicBool>);
+
+impl Drop for PanickingHostObjectDrop {
+    fn drop(&mut self) {
+        assert!(!self.0.load(Ordering::Acquire), "retired callback destructor panic");
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::Interface for HostObjectValue {
     fn name(&self) -> crate::InterfaceName {
@@ -41,6 +49,25 @@ impl crate::Interface for PanickingHostObjectName {
         _: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
         Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::Interface for PanickingHostObjectDrop {
+    fn name(&self) -> crate::InterfaceName {
+        "org.example.ModuleRuntimeHostObject".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Value".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(serde_json::json!("old"))
     }
 }
 
@@ -213,6 +240,42 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
     assert!(removed.is_err());
     let direct: serde_json::Value = direct_replacement.call("Value", ()).await.unwrap();
     assert_eq!(direct, serde_json::json!("direct replacement"));
+}
+
+#[tokio::test]
+async fn replacing_a_host_object_contains_the_retired_callback_drop_panic() {
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let name: crate::BusName = "ai.tinyhumans.test.RuntimeHostObjectDropPanic".parse().unwrap();
+    let path: crate::ObjectPath = "/runtime/drop_panic_replacement".parse().unwrap();
+    let armed = Arc::new(AtomicBool::new(false));
+    let first = runtime
+        .serve_host_object(
+            name.clone(),
+            path.clone(),
+            PanickingHostObjectDrop(armed.clone()),
+        )
+        .await
+        .unwrap();
+    armed.store(true, Ordering::Release);
+
+    let replacement = runtime
+        .serve_host_object(name.clone(), path.clone(), HostObjectValue("new"))
+        .await
+        .expect("retiring a panicking callback must preserve the new registration");
+    let proxy = runtime
+        .connection()
+        .connection()
+        .proxy(name.as_str(), path.as_str(), "org.example.ModuleRuntimeHostObject")
+        .unwrap();
+    let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
+    assert_eq!(value, serde_json::json!("new"));
+
+    drop(first);
+    let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
+    assert_eq!(value, serde_json::json!("new"));
+    drop(replacement);
+    wait_for_owner(runtime.connection(), name.as_str(), None).await;
+    assert!(proxy.call::<_, serde_json::Value>("Value", ()).await.is_err());
 }
 
 #[tokio::test]
