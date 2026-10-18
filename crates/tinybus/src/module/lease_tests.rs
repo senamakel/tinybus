@@ -67,12 +67,7 @@ impl RuntimeLeaseDriver for ControlledDriver {
     async fn reserve(&self) -> Result<Self::Reservation, Self::Error> {
         let (reply, result) = oneshot::channel();
         self.calls.send(DriverCall::Reserve(reply)).unwrap();
-        let outcome = result.await.unwrap();
-        assert!(
-            !self.stop_panic_after_reply.load(Ordering::Acquire),
-            "private delayed STOP panic payload"
-        );
-        outcome
+        result.await.unwrap()
     }
 
     fn validate(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
@@ -144,7 +139,12 @@ impl RuntimeLeaseDriver for ControlledDriver {
             !self.stop_panic.load(Ordering::Acquire),
             "private stop panic payload"
         );
-        result.await.unwrap()
+        let outcome = result.await.unwrap();
+        assert!(
+            !self.stop_panic_after_reply.load(Ordering::Acquire),
+            "private delayed STOP panic payload"
+        );
+        outcome
     }
 
     fn failed(&self, _: &Self::Reservation) -> bool {
@@ -1241,6 +1241,35 @@ async fn a_stop_deadline_keeps_the_remote_operation_owned_until_its_late_ack() {
         harness.calls.try_recv().is_err(),
         "late ACK causes no duplicate STOP"
     );
+}
+
+#[tokio::test]
+async fn a_child_stop_panic_after_deadline_keeps_the_callback_parked() {
+    let mut harness = Harness::new();
+    harness
+        .driver
+        .stop_panic_after_reply
+        .store(true, Ordering::Release);
+    let lease = harness.opened().await;
+    let closing = tokio::spawn(async move { lease.close().await });
+    let stop_reply = match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply,
+        _ => panic!("close starts the owned STOP child"),
+    };
+    loop {
+        if matches!(
+            harness.reports.recv().await.unwrap().outcome,
+            LeaseReportOutcome::TimedOut
+        ) {
+            break;
+        }
+    }
+    assert!(closing.await.unwrap().is_err());
+    stop_reply
+        .send(StopOutcome::Unacknowledged(DriverError("uncertain")))
+        .unwrap();
+    assert!(harness.callback().await.is_ok(), "a child panic cannot acknowledge STOP");
+    assert!(harness.calls.try_recv().is_err(), "the panicked operation is never retried");
 }
 
 #[tokio::test]
