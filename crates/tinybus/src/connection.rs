@@ -489,12 +489,20 @@ impl Connection {
             interface_name.clone(),
             interface,
         );
-        drop(replaced);
-        Ok(ObjectRegistration {
+        let registration = ObjectRegistration {
             path,
             interface: interface_name,
             id,
-        })
+        };
+        if !replaced.is_empty() {
+            // Retired interfaces are user code: their destructors can panic.
+            // Keep the newly installed registration in this parent task while
+            // a child owns the retired values, then consume any JoinError.
+            let _ = tokio::runtime::Handle::current()
+                .spawn(async move { drop(replaced) })
+                .await;
+        }
+        Ok(registration)
     }
 
     /// Remove an exported interface only while this registration still owns it.

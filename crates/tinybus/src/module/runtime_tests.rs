@@ -10,7 +10,10 @@ struct PanickingHostObjectDrop(Arc<AtomicBool>);
 
 impl Drop for PanickingHostObjectDrop {
     fn drop(&mut self) {
-        assert!(!self.0.load(Ordering::Acquire), "retired callback destructor panic");
+        assert!(
+            !self.0.load(Ordering::Acquire),
+            "retired callback destructor panic"
+        );
     }
 }
 
@@ -245,7 +248,9 @@ async fn host_object_guards_share_names_and_only_remove_their_owned_registration
 #[tokio::test]
 async fn replacing_a_host_object_contains_the_retired_callback_drop_panic() {
     let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
-    let name: crate::BusName = "ai.tinyhumans.test.RuntimeHostObjectDropPanic".parse().unwrap();
+    let name: crate::BusName = "ai.tinyhumans.test.RuntimeHostObjectDropPanic"
+        .parse()
+        .unwrap();
     let path: crate::ObjectPath = "/runtime/drop_panic_replacement".parse().unwrap();
     let armed = Arc::new(AtomicBool::new(false));
     let first = runtime
@@ -264,7 +269,11 @@ async fn replacing_a_host_object_contains_the_retired_callback_drop_panic() {
         .expect("retiring a panicking callback must preserve the new registration");
     let proxy = runtime
         .connection()
-        .proxy(name.as_str(), path.as_str(), "org.example.ModuleRuntimeHostObject")
+        .proxy(
+            name.as_str(),
+            path.as_str(),
+            "org.example.ModuleRuntimeHostObject",
+        )
         .unwrap();
     let value: serde_json::Value = proxy.call("Value", ()).await.unwrap();
     assert_eq!(value, serde_json::json!("new"));
