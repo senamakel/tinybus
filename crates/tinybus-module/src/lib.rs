@@ -24,7 +24,7 @@ use tinybus::module::abi::{
     TB_TIMEOUT, TbHostVtable, TbModuleVtable, TbModuleVtableV1Prefix,
 };
 use tinybus::{Connection, Error, Result, Transport};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 
 mod terminal;
 pub use terminal::{NativeInstanceLiveness, RuntimeHooks, TerminalCompletion, TerminalReason};
@@ -267,8 +267,13 @@ type IncomingFrame = (Vec<u8>, bool);
 struct ModuleTransport {
     host: HostCalls,
     inbound: Mutex<mpsc::Receiver<IncomingFrame>>,
+    closed: watch::Sender<bool>,
     provenance: Arc<AtomicBool>,
     detach_on_panic: bool,
+}
+
+fn close_signal() -> watch::Sender<bool> {
+    watch::channel(false).0
 }
 
 #[async_trait]
@@ -293,20 +298,40 @@ impl Transport for ModuleTransport {
     }
 
     async fn recv(&self) -> Result<Option<Message>> {
-        let bytes = self.inbound.lock().await.recv().await;
-        let Some((bytes, brokered)) = bytes else {
-            return Ok(None);
-        };
-        self.host.wake();
-        let message = serde_json::from_slice(&bytes)?;
-        // The connection is the only reader and samples this slot immediately
-        // after recv. Keep header identity intact for stream ownership/routing;
-        // only contextual dispatch consumes the captured delivery authority.
-        self.provenance.store(brokered, Ordering::Release);
-        Ok(Some(message))
+        // Subscribe before taking the receiver lock, then recheck the current
+        // close intent under that lock. This closes the lost-wakeup window
+        // between a close request and waiting on the channel.
+        let mut closed = self.closed.subscribe();
+        let mut inbound = self.inbound.lock().await;
+        loop {
+            if *closed.borrow_and_update() {
+                inbound.close();
+            }
+            tokio::select! {
+                biased;
+                _ = closed.changed() => inbound.close(),
+                frame = inbound.recv() => {
+                    let Some((bytes, brokered)) = frame else {
+                        return Ok(None);
+                    };
+                    self.host.wake();
+                    let message = serde_json::from_slice(&bytes)?;
+                    // The connection is the only reader and samples this slot
+                    // immediately after recv. Keep header identity intact for
+                    // stream ownership/routing; only contextual dispatch
+                    // consumes the captured delivery authority.
+                    self.provenance.store(brokered, Ordering::Release);
+                    return Ok(Some(message));
+                }
+            }
+        }
     }
 
     async fn close(&self) -> Result<()> {
+        // Signal first: an idle recv owns the receiver mutex while waiting for
+        // a frame. It observes this intent, closes the channel, and releases
+        // the mutex, so close never needs another inbound delivery to proceed.
+        self.closed.send_replace(true);
         self.inbound.lock().await.close();
         Ok(())
     }
