@@ -597,53 +597,106 @@ async fn cleanup_worker<D, E>(
 {
     let max_attempts = policy.retry_delays.len() + 1;
     for attempt in 1..=max_attempts {
-        if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
+        if !check_fault(&*driver, &reservation, &state, &reporter, attempt) {
             std::future::pending::<()>().await;
         }
 
+        // The child owns the driver future. A timeout never drops or aborts remote work, and this
+        // parent retains the callback guard while joining the same operation for a late result.
         let stop_driver = driver.clone();
         let stop_reservation = reservation.clone();
         let mut stop = tokio::spawn(async move { stop_driver.stop(&stop_reservation).await });
         let result = match tokio::time::timeout(policy.per_attempt_timeout, &mut stop).await {
             Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => {
-                park_unacknowledged(&state, &reporter, attempt, None, LeaseReportOutcome::Unacknowledged);
-                std::future::pending::<()>().await;
-            }
+            Ok(Err(_)) => park_unacknowledged(
+                &state,
+                &reporter,
+                attempt,
+                None,
+                LeaseReportOutcome::Unacknowledged,
+            ).await,
             Err(_) => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::TimedOut });
-                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, None))));
+                report(
+                    &reporter,
+                    LeaseReport {
+                        phase: LeasePhase::Stop,
+                        attempt: Some(attempt),
+                        outcome: LeaseReportOutcome::TimedOut,
+                    },
+                );
+                state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
+                    LeasePhase::Stop,
+                    Some(attempt),
+                    false,
+                    None,
+                ))));
                 match stop.await {
                     Ok(outcome) => outcome,
-                    Err(_) => {
-                        park_unacknowledged(&state, &reporter, attempt, None, LeaseReportOutcome::Unacknowledged);
-                        std::future::pending::<()>().await;
-                    }
+                    Err(_) => park_unacknowledged(
+                        &state,
+                        &reporter,
+                        attempt,
+                        None,
+                        LeaseReportOutcome::Unacknowledged,
+                    ).await,
                 }
             }
         };
+
         match result {
             StopOutcome::Acknowledged => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Acknowledged });
-                let guard = callback_guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-                if let Some(guard) = guard { guard.remove().await; }
+                report(
+                    &reporter,
+                    LeaseReport {
+                        phase: LeasePhase::Stop,
+                        attempt: Some(attempt),
+                        outcome: LeaseReportOutcome::Acknowledged,
+                    },
+                );
+                let guard = callback_guard
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(guard) = guard {
+                    guard.remove().await;
+                }
                 state.send_replace(CloseState::Acknowledged);
                 return;
             }
             StopOutcome::RetryableFailure(error) => {
-                report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome: LeaseReportOutcome::Failed });
+                report(
+                    &reporter,
+                    LeaseReport {
+                        phase: LeasePhase::Stop,
+                        attempt: Some(attempt),
+                        outcome: LeaseReportOutcome::Failed,
+                    },
+                );
                 if attempt == max_attempts {
-                    park_unacknowledged(&state, &reporter, attempt, Some(error), LeaseReportOutcome::Exhausted);
-                    std::future::pending::<()>().await;
+                    park_unacknowledged(
+                        &state,
+                        &reporter,
+                        attempt,
+                        Some(error),
+                        LeaseReportOutcome::Exhausted,
+                    )
+                    .await;
                 }
             }
             StopOutcome::Unacknowledged(error) => {
-                park_unacknowledged(&state, &reporter, attempt, Some(error), LeaseReportOutcome::Unacknowledged);
-                std::future::pending::<()>().await;
+                park_unacknowledged(
+                    &state,
+                    &reporter,
+                    attempt,
+                    Some(error),
+                    LeaseReportOutcome::Unacknowledged,
+                )
+                .await;
             }
         }
+
         if attempt < max_attempts {
-            if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
+            if !check_fault(&*driver, &reservation, &state, &reporter, attempt) {
                 std::future::pending::<()>().await;
             }
             tokio::time::sleep(policy.retry_delays[attempt - 1]).await;
@@ -653,7 +706,7 @@ async fn cleanup_worker<D, E>(
 }
 
 #[cfg(feature = "modules")]
-async fn check_fault<D, E>(
+fn check_fault<D, E>(
     driver: &D,
     reservation: &D::Reservation,
     state: &watch::Sender<CloseState<E>>,
@@ -667,26 +720,51 @@ where
     match catch_unwind(AssertUnwindSafe(|| driver.failed(reservation))) {
         Ok(false) => true,
         Ok(true) => {
-            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Faulted);
+            park_unacknowledged(
+                state,
+                reporter,
+                attempt,
+                None,
+                LeaseReportOutcome::Faulted,
+            );
             false
         }
         Err(_) => {
-            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Unacknowledged);
+            park_unacknowledged(
+                state,
+                reporter,
+                attempt,
+                None,
+                LeaseReportOutcome::Unacknowledged,
+            );
             false
         }
     }
 }
 
 #[cfg(feature = "modules")]
-fn park_unacknowledged<E: Send + Sync + 'static>(
+async fn park_unacknowledged<E: Send + Sync + 'static>(
     state: &watch::Sender<CloseState<E>>,
     reporter: &Arc<dyn Fn(LeaseReport) + Send + Sync>,
     attempt: usize,
     error: Option<E>,
     outcome: LeaseReportOutcome,
-) {
-    report(&reporter, LeaseReport { phase: LeasePhase::Stop, attempt: Some(attempt), outcome });
-    state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(LeasePhase::Stop, Some(attempt), false, error))));
+) -> StopOutcome<E> {
+    report(
+        reporter,
+        LeaseReport {
+            phase: LeasePhase::Stop,
+            attempt: Some(attempt),
+            outcome,
+        },
+    );
+    state.send_replace(CloseState::Unacknowledged(Arc::new(LeaseError::new(
+        LeasePhase::Stop,
+        Some(attempt),
+        false,
+        error,
+    ))));
+    std::future::pending::<()>().await
 }
 
 #[cfg(feature = "modules")]
