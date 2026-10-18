@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+python3 scripts/test_check_coverage.py
 cargo check --locked --workspace --no-default-features
 cargo check --locked --package tinybus --no-default-features --features modules
 cargo metadata --locked --format-version 1 --manifest-path examples/Cargo.toml >/dev/null
