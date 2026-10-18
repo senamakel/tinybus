@@ -608,13 +608,16 @@ async fn cleanup_worker<D, E>(
         let mut stop = tokio::spawn(async move { stop_driver.stop(&stop_reservation).await });
         let result = match tokio::time::timeout(policy.per_attempt_timeout, &mut stop).await {
             Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => park_unacknowledged(
-                &state,
-                &reporter,
-                attempt,
-                None,
-                LeaseReportOutcome::Unacknowledged,
-            ).await,
+            Ok(Err(_)) => {
+                park_unacknowledged(
+                    &state,
+                    &reporter,
+                    attempt,
+                    None,
+                    LeaseReportOutcome::Unacknowledged,
+                )
+                .await
+            }
             Err(_) => {
                 report(
                     &reporter,
@@ -632,13 +635,16 @@ async fn cleanup_worker<D, E>(
                 ))));
                 match stop.await {
                     Ok(outcome) => outcome,
-                    Err(_) => park_unacknowledged(
-                        &state,
-                        &reporter,
-                        attempt,
-                        None,
-                        LeaseReportOutcome::Unacknowledged,
-                    ).await,
+                    Err(_) => {
+                        park_unacknowledged(
+                            &state,
+                            &reporter,
+                            attempt,
+                            None,
+                            LeaseReportOutcome::Unacknowledged,
+                        )
+                        .await
+                    }
                 }
             }
         };
@@ -720,13 +726,7 @@ where
     match catch_unwind(AssertUnwindSafe(|| driver.failed(reservation))) {
         Ok(false) => true,
         Ok(true) => {
-            park_unacknowledged(
-                state,
-                reporter,
-                attempt,
-                None,
-                LeaseReportOutcome::Faulted,
-            );
+            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Faulted);
             false
         }
         Err(_) => {
