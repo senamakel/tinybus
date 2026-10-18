@@ -357,6 +357,7 @@ async fn module_calls_stream_empty_and_past_window_payloads() {
     assert_eq!(fixture.opens.load(Ordering::SeqCst), 2);
 }
 
+#[cfg(feature = "modules")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
     let bus = MemoryBus::new();
