@@ -185,12 +185,7 @@ async fn an_ordinary_fixture_with_no_release_assets_can_bind() {
     })
     .with_fixture(proxy);
 
-    let pinned = client.bind(RECORD.id).await.unwrap_or_else(|failure| {
-        panic!(
-            "ordinary linked factory binding failed ({failure:?}); resolver state: {:?}",
-            client.access.find(RECORD.id).map(|record| record.id)
-        )
-    });
+    let pinned = client.bind(RECORD.id).await.unwrap();
     let response: String = pinned.call("Who", ()).await.unwrap();
     assert_eq!(response, "fixture");
 }
@@ -333,8 +328,14 @@ async fn ordinary_binding_accepts_a_resolver_owned_linked_factory_without_librar
     });
 
     assert!(RECORD.assets.is_empty());
+    let diagnostic_resolver = resolver.clone();
     let client = ModuleClient::new(resolver);
-    let pinned = client.bind(RECORD.id).await.unwrap();
+    let pinned = client.bind(RECORD.id).await.unwrap_or_else(|failure| {
+        panic!(
+            "ordinary linked factory binding failed ({failure:?}); resolver state: {:?}",
+            diagnostic_resolver.state_of(RECORD.id)
+        )
+    });
     let response: String = pinned.call("Echo", "linked-host-factory").await.unwrap();
     assert_eq!(response, "linked-host-factory");
 }
