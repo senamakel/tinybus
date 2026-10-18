@@ -55,8 +55,8 @@ mod windows_acl;
 pub use cache::{artifact_dir, is_safe_path_component, prune_stale_versions};
 pub use client::{
     AccessFuture, BoundModuleClient, ModuleAccess, ModuleCallError, ModuleCallFailure,
-    ModuleClient, ModuleObjectClient, ProxyFailure, ReconfigureFailure, UnloadedAccess, classify,
-    report_proxy_failure, wire_kind,
+    ModuleClient, ModuleObjectClient, PinnedModuleClient, PinnedModuleObjectClient, ProxyFailure,
+    ReconfigureFailure, UnloadedAccess, classify, report_proxy_failure, wire_kind,
 };
 pub use failure::{FailureReport, FailureReporter, FailureSink, Reason};
 #[cfg(feature = "modules")]

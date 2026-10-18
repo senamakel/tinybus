@@ -564,6 +564,68 @@ impl ModuleClient {
         })
     }
 
+    /// Bind ordinary calls to the currently serving peer for a module.
+    ///
+    /// The peer is resolved after lazy readiness and retained privately by the
+    /// returned client. This is ordinary delivery and makes no artifact or
+    /// confidentiality claim. Use [`Self::bind_attested`] for calls that
+    /// require strict native artifact proof.
+    ///
+    /// Explicit fixture proxies follow the same owner pinning rule, while
+    /// resolver-backed linked modules remain eligible without library hashes.
+    ///
+    /// # Errors
+    ///
+    /// A sanitized [`ModuleCallFailure`] when the module cannot be made ready,
+    /// has no serving owner, or its bus metadata cannot be read.
+    pub async fn bind(&self, module: &str) -> Result<PinnedModuleClient, ModuleCallFailure> {
+        let record = self.record(module).map_err(ModuleCallFailure::local)?;
+        let alias_proxy = if let Some(fixture) = &self.fixture {
+            fixture.clone()
+        } else {
+            self.load_proxy(record, record.object_path)
+                .await
+                .map_err(ModuleCallFailure::local)?
+        };
+        let metadata_timeout = self.timeout.unwrap_or(crate::connection::DEFAULT_TIMEOUT);
+        let owner = match alias_proxy
+            .connection()
+            .name_owner_with_timeout(alias_proxy.destination().as_str(), metadata_timeout)
+            .await
+        {
+            Ok(Some(owner)) if owner.is_unique() => owner,
+            Ok(_) => {
+                report(&*self.access, record, Reason::ModuleUnavailable);
+                return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
+            }
+            Err(error) => {
+                return Err(report_proxy_failure_detailed(
+                    self.access.reporter(),
+                    record,
+                    &error,
+                ));
+            }
+        };
+        let pinned_proxy = alias_proxy
+            .connection()
+            .proxy(
+                owner.as_str(),
+                alias_proxy.path().as_str(),
+                alias_proxy.interface().as_str(),
+            )
+            .map_err(|_| {
+                report(&*self.access, record, Reason::IncompatibleContract);
+                ModuleCallFailure::local(ModuleCallError::IncompatibleContract)
+            })?;
+
+        Ok(PinnedModuleClient {
+            access: Arc::clone(&self.access),
+            record,
+            proxy: self.with_deadline(pinned_proxy),
+            timeout: self.timeout,
+        })
+    }
+
     /// Execute a confidential member only after strict artifact attestation.
     ///
     /// The bound peer is selected and proved before `args` are serialized.
@@ -896,6 +958,147 @@ impl BoundModuleClient {
             record: self.record,
             proxy,
         })
+    }
+}
+
+/// A client pinned to one ordinary module peer.
+///
+/// The selected unique destination stays private and is reused by ordinary
+/// root calls, streamed calls, and object clients. This type carries no native
+/// artifact proof and has no confidential-call API.
+#[derive(Clone)]
+pub struct PinnedModuleClient {
+    access: Arc<dyn ModuleAccess>,
+    record: &'static ReleaseRecord,
+    proxy: Proxy,
+    timeout: Option<Duration>,
+}
+
+impl PinnedModuleClient {
+    /// Call an ordinary member on the selected peer.
+    pub async fn call<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallError> {
+        invoke_proxy(&*self.access, self.record, &self.proxy, member, args, false).await
+    }
+
+    /// Call an ordinary member and retain its remote wire failure fields.
+    pub async fn call_detailed<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        invoke_proxy_detailed(&*self.access, self.record, &self.proxy, member, args, false).await
+    }
+
+    /// Upload a payload while calling a member on the selected peer.
+    pub async fn call_with_stream_detailed<R, F, A>(
+        &self,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallFailure>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        let member = crate::MemberName::new(member).map_err(|error| {
+            report_proxy_failure_detailed(self.access.reporter(), self.record, &error)
+        })?;
+        self.proxy
+            .connection()
+            .call_with_stream_serialized(
+                self.proxy.destination().clone(),
+                self.proxy.path().clone(),
+                self.proxy.interface().clone(),
+                member,
+                args,
+                bytes,
+                self.proxy.timeout(),
+            )
+            .await
+            .map_err(|error| {
+                report_proxy_failure_detailed(self.access.reporter(), self.record, &error)
+            })
+    }
+
+    /// Sanitized counterpart to [`Self::call_with_stream_detailed`].
+    pub async fn call_with_stream<R, F, A>(
+        &self,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallError>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        self.call_with_stream_detailed(member, args, bytes)
+            .await
+            .map_err(|failure| failure.kind)
+    }
+
+    /// Create an object client pinned to the same unique peer.
+    pub fn object_client(
+        &self,
+        object_path: &str,
+    ) -> Result<PinnedModuleObjectClient, ModuleCallError> {
+        let proxy = self
+            .proxy
+            .connection()
+            .proxy(
+                self.proxy.destination().as_str(),
+                object_path,
+                self.proxy.interface().as_str(),
+            )
+            .map_err(|_| {
+                report(&*self.access, self.record, Reason::IncompatibleContract);
+                ModuleCallError::IncompatibleContract
+            })?;
+        let proxy = self
+            .timeout
+            .map_or(proxy.clone(), |timeout| proxy.with_timeout(timeout));
+        Ok(PinnedModuleObjectClient {
+            access: Arc::clone(&self.access),
+            record: self.record,
+            proxy,
+        })
+    }
+}
+
+/// An ordinary client for an object owned by a pinned module peer.
+///
+/// Its destination is private, and the surface has no confidential-call API.
+#[derive(Clone)]
+pub struct PinnedModuleObjectClient {
+    access: Arc<dyn ModuleAccess>,
+    record: &'static ReleaseRecord,
+    proxy: Proxy,
+}
+
+impl PinnedModuleObjectClient {
+    /// Call an ordinary member of the object.
+    pub async fn call<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallError> {
+        self.call_detailed(member, args)
+            .await
+            .map_err(|failure| failure.kind)
+    }
+
+    /// Call the object and preserve an untrusted remote failure's wire details.
+    pub async fn call_detailed<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        invoke_proxy_detailed(&*self.access, self.record, &self.proxy, member, args, false).await
     }
 }
 
