@@ -346,6 +346,66 @@ async fn module_transport_close_wakes_an_idle_pending_receive() {
         }
     }
     assert!(receiving.await.unwrap().unwrap().is_none());
+    transport.close().await.unwrap();
+    assert!(sender.try_send((serde_json::to_vec(&message()).unwrap(), false)).is_err());
+}
+
+#[tokio::test]
+async fn module_transport_close_before_recv_drains_queued_frames_and_rejects_new_ones() {
+    let _host_state = host_state_guard().await;
+    let (sender, receiver) = mpsc::channel(2);
+    let transport = ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        closed: close_signal(),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    };
+    let first = message();
+    let mut second = message();
+    second.header.serial = 2;
+    for frame in [&first, &second] {
+        sender
+            .send((serde_json::to_vec(frame).unwrap(), false))
+            .await
+            .unwrap();
+    }
+
+    transport.close().await.unwrap();
+    transport.close().await.unwrap();
+    assert_eq!(transport.recv().await.unwrap(), Some(first));
+    assert_eq!(transport.recv().await.unwrap(), Some(second));
+    assert!(transport.recv().await.unwrap().is_none());
+    assert!(sender.try_send((serde_json::to_vec(&message()).unwrap(), false)).is_err());
+}
+
+#[tokio::test]
+async fn a_cancelled_module_transport_close_leaves_a_persistent_wakeup() {
+    let _host_state = host_state_guard().await;
+    let (sender, receiver) = mpsc::channel(1);
+    let transport = Arc::new(ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        closed: close_signal(),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    });
+    let receiver_lock = transport.inbound.lock().await;
+    let closing_transport = transport.clone();
+    let closing = tokio::spawn(async move { closing_transport.close().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !*transport.closed.borrow() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("close publishes its wakeup before waiting for the receiver lock");
+    closing.abort();
+    let _ = closing.await;
+    drop(receiver_lock);
+
+    assert!(transport.recv().await.unwrap().is_none());
+    assert!(sender.is_closed());
 }
 
 #[tokio::test]
