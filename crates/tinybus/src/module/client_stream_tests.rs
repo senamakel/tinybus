@@ -6,7 +6,6 @@ use crate::module::failure::{FailureReport, FailureSink};
 use crate::transport::memory::MemoryBus;
 use crate::{Connection, Error, Interface, InterfaceName, MemberName, ObjectPath, StreamRef};
 use async_trait::async_trait;
-use serde::Serialize;
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -48,13 +47,13 @@ fn bound_stream_record() -> &'static ReleaseRecord {
     }))
 }
 
-struct HandoverStreamArguments<'a> {
-    stream: &'a StreamRef,
+struct HandoverStreamArguments {
+    stream: StreamRef,
     started: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     barrier: Arc<std::sync::Barrier>,
 }
 
-impl serde::Serialize for HandoverStreamArguments<'_> {
+impl serde::Serialize for HandoverStreamArguments {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -63,7 +62,7 @@ impl serde::Serialize for HandoverStreamArguments<'_> {
             let _ = started.send(());
         }
         self.barrier.wait();
-        self.stream.serialize(serializer)
+        serde::Serialize::serialize(&self.stream, serializer)
     }
 }
 
@@ -443,7 +442,7 @@ async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
             .call_with_stream_detailed::<String, _, _>(
                 "Generate",
                 move |stream| HandoverStreamArguments {
-                    stream,
+                    stream: stream.clone(),
                     started: call_started,
                     barrier: call_barrier,
                 },
