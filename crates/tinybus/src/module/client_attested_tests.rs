@@ -1347,23 +1347,25 @@ async fn a_timed_out_bound_start_does_not_stop_before_late_provider_completion()
         panic!("an inner START deadline cannot return a live lease");
     };
     assert_eq!(error.phase(), crate::module::LeasePhase::Start);
+    let callback_before_late_completion: Result<serde_json::Value, _> =
+        callback.call("Ping", ()).await;
+    let calls_before_late_completion = events.lock().unwrap().clone();
 
     start_release.add_permits(1);
     start_completed_rx.await.unwrap();
     let observed_calls = events.lock().unwrap().clone();
-    let callback_live: Result<serde_json::Value, _> = callback.call("Ping", ()).await;
+    let callback_after_late_completion: Result<serde_json::Value, _> =
+        callback.call("Ping", ()).await;
     assert!(
-        !error.acknowledged(),
-        "an uncertain START must not be converted to acknowledged by STOP"
-    );
-    assert_eq!(
-        observed_calls,
-        vec!["Reserve", "Start"],
-        "uncertain START must not issue an overlapping STOP"
-    );
-    assert!(
-        callback_live.is_ok(),
-        "the exported callback stays live after late provider START completion"
+        !error.acknowledged()
+            && calls_before_late_completion == vec!["Reserve", "Start"]
+            && observed_calls == vec!["Reserve", "Start"]
+            && callback_before_late_completion.is_ok()
+            && callback_after_late_completion.is_ok(),
+        "uncertain START must not be stopped or withdraw its callback before or after late completion; acknowledged={}, calls-before={calls_before_late_completion:?}, calls-after={observed_calls:?}, callback-before={}, callback-after={}",
+        error.acknowledged(),
+        callback_before_late_completion.is_ok(),
+        callback_after_late_completion.is_ok(),
     );
     broker_task.abort();
 }
