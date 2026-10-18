@@ -80,9 +80,12 @@ impl RuntimeLeaseDriver for ControlledDriver {
         assert!(Arc::ptr_eq(&self.identity.0, &reservation.0.0));
         Ok((
             CALLBACK_NAME.parse().unwrap(),
-            format!("/ai/tinyhumans/tinybus/tests/RuntimeLease{}", reservation.0.1)
-                .parse()
-                .unwrap(),
+            format!(
+                "/ai/tinyhumans/tinybus/tests/RuntimeLease{}",
+                reservation.0.1
+            )
+            .parse()
+            .unwrap(),
         ))
     }
 
@@ -204,14 +207,10 @@ impl Harness {
             vec![std::time::Duration::ZERO, std::time::Duration::ZERO],
         )
         .unwrap();
-        self.runtime.lease(
-            driver,
-            make_callback,
-            policy,
-            move |report| {
+        self.runtime
+            .lease(driver, make_callback, policy, move |report| {
                 let _ = reports.send(report);
-            },
-        )
+            })
     }
 
     async fn opened(&mut self) -> RuntimeLease<Object, DriverError> {
@@ -279,7 +278,9 @@ async fn acknowledged_close_removes_only_its_exact_callback_registration() {
             Ok(Callback(callback_calls))
         },
         policy,
-        move |report| { let _ = reports.send(report); },
+        move |report| {
+            let _ = reports.send(report);
+        },
     ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Reserve(reply) => reply
@@ -287,7 +288,10 @@ async fn acknowledged_close_removes_only_its_exact_callback_registration() {
             .unwrap(),
         _ => panic!("second reservation begins independently"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("second object follows validation"),
@@ -431,7 +435,10 @@ async fn start_failure_keeps_the_exported_callback_until_stop_ack() {
             .unwrap(),
         _ => panic!("reserve is first"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),
@@ -458,16 +465,18 @@ async fn start_failure_keeps_the_exported_callback_until_stop_ack() {
 #[tokio::test]
 async fn callback_factory_error_rolls_back_before_start_or_export() {
     let mut harness = Harness::new();
-    let opening = tokio::spawn(harness.open_with(|_, _| {
-        Err(DriverError("private callback factory detail"))
-    }));
+    let opening =
+        tokio::spawn(harness.open_with(|_, _| Err(DriverError("private callback factory detail"))));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Reserve(reply) => reply
             .send(Ok(Reservation(harness.driver.identity.clone())))
             .unwrap(),
         _ => panic!("reserve is first"),
     }
-    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
     match harness.calls.recv().await.unwrap() {
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),
@@ -480,8 +489,15 @@ async fn callback_factory_error_rolls_back_before_start_or_export() {
         panic!("callback factory error cannot produce a lease");
     };
     assert_eq!(error.phase(), LeasePhase::Callback);
-    assert_eq!(error.driver_error().unwrap().0, "private callback factory detail");
-    assert!(!error.to_string().contains("private callback factory detail"));
+    assert_eq!(
+        error.driver_error().unwrap().0,
+        "private callback factory detail"
+    );
+    assert!(
+        !error
+            .to_string()
+            .contains("private callback factory detail")
+    );
     assert!(harness.calls.try_recv().is_err());
     assert!(harness.callback().await.is_err());
 }
@@ -540,7 +556,9 @@ async fn ambiguous_stop_failure_is_reported_without_retry_or_callback_withdrawal
     let closing = tokio::spawn(async move { lease.close().await });
     match harness.calls.recv().await.unwrap() {
         DriverCall::Stop(_, reply) => reply
-            .send(StopOutcome::Unacknowledged(DriverError("private transport timeout")))
+            .send(StopOutcome::Unacknowledged(DriverError(
+                "private transport timeout",
+            )))
             .unwrap(),
         _ => panic!("close starts STOP"),
     }
@@ -554,8 +572,14 @@ async fn ambiguous_stop_failure_is_reported_without_retry_or_callback_withdrawal
     let report = harness.reports.recv().await.unwrap();
     assert_eq!(report.outcome, LeaseReportOutcome::Unacknowledged);
     assert!(!format!("{report:?}").contains("private transport timeout"));
-    assert!(harness.callback().await.is_ok(), "uncertain STOP retains its callback");
-    assert!(harness.calls.try_recv().is_err(), "uncertain STOP is never retried");
+    assert!(
+        harness.callback().await.is_ok(),
+        "uncertain STOP retains its callback"
+    );
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "uncertain STOP is never retried"
+    );
 }
 
 #[tokio::test]
