@@ -69,6 +69,17 @@ pub enum StopOutcome<E> {
     Unacknowledged(E),
 }
 
+impl<E> std::fmt::Debug for StopOutcome<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let variant = match self {
+            Self::Acknowledged => "Acknowledged",
+            Self::RetryableFailure(_) => "RetryableFailure(<redacted>)",
+            Self::Unacknowledged(_) => "Unacknowledged(<redacted>)",
+        };
+        formatter.write_str(variant)
+    }
+}
+
 /// Content-free lifecycle metadata; it never includes a reservation, object, or driver error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaseReport {
