@@ -589,12 +589,13 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
 
     let linked_initializer_started = started_rx;
     runtime_provider_gate.notify_one();
-    tokio::time::timeout(
+    if tokio::time::timeout(
         std::time::Duration::from_secs(5),
         linked_initializer_started,
     )
     .await
-    .unwrap_or_else(|_| {
+    .is_err()
+    {
         let runtime_worker_alive = if let Some(runtime) = RUNTIME.get() {
             let (probe_tx, probe_rx) = tokio::sync::oneshot::channel();
             runtime.spawn(async move {
@@ -613,8 +614,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
             RESOLVER_LINKED_FACTORY_CALLS.load(Ordering::SeqCst),
             runtime_worker_alive,
         )
-    })
-    .unwrap();
+    }
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
     assert_eq!(RESOLVER_LINKED_FACTORY_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 3);
