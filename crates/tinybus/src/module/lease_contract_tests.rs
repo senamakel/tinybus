@@ -47,8 +47,8 @@ impl RuntimeLeaseDriver for ContractDriver {
         Ok(())
     }
 
-    async fn start(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
-        Ok(())
+    async fn start(&self, _: &Self::Reservation) -> StartOutcome<Self::Error> {
+        StartOutcome::Started
     }
 
     async fn stop(&self, _: &Self::Reservation) -> StopOutcome<Self::Error> {
