@@ -20,6 +20,8 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     assets: &[],
 };
 
+const REMOTE_DETAIL: &str = "private ordinary-call detail: fixture-token-7319";
+
 struct DiscardReports;
 
 impl FailureSink for DiscardReports {
@@ -90,7 +92,7 @@ impl Interface for Peer {
     }
 
     fn members(&self) -> Vec<MemberName> {
-        ["Who", "Upload", "Read", "Release"]
+        ["Who", "Upload", "Read", "Release", "Fail"]
             .map(|member| MemberName::new(member).unwrap())
             .to_vec()
     }
@@ -105,6 +107,10 @@ impl Interface for Peer {
                 self.received.send(bytes.clone()).unwrap();
                 Ok(serde_json::json!(self.label))
             }
+            "Fail" => Err(crate::Error::MethodFailed {
+                name: "ai.tinyhumans.docs.Error.Rejected".to_owned(),
+                message: REMOTE_DETAIL.to_owned(),
+            }),
             _ => Err(crate::Error::failed("unexpected test method")),
         }
     }
@@ -300,4 +306,35 @@ async fn ordinary_binding_refuses_disabled_unknown_and_unowned_modules() {
     let unowned_result = unowned.bind(RECORD.id).await;
     assert!(matches!(unowned_result, Err(failure) if failure.kind == ModuleCallError::Unavailable));
     assert_eq!(unowned_reports.0.lock().unwrap().as_slice(), &[Reason::ModuleUnavailable]);
+}
+
+#[tokio::test]
+async fn ordinary_bound_detailed_failures_keep_fields_and_sanitize_renderings() {
+    let bus = MemoryBus::new();
+    let _broker = Broker::new().spawn(bus.clone());
+    let (received, _received_rx) = tokio::sync::mpsc::unbounded_channel();
+    let service = peer(&bus, "failure-peer", received, Arc::new(Mutex::new(Vec::new()))).await;
+    service.request_name(RECORD.bus_name).await.unwrap();
+    let caller = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = caller
+        .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+        .unwrap();
+    let pinned = ModuleClient::new(Access {
+        connection: caller,
+        reporter: reporter(),
+        enabled: true,
+    })
+    .with_fixture(proxy)
+    .bind(RECORD.id)
+    .await
+    .unwrap();
+
+    let failure = pinned.call_detailed::<String>("Fail", ()).await.unwrap_err();
+    assert_eq!(failure.kind, ModuleCallError::ModuleFault);
+    assert_eq!(failure.wire_name, "ai.tinyhumans.docs.Error.Rejected");
+    assert_eq!(failure.message, REMOTE_DETAIL);
+    assert!(!format!("{failure:?}").contains(REMOTE_DETAIL));
+    assert!(!failure.to_string().contains(REMOTE_DETAIL));
 }
