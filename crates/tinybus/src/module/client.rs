@@ -1085,3 +1085,7 @@ mod tests;
 #[cfg(test)]
 #[path = "client_stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+#[path = "client_pinned_tests.rs"]
+mod pinned_tests;
