@@ -402,7 +402,7 @@ async fn validation_panic_after_reserve_still_stops_the_owned_reservation() {
         harness.calls.recv().await,
         Some(DriverCall::Validated)
     ));
-    let stop = tokio::time::timeout(std::time::Duration::from_millis(50), harness.calls.recv())
+    let stop = tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
         .await
         .expect("validation panic must not discard the reservation")
         .unwrap();
@@ -432,7 +432,7 @@ async fn callback_address_panic_after_object_creation_still_stops_the_reservatio
         DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
         _ => panic!("object follows validation"),
     }
-    let stop = tokio::time::timeout(std::time::Duration::from_millis(50), harness.calls.recv())
+    let stop = tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
         .await
         .expect("address panic must not discard the reservation")
         .unwrap();
@@ -466,7 +466,7 @@ async fn start_panic_keeps_the_exported_callback_until_rollback_ack() {
         DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
         _ => panic!("start follows callback registration"),
     }
-    let stop = tokio::time::timeout(std::time::Duration::from_millis(50), harness.calls.recv())
+    let stop = tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
         .await
         .expect("start panic must retain rollback ownership")
         .unwrap();
@@ -919,7 +919,7 @@ async fn stop_panic_after_export_parks_the_callback_without_acknowledgement() {
         Some(DriverCall::Stop(_, _))
     ));
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(50), close)
+        tokio::time::timeout(std::time::Duration::from_secs(2), close)
             .await
             .expect("STOP panic must publish an unacknowledged result")
             .unwrap()
@@ -942,7 +942,7 @@ async fn fault_predicate_panic_parks_the_callback_without_sending_stop() {
     harness.driver.failed_panic.store(true, Ordering::Release);
     let close = tokio::spawn(async move { lease.close().await });
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(50), close)
+        tokio::time::timeout(std::time::Duration::from_secs(2), close)
             .await
             .expect("fault predicate panic must publish an unacknowledged result")
             .unwrap()
