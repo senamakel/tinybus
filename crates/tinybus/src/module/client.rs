@@ -587,10 +587,13 @@ impl ModuleClient {
                 .await
                 .map_err(ModuleCallFailure::local)?
         };
-        let metadata_timeout = self.timeout.unwrap_or(crate::connection::DEFAULT_TIMEOUT);
+        // `ModuleAccess::proxy` and explicit fixtures may carry an integration-
+        // specific deadline. An explicit client timeout overrides it; otherwise
+        // preserve the deadline already attached to the selected proxy.
+        let effective_timeout = self.timeout.unwrap_or(alias_proxy.timeout());
         let owner = match alias_proxy
             .connection()
-            .name_owner_with_timeout(alias_proxy.destination().as_str(), metadata_timeout)
+            .name_owner_with_timeout(alias_proxy.destination().as_str(), effective_timeout)
             .await
         {
             Ok(Some(owner)) if owner.is_unique() => owner,
@@ -616,13 +619,14 @@ impl ModuleClient {
             .map_err(|_| {
                 report(&*self.access, record, Reason::IncompatibleContract);
                 ModuleCallFailure::local(ModuleCallError::IncompatibleContract)
-            })?;
+            })?
+            .with_timeout(effective_timeout);
 
         Ok(PinnedModuleClient {
             access: Arc::clone(&self.access),
             record,
-            proxy: self.with_deadline(pinned_proxy),
-            timeout: self.timeout,
+            proxy: pinned_proxy,
+            timeout: effective_timeout,
         })
     }
 
@@ -971,7 +975,7 @@ pub struct PinnedModuleClient {
     access: Arc<dyn ModuleAccess>,
     record: &'static ReleaseRecord,
     proxy: Proxy,
-    timeout: Option<Duration>,
+    timeout: Duration,
 }
 
 impl PinnedModuleClient {
@@ -1059,9 +1063,7 @@ impl PinnedModuleClient {
                 report(&*self.access, self.record, Reason::IncompatibleContract);
                 ModuleCallError::IncompatibleContract
             })?;
-        let proxy = self
-            .timeout
-            .map_or(proxy.clone(), |timeout| proxy.with_timeout(timeout));
+        let proxy = proxy.with_timeout(self.timeout);
         Ok(PinnedModuleObjectClient {
             access: Arc::clone(&self.access),
             record: self.record,
