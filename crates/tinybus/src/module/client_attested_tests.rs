@@ -1145,10 +1145,11 @@ impl crate::module::RuntimeLeaseDriver for BoundLifecycleDriver {
         Ok(())
     }
 
-    async fn start(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
+    async fn start(&self, _: &Self::Reservation) -> crate::module::StartOutcome<Self::Error> {
         match self.client.call::<String>("Start", ()).await {
-            Ok(peer) if peer == "peer-a" => Ok(()),
-            _ => Err(BoundLifecycleError),
+            Ok(peer) if peer == "peer-a" => crate::module::StartOutcome::Started,
+            Ok(_) => crate::module::StartOutcome::SettledFailure(BoundLifecycleError),
+            Err(_) => crate::module::StartOutcome::Unacknowledged(BoundLifecycleError),
         }
     }
 
