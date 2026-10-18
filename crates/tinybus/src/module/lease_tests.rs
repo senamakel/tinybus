@@ -918,7 +918,11 @@ async fn stop_panic_after_export_parks_the_callback_without_acknowledgement() {
         harness.calls.recv().await,
         Some(DriverCall::Stop(_, _))
     ));
-    assert!(close.await.unwrap().is_err());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(50), close)
+        .await
+        .expect("STOP panic must publish an unacknowledged result")
+        .unwrap()
+        .is_err());
     assert!(
         harness.callback().await.is_ok(),
         "a panicking STOP has no acknowledgement"
@@ -935,7 +939,11 @@ async fn fault_predicate_panic_parks_the_callback_without_sending_stop() {
     let lease = harness.opened().await;
     harness.driver.failed_panic.store(true, Ordering::Release);
     let close = tokio::spawn(async move { lease.close().await });
-    assert!(close.await.unwrap().is_err());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(50), close)
+        .await
+        .expect("fault predicate panic must publish an unacknowledged result")
+        .unwrap()
+        .is_err());
     assert!(
         harness.callback().await.is_ok(),
         "a panicking fault check is not an ACK"
