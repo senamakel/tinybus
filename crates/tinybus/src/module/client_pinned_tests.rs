@@ -13,7 +13,7 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     id: "ordinary-pinned-client-test",
     bus_name: "ai.tinyhumans.test.OrdinaryPinnedClient",
     object_path: "/ai/tinyhumans/test/OrdinaryPinnedClient",
-    version: "0.3.2",
+    version: "0.3.1",
     release_url: "https://example.invalid/tinybus",
     // Ordinary fixtures and linked host factories intentionally have no
     // release archive/library pair to attest.
@@ -275,7 +275,7 @@ fn linked_ordinary_factory() -> crate::Result<crate::module::LinkedModule> {
             schema: MANIFEST_SCHEMA,
             module: ModuleIdentity {
                 name: RECORD.id.to_owned(),
-                version: Version::new(0, 3, 2),
+                version: Version::new(0, 3, 1),
                 description: String::new(),
                 homepage: None,
                 license: String::new(),
