@@ -297,6 +297,57 @@ async fn module_transport_maps_host_results_and_wakes_after_receiving() {
 }
 
 #[tokio::test]
+async fn module_transport_close_wakes_an_idle_pending_receive() {
+    let _host_state = host_state_guard().await;
+    let (sender, receiver) = mpsc::channel(1);
+    let transport = Arc::new(ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    });
+    let receiving_transport = transport.clone();
+    let (receive_started, receive_started_rx) = tokio::sync::oneshot::channel();
+    let receiving = tokio::spawn(async move {
+        let _ = receive_started.send(());
+        receiving_transport.recv().await
+    });
+    receive_started_rx.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if transport.inbound.try_lock().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the module receive is pending while it owns the receiver");
+
+    let closing_transport = transport.clone();
+    let (close_started, close_started_rx) = tokio::sync::oneshot::channel();
+    let mut closing = tokio::spawn(async move {
+        let _ = close_started.send(());
+        closing_transport.close().await
+    });
+    close_started_rx.await.unwrap();
+    if tokio::time::timeout(Duration::from_secs(2), &mut closing)
+        .await
+        .is_err()
+    {
+        // Negative control for the old implementation: one inbound frame
+        // releases the receiver mutex that close is incorrectly waiting on.
+        let frame = serde_json::to_vec(&message()).unwrap();
+        sender.send((frame, false)).await.unwrap();
+        assert!(receiving.await.unwrap().unwrap().is_some());
+        assert!(closing.await.unwrap().is_ok());
+        panic!("close must wake an idle module receive without another frame");
+    }
+    assert!(closing.await.unwrap().is_ok());
+    assert!(receiving.await.unwrap().unwrap().is_none());
+}
+
+#[tokio::test]
 async fn host_calls_and_subscriber_forward_logs_at_their_original_level() {
     let _host_state = host_state_guard().await;
     let calls = HostCalls(host(&[]));
