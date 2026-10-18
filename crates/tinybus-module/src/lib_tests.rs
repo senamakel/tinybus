@@ -260,6 +260,7 @@ async fn module_transport_maps_host_results_and_wakes_after_receiving() {
     let transport = ModuleTransport {
         host: HostCalls(host(&[])),
         inbound: Mutex::new(receiver),
+        closed: close_signal(),
         provenance: Arc::new(AtomicBool::new(false)),
         detach_on_panic: true,
     };
@@ -303,6 +304,7 @@ async fn module_transport_close_wakes_an_idle_pending_receive() {
     let transport = Arc::new(ModuleTransport {
         host: HostCalls(host(&[])),
         inbound: Mutex::new(receiver),
+        closed: close_signal(),
         provenance: Arc::new(AtomicBool::new(false)),
         detach_on_panic: false,
     });
@@ -865,6 +867,7 @@ async fn admission_never_promotes_a_frame_already_queued_without_provenance() {
     let transport = ModuleTransport {
         host: HostCalls(table),
         inbound: Mutex::new(receiver),
+        closed: close_signal(),
         provenance: Arc::new(AtomicBool::new(false)),
         detach_on_panic: false,
     };
@@ -894,6 +897,7 @@ async fn old_hosts_retain_sender_headers_without_authenticating_them() {
     let transport = ModuleTransport {
         host: HostCalls(host(b"{}")),
         inbound: Mutex::new(receiver),
+        closed: close_signal(),
         provenance: Arc::new(AtomicBool::new(false)),
         detach_on_panic: false,
     };
@@ -962,6 +966,7 @@ async fn unverified_native_frames_preserve_distinct_stream_owners_and_unverified
         let transport = Arc::new(ModuleTransport {
             host: HostCalls(table),
             inbound: Mutex::new(receiver),
+            closed: close_signal(),
             provenance: Arc::new(AtomicBool::new(false)),
             detach_on_panic: false,
         });

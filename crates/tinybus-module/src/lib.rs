@@ -629,6 +629,7 @@ where
         let transport = Arc::new(ModuleTransport {
             host,
             inbound: Mutex::new(inbound_rx),
+            closed: close_signal(),
             provenance: Arc::new(AtomicBool::new(false)),
             detach_on_panic,
         });
@@ -1779,6 +1780,7 @@ where
             inner: ModuleTransport {
                 host: state.host,
                 inbound: Mutex::new(inbound_rx),
+                closed: close_signal(),
                 provenance: Arc::new(AtomicBool::new(false)),
                 detach_on_panic: false,
             },
