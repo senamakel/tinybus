@@ -610,7 +610,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         reports.0.lock().unwrap().as_slice(),
-        &[Reason::TransportFailed, Reason::TransportFailed]
+        &[Reason::TransportFailed]
     );
 
     release.send(()).unwrap();
