@@ -517,7 +517,14 @@ impl Resolver {
             }
             Claim::Wait(receiver) => receiver,
             Claim::Run { sender, receiver } => {
-                self.start_resolution(record, sender).await;
+                // Runtime startup can itself be slow. Keep the claim's sender
+                // with a detached resolver task so a caller that times out or
+                // drops while the provider is starting cannot strand the slot
+                // or cause another caller to restart this module's resolution.
+                let resolver = self.clone();
+                tokio::spawn(async move {
+                    resolver.start_resolution(record, sender).await;
+                });
                 receiver
             }
         };
