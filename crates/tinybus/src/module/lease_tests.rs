@@ -666,7 +666,7 @@ async fn cancelling_during_start_retains_the_export_until_rollback_ack() {
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
     opening.abort();
     assert!(matches!(opening.await, Err(error) if error.is_cancelled()));
-    start_reply.send(Ok(())).unwrap();
+    start_reply.send(StartOutcome::Started).unwrap();
     let stop = match harness.calls.recv().await.unwrap() {
         DriverCall::Stop(_, reply) => reply,
         _ => panic!("owned activation rollback survives waiter cancellation"),
@@ -737,7 +737,7 @@ async fn callback_address_panic_after_object_creation_still_stops_the_reservatio
 }
 
 #[tokio::test]
-async fn start_panic_keeps_the_exported_callback_until_rollback_ack() {
+async fn start_panic_after_submission_parks_the_exported_callback_without_stop() {
     let mut harness = Harness::new();
     harness.driver.start_panic.store(true, Ordering::Release);
     let opening = tokio::spawn(harness.open());
@@ -759,17 +759,16 @@ async fn start_panic_keeps_the_exported_callback_until_rollback_ack() {
         DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
-    let stop = tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
-        .await
-        .expect("start panic must retain rollback ownership")
-        .unwrap();
-    let DriverCall::Stop(_, reply) = stop else {
-        panic!("panic rollback uses STOP")
+    let Err(error) = opening.await.unwrap() else {
+        panic!("a panicking START is not a successful lease");
     };
+    assert_eq!(error.phase(), LeasePhase::Start);
+    assert!(!error.acknowledged());
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
-    reply.send(StopOutcome::Acknowledged).unwrap();
-    assert!(opening.await.unwrap().is_err());
-    assert!(harness.callback().await.is_err());
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "a panicking START has unknown settlement and must not issue STOP"
+    );
 }
 
 #[tokio::test]
@@ -1207,7 +1206,7 @@ async fn callback_name_is_not_reinvoked_during_acknowledged_withdrawal() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
     let lease = opening.await.unwrap().unwrap();
@@ -1265,7 +1264,7 @@ async fn callback_destructor_panic_does_not_interrupt_acknowledged_withdrawal() 
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
     let lease = opening.await.unwrap().unwrap();
