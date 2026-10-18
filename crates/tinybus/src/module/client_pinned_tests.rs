@@ -13,7 +13,7 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     id: "ordinary-pinned-client-test",
     bus_name: "ai.tinyhumans.test.OrdinaryPinnedClient",
     object_path: "/ai/tinyhumans/test/OrdinaryPinnedClient",
-    version: "0.3.2",
+    version: "0.3.3",
     release_url: "https://example.invalid/tinybus",
     // Ordinary fixtures and linked host factories intentionally have no
     // release archive/library pair to attest.
@@ -330,7 +330,7 @@ static RESOLVER_LINKED_RECORD: ReleaseRecord = ReleaseRecord {
     id: "ordinary-binding-linked-readiness",
     bus_name: "ai.tinyhumans.test.OrdinaryBindingLinkedReadiness",
     object_path: "/ai/tinyhumans/test/OrdinaryBindingLinkedReadiness",
-    version: "0.3.2",
+    version: "0.3.3",
     release_url: "https://example.invalid/tinybus",
     assets: &[],
 };
@@ -1038,7 +1038,7 @@ async fn ordinary_binding_refuses_an_unsupported_resolver_without_proxy_or_busin
         id: "ordinary-binding-unsupported",
         bus_name: "ai.tinyhumans.test.OrdinaryBindingUnsupported",
         object_path: "/ai/tinyhumans/test/OrdinaryBindingUnsupported",
-        version: "0.3.2",
+        version: "0.3.3",
         release_url: "https://example.invalid/tinybus",
         assets: &[],
     };
