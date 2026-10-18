@@ -149,15 +149,16 @@ async fn explicit_close_returns_its_error_and_clears_the_slot() {
 #[tokio::test]
 async fn a_failed_open_leaves_the_slot_empty() {
     let slot = slot::<u8, u8>();
-    assert!(slot
-        .with(
+    assert!(
+        slot.with(
             1,
             || async { Err(crate::Error::failed("open failed")) },
             |_| async { Ok(()) },
             |_| Box::pin(async { Ok::<_, crate::Error>(()) }),
         )
         .await
-        .is_err());
+        .is_err()
+    );
 
     let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let observed = opens.clone();
@@ -403,11 +404,11 @@ async fn cancelling_try_close_with_retains_the_entry_and_original_stored_closer(
             "alice",
             || async { panic!("same-key access must not reopen the service") },
             |_| async { Ok(()) },
-            |_| Box::pin(async { Ok::<_, crate::Error>("unexpected replacement") }),
+            |service| Box::pin(async move { Ok::<_, crate::Error>(*service) }),
         )
         .await
         .expect("cancellation should release the lock and retain the entry");
-    assert_eq!(observed, ());
+    assert_eq!(observed, "alice service");
 
     slot.with(
         "bob",
