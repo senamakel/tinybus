@@ -44,7 +44,9 @@ impl ObjectTree {
     /// two implementations of one contract at one address would make dispatch
     /// order-dependent.
     pub fn insert(&mut self, path: ObjectPath, interface: Arc<dyn Interface>) {
-        self.insert_owned(path, interface);
+        let name = interface.name();
+        let (_, replaced) = self.insert_owned(path, name, interface);
+        drop(replaced);
     }
 
     /// Export `interface` and return the identity of this exact registration.
@@ -62,10 +64,16 @@ impl ObjectTree {
             .expect("object registration identity exhausted");
         let id = self.next_registration;
         let entry = self.objects.entry(path).or_default();
-        let replaced = entry
-            .extract_if(.., |existing| existing.name == name)
-            .map(|existing| existing.interface)
-            .collect();
+        let mut replaced = Vec::new();
+        let mut retained = Vec::with_capacity(entry.len() + 1);
+        for existing in entry.drain(..) {
+            if existing.name == name {
+                replaced.push(existing.interface);
+            } else {
+                retained.push(existing);
+            }
+        }
+        *entry = retained;
         entry.push(ObjectRegistration { id, name, interface });
         (id, replaced)
     }

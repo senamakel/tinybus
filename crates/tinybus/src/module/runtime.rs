@@ -136,8 +136,9 @@ impl Drop for HostObjectGuard {
         };
         let registry = self.registry.clone();
         let name = self.name.clone();
+        let handle = self.handle.clone();
         self.handle.spawn(async move {
-            remove_host_object(registry, name, registration).await;
+            remove_host_object(registry, name, registration, handle).await;
         });
     }
 }
@@ -148,7 +149,13 @@ impl HostObjectGuard {
         let Some(registration) = self.registration.take() else {
             return;
         };
-        remove_host_object(self.registry.clone(), self.name.clone(), registration).await;
+        remove_host_object(
+            self.registry.clone(),
+            self.name.clone(),
+            registration,
+            self.handle.clone(),
+        )
+        .await;
     }
 }
 
@@ -156,9 +163,10 @@ async fn remove_host_object(
     registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
     name: crate::BusName,
     registration: ObjectRegistration,
+    handle: tokio::runtime::Handle,
 ) {
     let mut state = registry.lock().await;
-    let _ = state.connection.unserve_if_owned(&registration).await;
+    let detached = state.connection.take_if_owned(&registration).await;
     let release = if let Some(lease) = state.names.get_mut(&name) {
         lease.registrations = lease.registrations.saturating_sub(1);
         if lease.registrations == 0 {
@@ -175,6 +183,12 @@ async fn remove_host_object(
         if let Some(unique) = state.connection.unique_name() {
             let _ = state.broker.release_host_name(&unique, &name);
         }
+    }
+    drop(state);
+    if let Some(interface) = detached {
+        // Interface destructors are user code. Keep this parent cleanup task
+        // alive to publish completion even if the destructor unwinds.
+        let _ = handle.spawn(async move { drop(interface) }).await;
     }
 }
 

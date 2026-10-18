@@ -484,12 +484,12 @@ impl Connection {
     ) -> Result<ObjectRegistration> {
         let interface: Arc<dyn Interface> = Arc::new(interface);
         let interface_name = interface.name();
-        let id = self
-            .inner
-            .objects
-            .write()
-            .await
-            .insert_owned(path.clone(), interface);
+        let (id, replaced) = self.inner.objects.write().await.insert_owned(
+            path.clone(),
+            interface_name.clone(),
+            interface,
+        );
+        drop(replaced);
         Ok(ObjectRegistration {
             path,
             interface: interface_name,
@@ -499,8 +499,11 @@ impl Connection {
 
     /// Remove an exported interface only while this registration still owns it.
     #[cfg(feature = "modules")]
-    pub(crate) async fn unserve_if_owned(&self, registration: &ObjectRegistration) -> bool {
-        self.inner.objects.write().await.remove_if_owned(
+    pub(crate) async fn take_if_owned(
+        &self,
+        registration: &ObjectRegistration,
+    ) -> Option<Arc<dyn Interface>> {
+        self.inner.objects.write().await.take_if_owned(
             &registration.path,
             &registration.interface,
             registration.id,
