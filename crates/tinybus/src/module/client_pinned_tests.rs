@@ -569,7 +569,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         Err(failure) if failure.kind == ModuleCallError::TransportFailed
     ));
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 0);
-    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 1);
     assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
@@ -602,7 +602,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
         Err(failure) if failure.kind == ModuleCallError::TransportFailed
     ));
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
-    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 3);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         reports.0.lock().unwrap().as_slice(),
