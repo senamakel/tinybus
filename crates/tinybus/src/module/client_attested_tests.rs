@@ -923,6 +923,57 @@ struct LifecyclePeer {
 }
 
 #[cfg(feature = "modules")]
+struct LateStartPeer {
+    events: Arc<Mutex<Vec<String>>>,
+    start_accepted: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    start_release: Arc<tokio::sync::Semaphore>,
+    start_completed: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+#[cfg(feature = "modules")]
+#[async_trait::async_trait]
+impl crate::Interface for LateStartPeer {
+    fn name(&self) -> crate::InterfaceName {
+        crate::InterfaceName::new("ai.tinyhumans.test.AttestedClient").unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        ["Reserve", "Start", "Stop"]
+            .into_iter()
+            .map(|member| crate::MemberName::new(member).unwrap())
+            .collect()
+    }
+
+    async fn call(
+        &self,
+        member: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(member.as_str().to_string());
+        if member.as_str() == "Start" {
+            let started = self.start_accepted.lock().unwrap().take();
+            if let Some(started) = started {
+                let _ = started.send(());
+            }
+            let permit = self
+                .start_release
+                .acquire()
+                .await
+                .map_err(|_| crate::Error::failed("test START gate closed"))?;
+            permit.forget();
+            let completed = self.start_completed.lock().unwrap().take();
+            if let Some(completed) = completed {
+                let _ = completed.send(());
+            }
+        }
+        Ok(serde_json::json!("peer-a"))
+    }
+}
+
+#[cfg(feature = "modules")]
 struct CountedArguments(Arc<std::sync::atomic::AtomicUsize>);
 
 #[cfg(feature = "modules")]
@@ -1221,6 +1272,99 @@ async fn a_bound_lease_driver_keeps_all_lifecycle_calls_on_the_attested_peer() {
     drop(service_a);
     assert!(bound.call::<String>("Reserve", ()).await.is_err());
     assert!(calls_b.lock().unwrap().is_empty());
+    broker_task.abort();
+}
+
+#[cfg(feature = "modules")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_timed_out_bound_start_does_not_stop_before_late_provider_completion() {
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = strict_record();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (start_accepted, start_accepted_rx) = tokio::sync::oneshot::channel();
+    let (start_completed, start_completed_rx) = tokio::sync::oneshot::channel();
+    let start_release = Arc::new(tokio::sync::Semaphore::new(0));
+    service
+        .serve_at(
+            crate::ObjectPath::new(record.object_path).unwrap(),
+            LateStartPeer {
+                events: events.clone(),
+                start_accepted: Mutex::new(Some(start_accepted)),
+                start_release: start_release.clone(),
+                start_completed: Mutex::new(Some(start_completed)),
+            },
+        )
+        .await
+        .unwrap();
+    service.request_name(record.bus_name).await.unwrap();
+    // This unit fixture proves actual broker routing and timeout behavior. It
+    // seeds the private broker attestation directly; it does not test native
+    // artifact admission.
+    broker.attest_module(
+        &service.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::BusName::new(record.bus_name).unwrap(),
+            sha256: record.assets[0].sha256.to_string(),
+            library_sha256: record.assets[0].library_sha256.map(str::to_string),
+        },
+    );
+    let client = ModuleClient::new(PreparedAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    })
+    .with_timeout(Duration::from_millis(40));
+    let bound = client.bind_attested(record.id).await.unwrap();
+    let runtime =
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap();
+    let callback = runtime
+        .proxy(
+            "ai.tinyhumans.test.BoundLeaseCallback",
+            "/ai/tinyhumans/test/BoundLeaseCallback",
+        )
+        .unwrap();
+    let opening = tokio::spawn(runtime.lease(
+        BoundLifecycleDriver { client: bound },
+        |_, _| Ok(BoundLeaseCallback),
+        crate::module::RetryPolicy::new(Duration::from_millis(100), vec![]).unwrap(),
+        |_| {},
+    ));
+    start_accepted_rx.await.unwrap();
+    let opened = tokio::time::timeout(Duration::from_secs(2), opening)
+        .await
+        .expect("the bound START's inner bus deadline returns to activation")
+        .unwrap();
+    let Err(error) = opened else {
+        panic!("an inner START deadline cannot return a live lease");
+    };
+    assert_eq!(error.phase(), crate::module::LeasePhase::Start);
+
+    start_release.add_permits(1);
+    start_completed_rx.await.unwrap();
+    let observed_calls = events.lock().unwrap().clone();
+    let callback_live: Result<serde_json::Value, _> = callback.call("Ping", ()).await;
+    assert!(
+        !error.acknowledged(),
+        "an uncertain START must not be converted to acknowledged by STOP"
+    );
+    assert_eq!(
+        observed_calls,
+        vec!["Reserve", "Start"],
+        "uncertain START must not issue an overlapping STOP"
+    );
+    assert!(
+        callback_live.is_ok(),
+        "the exported callback stays live after late provider START completion"
+    );
     broker_task.abort();
 }
 
