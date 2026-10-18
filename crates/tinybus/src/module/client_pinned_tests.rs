@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::broker::Broker;
+use crate::module::failure::{FailureReport, FailureSink};
 use crate::transport::memory::MemoryBus;
 use crate::{Connection, Interface, InterfaceName, MemberName, ObjectPath, StreamRef};
 use async_trait::async_trait;
@@ -18,6 +19,16 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     // release archive/library pair to attest.
     assets: &[],
 };
+
+struct DiscardReports;
+
+impl FailureSink for DiscardReports {
+    fn capture(&self, _: &FailureReport<'_>) {}
+}
+
+fn reporter() -> FailureReporter {
+    FailureReporter::new(Arc::new(DiscardReports))
+}
 
 struct Access {
     connection: Connection,
@@ -92,8 +103,8 @@ impl Interface for Peer {
 #[derive(Clone)]
 struct HandoverArguments {
     stream: StreamRef,
-    serialized: Arc<tokio::sync::Notify>,
-    resume: Arc<tokio::sync::Notify>,
+    started: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    barrier: Arc<std::sync::Barrier>,
 }
 
 impl serde::Serialize for HandoverArguments {
@@ -101,10 +112,12 @@ impl serde::Serialize for HandoverArguments {
     where
         S: serde::Serializer,
     {
-        self.serialized.notify_one();
+        if let Some(started) = self.started.lock().unwrap().take() {
+            let _ = started.send(());
+        }
         // Keep the upload unopened until the test has reassigned the public
         // alias; this proves the stream producer uses the pinned destination.
-        futures_lite::future::block_on(self.resume.notified());
+        self.barrier.wait();
         serde::Serialize::serialize(&self.stream, serializer)
     }
 }
@@ -150,7 +163,7 @@ async fn an_ordinary_fixture_with_no_release_assets_can_bind() {
         .unwrap();
     let client = ModuleClient::new(Access {
         connection: caller,
-        reporter: FailureReporter::default(),
+        reporter: reporter(),
     })
     .with_fixture(proxy);
 
@@ -180,36 +193,37 @@ async fn ordinary_binding_keeps_root_object_and_stream_with_the_original_peer() 
         .unwrap();
     let client = ModuleClient::new(Access {
         connection: caller,
-        reporter: FailureReporter::default(),
+        reporter: reporter(),
     })
     .with_fixture(proxy);
     let pinned = client.bind(RECORD.id).await.unwrap();
 
-    let serialized = Arc::new(tokio::sync::Notify::new());
-    let resume = Arc::new(tokio::sync::Notify::new());
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started = Arc::new(Mutex::new(Some(started_tx)));
     let call_client = pinned.clone();
     let payload = b"ordinary pinned payload".to_vec();
     let call_payload = payload.clone();
-    let call_serialized = serialized.clone();
-    let call_resume = resume.clone();
+    let call_started = started.clone();
+    let call_barrier = barrier.clone();
     let upload = tokio::spawn(async move {
         call_client
             .call_with_stream::<String, _, _>(
                 "Upload",
                 move |stream| HandoverArguments {
                     stream: stream.clone(),
-                    serialized: call_serialized,
-                    resume: call_resume,
+                    started: call_started,
+                    barrier: call_barrier,
                 },
                 &call_payload,
             )
             .await
     });
 
-    serialized.notified().await;
+    started_rx.await.unwrap();
     service_a.release_name(RECORD.bus_name).await.unwrap();
     service_b.request_name(RECORD.bus_name).await.unwrap();
-    resume.notify_one();
+    barrier.wait();
     assert_eq!(upload.await.unwrap().unwrap(), "peer-a");
     assert_eq!(received_a_rx.recv().await.unwrap(), payload);
     assert!(received_b_rx.try_recv().is_err());
