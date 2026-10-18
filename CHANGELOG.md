@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+
+- `ModuleRuntime::lease` owns reservation activation on the dedicated runtime and
+  returns a cloneable `RuntimeLease` with a shared acknowledged-stop worker.
+- `RuntimeLeaseDriver` and `StopOutcome` expose a protocol-neutral lifecycle
+  contract on the slim build; only proven-settled failures are retried.
+- `ModuleClient::bind_attested` returns a client pinned to the proven unique
+  peer, including for later calls and held object paths.
+- Unacknowledged and faulted cleanup retains the exact callback registration
+  until STOP acknowledgement.
+
+### Fixed
+
+- Closing a linked module connection wakes an idle receive without requiring
+  another inbound frame, drains queued frames, and refuses sends after close.
+
 ## 0.3.0
 
 ### Breaking changes

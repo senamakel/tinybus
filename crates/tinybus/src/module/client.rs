@@ -448,27 +448,19 @@ impl ModuleClient {
             .map_err(|failure| failure.kind)
     }
 
-    /// Execute a confidential member after the host registry pins both the
-    /// release archive and extracted library and the same unique peer proves
-    /// that exact pair. This retains a remote method failure's wire name and
-    /// message in the result fields; its `Debug`, `Display`, and terminal report
-    /// remain sanitized.
+    /// Bind to the exact unique peer that proves the registered artifact.
     ///
-    /// Lazy readiness is established without a business call, before this
-    /// method queries the broker or serializes `args`. Missing or mismatched
-    /// proofs fail closed and are never retried through ordinary delivery.
+    /// Lazy readiness and strict attestation happen before this returns. Every
+    /// call and held-object client from the result keeps the same private unique
+    /// destination, even if the public well-known name later changes owners.
     ///
     /// # Errors
     ///
-    /// A detailed [`ModuleCallFailure`]. Remote values may contain arguments
-    /// or credentials; callers must apply their own redaction policy before
-    /// displaying or logging the public fields.
-    pub async fn call_attested_detailed<R: DeserializeOwned>(
+    /// A sanitized [`ModuleCallFailure`] when loading or attestation fails.
+    pub async fn bind_attested(
         &self,
         module: &str,
-        member: &str,
-        args: impl Serialize,
-    ) -> Result<R, ModuleCallFailure> {
+    ) -> Result<BoundModuleClient, ModuleCallFailure> {
         let record = self.record(module).map_err(ModuleCallFailure::local)?;
         let candidates = crate::module::platform::host_candidates();
         // The resolver tries compatible release assets in host-candidate order
@@ -564,8 +556,29 @@ impl ModuleClient {
             return Err(ModuleCallFailure::local(ModuleCallError::Unavailable));
         }
 
-        let unique_proxy = self.with_deadline(unique_proxy);
-        invoke_proxy_detailed(&*self.access, record, &unique_proxy, member, args, true).await
+        Ok(BoundModuleClient {
+            access: Arc::clone(&self.access),
+            record,
+            proxy: self.with_deadline(unique_proxy),
+            timeout: self.timeout,
+        })
+    }
+
+    /// Execute a confidential member only after strict artifact attestation.
+    ///
+    /// The bound peer is selected and proved before `args` are serialized.
+    /// Remote failure fields remain available to the caller, while `Debug`,
+    /// `Display`, and reports stay sanitized.
+    pub async fn call_attested_detailed<R: DeserializeOwned>(
+        &self,
+        module: &str,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        self.bind_attested(module)
+            .await?
+            .call_confidential_detailed(member, args)
+            .await
     }
 
     /// Call a member that returns a JSON-encoded string and deserialise that
@@ -748,6 +761,140 @@ impl ModuleClient {
         serde_json::from_str(response).map_err(|_| {
             self.report_malformed_reply(module);
             ModuleCallError::ModuleFault
+        })
+    }
+}
+
+/// A client permanently bound to one attested module peer.
+///
+/// The selected unique bus destination is private and retained by every call
+/// and object client created from this value. It is never resolved again by
+/// well-known name.
+#[derive(Clone)]
+pub struct BoundModuleClient {
+    access: Arc<dyn ModuleAccess>,
+    record: &'static ReleaseRecord,
+    proxy: Proxy,
+    timeout: Option<Duration>,
+}
+
+impl BoundModuleClient {
+    /// Call an ordinary member on the bound peer.
+    pub async fn call<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallError> {
+        invoke_proxy(&*self.access, self.record, &self.proxy, member, args, false).await
+    }
+
+    /// Call an ordinary member and retain its remote wire failure fields.
+    pub async fn call_detailed<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        invoke_proxy_detailed(&*self.access, self.record, &self.proxy, member, args, false).await
+    }
+
+    /// Call a confidential member on the bound peer.
+    pub async fn call_confidential<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallError> {
+        invoke_proxy(&*self.access, self.record, &self.proxy, member, args, true).await
+    }
+
+    /// Call a confidential member and retain its remote wire failure fields.
+    pub async fn call_confidential_detailed<R: DeserializeOwned>(
+        &self,
+        member: &str,
+        args: impl Serialize,
+    ) -> Result<R, ModuleCallFailure> {
+        invoke_proxy_detailed(&*self.access, self.record, &self.proxy, member, args, true).await
+    }
+
+    /// Upload a bulk payload while calling a member on this same unique peer.
+    ///
+    /// The stream open, method call, and payload retain the pinned destination
+    /// even if the public bus name changes owners during argument construction.
+    /// This is ordinary bus delivery; it does not add a confidential stream
+    /// fallback.
+    ///
+    /// # Errors
+    ///
+    /// A detailed [`ModuleCallFailure`]. Its remote fields remain available to
+    /// the caller while `Debug`, `Display`, and reports stay sanitized.
+    pub async fn call_with_stream_detailed<R, F, A>(
+        &self,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallFailure>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        let member = crate::MemberName::new(member).map_err(|error| {
+            report_proxy_failure_detailed(self.access.reporter(), self.record, &error)
+        })?;
+        self.proxy
+            .connection()
+            .call_with_stream_serialized(
+                self.proxy.destination().clone(),
+                self.proxy.path().clone(),
+                self.proxy.interface().clone(),
+                member,
+                args,
+                bytes,
+                self.proxy.timeout(),
+            )
+            .await
+            .map_err(|error| {
+                report_proxy_failure_detailed(self.access.reporter(), self.record, &error)
+            })
+    }
+
+    /// Sanitized counterpart to [`Self::call_with_stream_detailed`].
+    pub async fn call_with_stream<R, F, A>(
+        &self,
+        member: &str,
+        args: F,
+        bytes: &[u8],
+    ) -> Result<R, ModuleCallError>
+    where
+        R: DeserializeOwned,
+        F: FnOnce(&crate::stream::StreamRef) -> A,
+        A: Serialize,
+    {
+        self.call_with_stream_detailed(member, args, bytes)
+            .await
+            .map_err(|failure| failure.kind)
+    }
+
+    /// Create a held-object client pinned to this same unique module peer.
+    pub fn object_client(&self, object_path: &str) -> Result<ModuleObjectClient, ModuleCallError> {
+        let proxy = self
+            .proxy
+            .connection()
+            .proxy(
+                self.proxy.destination().as_str(),
+                object_path,
+                self.proxy.interface().as_str(),
+            )
+            .map_err(|_| {
+                report(&*self.access, self.record, Reason::IncompatibleContract);
+                ModuleCallError::IncompatibleContract
+            })?;
+        let proxy = self
+            .timeout
+            .map_or(proxy.clone(), |timeout| proxy.with_timeout(timeout));
+        Ok(ModuleObjectClient {
+            access: Arc::clone(&self.access),
+            record: self.record,
+            proxy,
         })
     }
 }

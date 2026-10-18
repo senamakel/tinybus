@@ -96,7 +96,7 @@ pub struct ModuleRuntime {
     host_objects: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
 }
 
-struct HostObjectRegistry {
+pub(super) struct HostObjectRegistry {
     broker: Broker,
     connection: Connection,
     names: std::collections::HashMap<crate::BusName, HostNameLease>,
@@ -136,27 +136,59 @@ impl Drop for HostObjectGuard {
         };
         let registry = self.registry.clone();
         let name = self.name.clone();
+        let handle = self.handle.clone();
         self.handle.spawn(async move {
-            let mut state = registry.lock().await;
-            let _ = state.connection.unserve_if_owned(&registration).await;
-            let release = if let Some(lease) = state.names.get_mut(&name) {
-                lease.registrations = lease.registrations.saturating_sub(1);
-                if lease.registrations == 0 {
-                    let release = lease.release_when_empty;
-                    state.names.remove(&name);
-                    release
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            if release {
-                if let Some(unique) = state.connection.unique_name() {
-                    let _ = state.broker.release_host_name(&unique, &name);
-                }
-            }
+            remove_host_object(registry, name, registration, handle).await;
         });
+    }
+}
+
+impl HostObjectGuard {
+    /// Withdraw this exact registration and wait for the local broker to remove it.
+    pub(super) async fn remove(mut self) {
+        let Some(registration) = self.registration.take() else {
+            return;
+        };
+        remove_host_object(
+            self.registry.clone(),
+            self.name.clone(),
+            registration,
+            self.handle.clone(),
+        )
+        .await;
+    }
+}
+
+async fn remove_host_object(
+    registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
+    name: crate::BusName,
+    registration: ObjectRegistration,
+    handle: tokio::runtime::Handle,
+) {
+    let mut state = registry.lock().await;
+    let detached = state.connection.take_if_owned(&registration).await;
+    let release = if let Some(lease) = state.names.get_mut(&name) {
+        lease.registrations = lease.registrations.saturating_sub(1);
+        if lease.registrations == 0 {
+            let release = lease.release_when_empty;
+            state.names.remove(&name);
+            release
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if release {
+        if let Some(unique) = state.connection.unique_name() {
+            let _ = state.broker.release_host_name(&unique, &name);
+        }
+    }
+    drop(state);
+    if let Some(interface) = detached {
+        // Interface destructors are user code. Keep this parent cleanup task
+        // alive to publish completion even if the destructor unwinds.
+        let _ = handle.spawn(async move { drop(interface) }).await;
     }
 }
 
@@ -281,9 +313,15 @@ impl ModuleRuntime {
         });
         result.await.map_err(|_| crate::Error::ConnectionClosed)?
     }
+
+    pub(super) fn lease_host_object_registry(
+        &self,
+    ) -> std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>> {
+        self.host_objects.clone()
+    }
 }
 
-async fn serve_host_object_transaction(
+pub(super) async fn serve_host_object_transaction(
     registry: std::sync::Arc<tokio::sync::Mutex<HostObjectRegistry>>,
     handle: tokio::runtime::Handle,
     name: crate::BusName,

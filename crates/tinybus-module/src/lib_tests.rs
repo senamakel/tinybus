@@ -260,6 +260,7 @@ async fn module_transport_maps_host_results_and_wakes_after_receiving() {
     let transport = ModuleTransport {
         host: HostCalls(host(&[])),
         inbound: Mutex::new(receiver),
+        closed: close_signal(),
         provenance: Arc::new(AtomicBool::new(false)),
         detach_on_panic: true,
     };
@@ -294,6 +295,145 @@ async fn module_transport_maps_host_results_and_wakes_after_receiving() {
     transport.close().await.unwrap();
     assert!(transport.recv().await.unwrap().is_none());
     assert_eq!(transport.describe(), "module");
+}
+
+#[tokio::test]
+async fn module_transport_close_wakes_an_idle_pending_receive() {
+    let _host_state = host_state_guard().await;
+    let (sender, receiver) = mpsc::channel(1);
+    let transport = Arc::new(ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        closed: close_signal(),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    });
+    let receiving_transport = transport.clone();
+    let (receive_started, receive_started_rx) = tokio::sync::oneshot::channel();
+    let receiving = tokio::spawn(async move {
+        let _ = receive_started.send(());
+        receiving_transport.recv().await
+    });
+    receive_started_rx.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if transport.inbound.try_lock().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the module receive is pending while it owns the receiver");
+
+    let closing_transport = transport.clone();
+    let (close_started, close_started_rx) = tokio::sync::oneshot::channel();
+    let mut closing = tokio::spawn(async move {
+        let _ = close_started.send(());
+        closing_transport.close().await
+    });
+    close_started_rx.await.unwrap();
+    match tokio::time::timeout(Duration::from_secs(2), &mut closing).await {
+        Ok(result) => assert!(result.unwrap().is_ok()),
+        Err(_) => {
+            // Negative control for the old implementation: one inbound frame
+            // releases the receiver mutex that close is incorrectly waiting on.
+            let frame = serde_json::to_vec(&message()).unwrap();
+            sender.send((frame, false)).await.unwrap();
+            assert!(receiving.await.unwrap().unwrap().is_some());
+            assert!(closing.await.unwrap().is_ok());
+            panic!("close must wake an idle module receive without another frame");
+        }
+    }
+    assert!(receiving.await.unwrap().unwrap().is_none());
+    transport.close().await.unwrap();
+    assert!(
+        sender
+            .try_send((serde_json::to_vec(&message()).unwrap(), false))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn module_transport_close_before_recv_drains_queued_frames_and_rejects_new_ones() {
+    let _host_state = host_state_guard().await;
+    let (sender, receiver) = mpsc::channel(2);
+    let transport = ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        closed: close_signal(),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    };
+    let first = message();
+    let mut second = message();
+    second.header.serial = 2;
+    for frame in [&first, &second] {
+        sender
+            .send((serde_json::to_vec(frame).unwrap(), false))
+            .await
+            .unwrap();
+    }
+
+    transport.close().await.unwrap();
+    transport.close().await.unwrap();
+    assert_eq!(transport.recv().await.unwrap(), Some(first));
+    assert_eq!(transport.recv().await.unwrap(), Some(second));
+    assert!(transport.recv().await.unwrap().is_none());
+    assert!(
+        sender
+            .try_send((serde_json::to_vec(&message()).unwrap(), false))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn module_transport_send_after_close_is_refused_before_host_delivery() {
+    let _host_state = host_state_guard().await;
+    let (_sender, receiver) = mpsc::channel(1);
+    let transport = ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        closed: close_signal(),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    };
+    HOST_SEND_CODE.store(TB_OK, Ordering::Release);
+    transport.close().await.unwrap();
+
+    assert!(matches!(
+        transport.send(message()).await,
+        Err(Error::ConnectionClosed)
+    ));
+}
+
+#[tokio::test]
+async fn a_cancelled_module_transport_close_leaves_a_persistent_wakeup() {
+    let _host_state = host_state_guard().await;
+    let (sender, receiver) = mpsc::channel(1);
+    let transport = Arc::new(ModuleTransport {
+        host: HostCalls(host(&[])),
+        inbound: Mutex::new(receiver),
+        closed: close_signal(),
+        provenance: Arc::new(AtomicBool::new(false)),
+        detach_on_panic: false,
+    });
+    let receiver_lock = transport.inbound.lock().await;
+    let closing_transport = transport.clone();
+    let closing = tokio::spawn(async move { closing_transport.close().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !*transport.closed.borrow() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("close publishes its wakeup before waiting for the receiver lock");
+    closing.abort();
+    let _ = closing.await;
+    drop(receiver_lock);
+
+    assert!(transport.recv().await.unwrap().is_none());
+    assert!(sender.is_closed());
 }
 
 #[tokio::test]
@@ -814,6 +954,7 @@ async fn admission_never_promotes_a_frame_already_queued_without_provenance() {
     let transport = ModuleTransport {
         host: HostCalls(table),
         inbound: Mutex::new(receiver),
+        closed: close_signal(),
         provenance: Arc::new(AtomicBool::new(false)),
         detach_on_panic: false,
     };
@@ -843,6 +984,7 @@ async fn old_hosts_retain_sender_headers_without_authenticating_them() {
     let transport = ModuleTransport {
         host: HostCalls(host(b"{}")),
         inbound: Mutex::new(receiver),
+        closed: close_signal(),
         provenance: Arc::new(AtomicBool::new(false)),
         detach_on_panic: false,
     };
@@ -911,6 +1053,7 @@ async fn unverified_native_frames_preserve_distinct_stream_owners_and_unverified
         let transport = Arc::new(ModuleTransport {
             host: HostCalls(table),
             inbound: Mutex::new(receiver),
+            closed: close_signal(),
             provenance: Arc::new(AtomicBool::new(false)),
             detach_on_panic: false,
         });

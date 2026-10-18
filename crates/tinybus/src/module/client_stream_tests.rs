@@ -20,6 +20,55 @@ static RECORD: ReleaseRecord = ReleaseRecord {
     assets: &[],
 };
 
+#[cfg(feature = "modules")]
+fn bound_stream_record() -> &'static ReleaseRecord {
+    let host_key = Box::leak(
+        crate::module::platform::host_candidates()
+            .into_iter()
+            .next()
+            .expect("the test host has a published module key")
+            .into_boxed_str(),
+    );
+    let assets = Box::leak(
+        vec![crate::module::ReleaseAsset {
+            host_key,
+            archive: Box::leak("bound-stream-test.tar.gz".to_string().into_boxed_str()),
+            sha256: Box::leak("a".repeat(64).into_boxed_str()),
+            library_sha256: Some(Box::leak("b".repeat(64).into_boxed_str())),
+        }]
+        .into_boxed_slice(),
+    );
+    Box::leak(Box::new(ReleaseRecord {
+        id: "bound-stream-test",
+        bus_name: "ai.tinyhumans.test.BoundStreamClient",
+        object_path: "/ai/tinyhumans/test/BoundStreamClient",
+        version: "0.3.1",
+        release_url: "https://example.invalid/tinybus",
+        assets,
+    }))
+}
+
+#[cfg(feature = "modules")]
+struct HandoverStreamArguments {
+    stream: StreamRef,
+    started: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    barrier: Arc<std::sync::Barrier>,
+}
+
+#[cfg(feature = "modules")]
+impl serde::Serialize for HandoverStreamArguments {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if let Some(started) = self.started.lock().unwrap().take() {
+            let _ = started.send(());
+        }
+        self.barrier.wait();
+        serde::Serialize::serialize(&self.stream, serializer)
+    }
+}
+
 #[derive(Default)]
 struct Reports(Mutex<Vec<Reason>>);
 
@@ -30,6 +79,7 @@ impl FailureSink for Reports {
 }
 
 struct StreamAccess {
+    record: &'static ReleaseRecord,
     connection: Connection,
     reporter: FailureReporter,
     enabled: bool,
@@ -38,7 +88,7 @@ struct StreamAccess {
 
 impl ModuleAccess for StreamAccess {
     fn find(&self, id: &str) -> Option<&'static ReleaseRecord> {
-        (id == RECORD.id).then_some(&RECORD)
+        (id == self.record.id).then_some(self.record)
     }
 
     fn enabled(&self) -> bool {
@@ -57,6 +107,10 @@ impl ModuleAccess for StreamAccess {
                 Err("not ready".to_string())
             }
         })
+    }
+
+    fn prepare_attested<'a>(&'a self, _: &'a str) -> AccessFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
     }
 
     fn proxy<'a>(
@@ -117,6 +171,11 @@ impl crate::ports::Transport for ObservedTransport {
 #[derive(Clone)]
 enum Behavior {
     Consume(tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
+    #[cfg(feature = "modules")]
+    Bound {
+        label: &'static str,
+        received: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    },
     Invalid,
     Unavailable,
     Stall {
@@ -126,25 +185,38 @@ enum Behavior {
 }
 
 struct StreamService {
+    interface_name: &'static str,
     connection: Connection,
     behavior: Behavior,
     calls: Arc<AtomicUsize>,
+    events: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 #[async_trait]
 impl Interface for StreamService {
     fn name(&self) -> InterfaceName {
-        InterfaceName::new(RECORD.bus_name).unwrap()
+        InterfaceName::new(self.interface_name).unwrap()
     }
 
     fn members(&self) -> Vec<MemberName> {
-        ["Upload", "InvalidInput", "Unavailable", "Stall"]
-            .map(|name| MemberName::new(name).unwrap())
-            .to_vec()
+        [
+            "Upload",
+            "Generate",
+            "Read",
+            "Release",
+            "InvalidInput",
+            "Unavailable",
+            "Stall",
+        ]
+        .map(|name| MemberName::new(name).unwrap())
+        .to_vec()
     }
 
     async fn call(&self, member: &MemberName, args: Value) -> crate::Result<Value> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(events) = &self.events {
+            events.lock().unwrap().push(member.as_str().to_string());
+        }
         match (&self.behavior, member.as_str()) {
             (Behavior::Consume(received), "Upload") => {
                 let (stream,): (StreamRef,) = serde_json::from_value(args)?;
@@ -152,6 +224,15 @@ impl Interface for StreamService {
                 received.send(bytes.clone()).unwrap();
                 Ok(serde_json::json!(bytes.len()))
             }
+            #[cfg(feature = "modules")]
+            (Behavior::Bound { received, .. }, "Generate") => {
+                let (stream,): (StreamRef,) = serde_json::from_value(args)?;
+                let bytes = self.connection.read_stream(&stream).await?;
+                received.send(bytes).unwrap();
+                Ok(serde_json::json!("/child"))
+            }
+            #[cfg(feature = "modules")]
+            (Behavior::Bound { label, .. }, "Read" | "Release") => Ok(serde_json::json!(label)),
             (Behavior::Invalid, "InvalidInput") => Err(Error::MethodFailed {
                 name: "ai.tinyhumans.tinydocs.Error.InvalidInput".to_string(),
                 message: "secret document detail".to_string(),
@@ -195,9 +276,11 @@ async fn fixture(behavior: Behavior) -> Fixture {
         .serve_at(
             ObjectPath::new(RECORD.object_path).unwrap(),
             StreamService {
+                interface_name: RECORD.bus_name,
                 connection: service.clone(),
                 behavior: behavior.clone(),
                 calls: calls.clone(),
+                events: None,
             },
         )
         .await
@@ -206,9 +289,11 @@ async fn fixture(behavior: Behavior) -> Fixture {
         .serve_at(
             ObjectPath::new("/child").unwrap(),
             StreamService {
+                interface_name: RECORD.bus_name,
                 connection: service.clone(),
                 behavior,
                 calls: calls.clone(),
+                events: None,
             },
         )
         .await
@@ -224,6 +309,7 @@ async fn fixture(behavior: Behavior) -> Fixture {
     let connection = Connection::connect(Box::new(observed)).await.unwrap();
     let reports = Arc::new(Reports::default());
     let access = StreamAccess {
+        record: &RECORD,
         connection: connection.clone(),
         reporter: FailureReporter::new(reports.clone()),
         enabled: true,
@@ -277,6 +363,149 @@ async fn module_calls_stream_empty_and_past_window_payloads() {
     assert_eq!(fixture.opens.load(Ordering::SeqCst), 2);
 }
 
+#[cfg(feature = "modules")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service_a = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service_b = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = bound_stream_record();
+    let events_a = Arc::new(Mutex::new(Vec::new()));
+    let events_b = Arc::new(Mutex::new(Vec::new()));
+    let (received_a_tx, mut received_a_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (received_b_tx, mut received_b_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    for (service, label, events, received) in [
+        (&service_a, "peer-a", events_a.clone(), received_a_tx),
+        (&service_b, "peer-b", events_b.clone(), received_b_tx),
+    ] {
+        service
+            .serve_at(
+                ObjectPath::new(record.object_path).unwrap(),
+                StreamService {
+                    interface_name: record.bus_name,
+                    connection: service.clone(),
+                    behavior: Behavior::Bound {
+                        label,
+                        received: received.clone(),
+                    },
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    events: Some(events.clone()),
+                },
+            )
+            .await
+            .unwrap();
+        service
+            .serve_at(
+                ObjectPath::new("/child").unwrap(),
+                StreamService {
+                    interface_name: record.bus_name,
+                    connection: service.clone(),
+                    behavior: Behavior::Bound { label, received },
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    events: Some(events),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    service_a.request_name(record.bus_name).await.unwrap();
+    broker.attest_module(
+        &service_a.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::name::BusName::new(record.bus_name).unwrap(),
+            sha256: record.assets[0].sha256.to_string(),
+            library_sha256: record.assets[0].library_sha256.map(str::to_string),
+        },
+    );
+    let client = ModuleClient::new(StreamAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Reports::default())),
+        enabled: true,
+        ready: true,
+    });
+    let bound = client.bind_attested(record.id).await.unwrap();
+
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started = Arc::new(Mutex::new(Some(started_tx)));
+    let call_client = bound.clone();
+    let call_barrier = barrier.clone();
+    let call_started = started.clone();
+    let payload = b"bound stream payload".to_vec();
+    let call_payload = payload.clone();
+    let generating = tokio::spawn(async move {
+        call_client
+            .call_with_stream_detailed::<String, _, _>(
+                "Generate",
+                move |stream| HandoverStreamArguments {
+                    stream: stream.clone(),
+                    started: call_started,
+                    barrier: call_barrier,
+                },
+                &call_payload,
+            )
+            .await
+    });
+    started_rx.await.unwrap();
+    service_a.release_name(record.bus_name).await.unwrap();
+    service_b.request_name(record.bus_name).await.unwrap();
+    barrier.wait();
+
+    let child_path = generating.await.unwrap().unwrap();
+    assert_eq!(child_path, "/child");
+    assert_eq!(received_a_rx.recv().await.unwrap(), payload);
+    assert!(received_b_rx.try_recv().is_err());
+
+    let child = bound.object_client(&child_path).unwrap();
+    assert_eq!(child.call::<String>("Read", ()).await.unwrap(), "peer-a");
+    assert_eq!(child.call::<String>("Release", ()).await.unwrap(), "peer-a");
+
+    let sanitized_bytes = b"sanitized bound stream";
+    assert_eq!(
+        bound
+            .call_with_stream::<String, _, _>(
+                "Generate",
+                |stream| serde_json::json!([stream]),
+                sanitized_bytes,
+            )
+            .await
+            .unwrap(),
+        "/child"
+    );
+    assert_eq!(received_a_rx.recv().await.unwrap(), sanitized_bytes);
+    assert_eq!(
+        events_a.lock().unwrap().as_slice(),
+        &["Generate", "Read", "Release", "Generate"]
+    );
+    assert!(events_b.lock().unwrap().is_empty());
+
+    service_a.close().await.unwrap();
+    assert!(
+        bound
+            .call_with_stream::<String, _, _>(
+                "Generate",
+                |stream| serde_json::json!([stream]),
+                b"after disconnect",
+            )
+            .await
+            .is_err()
+    );
+    assert!(events_b.lock().unwrap().is_empty());
+    assert!(received_b_rx.try_recv().is_err());
+    broker_task.abort();
+}
+
 #[tokio::test]
 async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_open_a_stream() {
     let (received_tx, _received_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -303,6 +532,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
 
     let proxy = fixture.client.fixture_proxy().unwrap();
     let disabled = ModuleClient::new(StreamAccess {
+        record: &RECORD,
         connection: fixture.connection.clone(),
         reporter: FailureReporter::new(Arc::new(Reports::default())),
         enabled: false,
@@ -328,6 +558,7 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
     );
 
     let unready = ModuleClient::new(StreamAccess {
+        record: &RECORD,
         connection: fixture.connection.clone(),
         reporter: FailureReporter::new(Arc::new(Reports::default())),
         enabled: true,
