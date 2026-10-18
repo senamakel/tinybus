@@ -300,6 +300,11 @@ class CoverageScriptPlatformTests(unittest.TestCase):
             for index, line in enumerate(lines[posix_branch + 1 :], posix_branch + 1)
             if line.strip() == ";;"
         )
+        case_end = next(
+            index
+            for index, line in enumerate(lines[windows_branch + 1 :], windows_branch + 1)
+            if line.strip() == "esac"
+        )
         invocations = [
             index
             for index, line in enumerate(lines)
@@ -311,7 +316,7 @@ class CoverageScriptPlatformTests(unittest.TestCase):
         self.assertLess(invocations[0], posix_end)
         self.assertNotIn(
             "python3 scripts/test_check_coverage.py",
-            [line.strip() for line in lines[case_start + 1 : windows_branch]],
+            [line.strip() for line in lines[windows_branch + 1 : case_end]],
         )
         self.assertGreater(windows_branch, case_start)
         self.assertEqual(
