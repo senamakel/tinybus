@@ -370,11 +370,6 @@ pub struct RuntimeLease<T, E: Send + Sync + 'static> {
     control: Arc<LeaseControl<E>>,
 }
 
-/// Owned activation result future returned by [`ModuleRuntime::lease`].
-#[cfg(feature = "modules")]
-pub type RuntimeLeaseFuture<T: Send + Sync + 'static, E: Send + Sync + 'static> =
-    Pin<Box<dyn Future<Output = Result<RuntimeLease<T, E>, LeaseError<E>>> + Send + 'static>>;
-
 #[cfg(feature = "modules")]
 impl<T, E: Send + Sync + 'static> RuntimeLease<T, E> {
     /// The object or host handle created for this reservation.
@@ -419,13 +414,16 @@ impl ModuleRuntime {
     /// This is a normal function: it submits the owned activation transaction before returning
     /// the future. Cancelling the returned future only abandons its result; activation and any
     /// required rollback continue on the dedicated runtime.
+    #[allow(clippy::type_complexity)] // The future must retain the driver's object and typed error.
     pub fn lease<D, F, I, R>(
         &self,
         driver: D,
         make_callback: F,
         policy: RetryPolicy,
         reporter: R,
-    ) -> RuntimeLeaseFuture<D::Object, D::Error>
+    ) -> impl Future<Output = Result<RuntimeLease<D::Object, D::Error>, LeaseError<D::Error>>>
+    + Send
+    + 'static
     where
         D: RuntimeLeaseDriver,
         F: FnOnce(&D::Reservation, &D::Object) -> Result<I, D::Error> + Send + 'static,
@@ -447,11 +445,11 @@ impl ModuleRuntime {
             .await;
             let _ = response.send(activated);
         });
-        Box::pin(async move {
+        async move {
             result
                 .await
                 .unwrap_or_else(|_| Err(LeaseError::new(LeasePhase::Runtime, None, false, None)))
-        })
+        }
     }
 }
 
