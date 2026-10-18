@@ -32,7 +32,7 @@ impl std::error::Error for DriverError {}
 enum DriverCall {
     Reserve(oneshot::Sender<Result<Reservation, DriverError>>),
     Object(Identity, oneshot::Sender<Result<Object, DriverError>>),
-    Start(oneshot::Sender<Result<(), DriverError>>),
+    Start(oneshot::Sender<StartOutcome<DriverError>>),
     Stop(
         std::time::Instant,
         oneshot::Sender<StopOutcome<DriverError>>,
@@ -113,18 +113,18 @@ impl RuntimeLeaseDriver for ControlledDriver {
         result.await.unwrap()
     }
 
-    async fn start(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
+    async fn start(&self, _: &Self::Reservation) -> StartOutcome<Self::Error> {
         let (reply, result) = oneshot::channel();
         self.calls.send(DriverCall::Start(reply)).unwrap();
-        result.await.unwrap()?;
+        let outcome = result.await.unwrap();
         assert!(
             !self.start_panic.load(Ordering::Acquire),
             "private start panic payload"
         );
         if self.start_error.load(Ordering::Acquire) {
-            Err(DriverError("private start detail"))
+            StartOutcome::SettledFailure(DriverError("private start detail"))
         } else {
-            Ok(())
+            outcome
         }
     }
 
@@ -389,7 +389,7 @@ impl Harness {
             _ => panic!("object creation follows validation"),
         }
         match self.calls.recv().await.unwrap() {
-            DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+            DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
             _ => panic!("start follows callback registration"),
         }
         opening.await.unwrap().unwrap()
@@ -490,7 +490,7 @@ async fn acknowledged_close_removes_only_its_exact_callback_registration() {
         _ => panic!("second object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("second callback is registered before start"),
     }
     let second = opening.await.unwrap().unwrap();
@@ -567,7 +567,7 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         _ => panic!("object creation follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
     match harness.calls.recv().await.unwrap() {
@@ -624,7 +624,7 @@ async fn cancelling_during_object_creation_keeps_activation_and_one_rollback_own
     match harness.calls.recv().await.unwrap() {
         DriverCall::Start(reply) => {
             assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
-            reply.send(Ok(())).unwrap();
+            reply.send(StartOutcome::Started).unwrap();
         }
         _ => panic!("owned activation continues through start"),
     }
@@ -756,7 +756,7 @@ async fn start_panic_keeps_the_exported_callback_until_rollback_ack() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback registration"),
     }
     let stop = tokio::time::timeout(std::time::Duration::from_secs(2), harness.calls.recv())
@@ -903,7 +903,7 @@ async fn start_failure_keeps_the_exported_callback_until_stop_ack() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("start follows callback export"),
     }
     let stop_reply = match harness.calls.recv().await.unwrap() {
@@ -1156,7 +1156,7 @@ async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
         _ => panic!("object follows validation"),
     }
     match harness.calls.recv().await.unwrap() {
-        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        DriverCall::Start(reply) => reply.send(StartOutcome::Started).unwrap(),
         _ => panic!("callback registers before start"),
     }
     let lease = opening.await.unwrap().unwrap();
