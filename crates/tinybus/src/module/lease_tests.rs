@@ -48,6 +48,11 @@ struct ControlledDriver {
     failed: Arc<AtomicBool>,
     validation_error: Arc<AtomicBool>,
     start_error: Arc<AtomicBool>,
+    validation_panic: Arc<AtomicBool>,
+    address_panic: Arc<AtomicBool>,
+    start_panic: Arc<AtomicBool>,
+    stop_panic: Arc<AtomicBool>,
+    failed_panic: Arc<AtomicBool>,
     identity: Identity,
 }
 
@@ -65,6 +70,10 @@ impl RuntimeLeaseDriver for ControlledDriver {
 
     fn validate(&self, _: &Self::Reservation) -> Result<(), Self::Error> {
         self.calls.send(DriverCall::Validated).unwrap();
+        assert!(
+            !self.validation_panic.load(Ordering::Acquire),
+            "private validation panic payload"
+        );
         if self.validation_error.load(Ordering::Acquire) {
             Err(DriverError("private validation detail"))
         } else {
@@ -77,6 +86,10 @@ impl RuntimeLeaseDriver for ControlledDriver {
         reservation: &Self::Reservation,
         _: &Self::Object,
     ) -> Result<(crate::BusName, crate::ObjectPath), Self::Error> {
+        assert!(
+            !self.address_panic.load(Ordering::Acquire),
+            "private address panic payload"
+        );
         assert!(Arc::ptr_eq(&self.identity.0, &reservation.0.0));
         Ok((
             CALLBACK_NAME.parse().unwrap(),
@@ -101,6 +114,10 @@ impl RuntimeLeaseDriver for ControlledDriver {
         let (reply, result) = oneshot::channel();
         self.calls.send(DriverCall::Start(reply)).unwrap();
         result.await.unwrap()?;
+        assert!(
+            !self.start_panic.load(Ordering::Acquire),
+            "private start panic payload"
+        );
         if self.start_error.load(Ordering::Acquire) {
             Err(DriverError("private start detail"))
         } else {
@@ -113,10 +130,18 @@ impl RuntimeLeaseDriver for ControlledDriver {
         self.calls
             .send(DriverCall::Stop(std::time::Instant::now(), reply))
             .unwrap();
+        assert!(
+            !self.stop_panic.load(Ordering::Acquire),
+            "private stop panic payload"
+        );
         result.await.unwrap()
     }
 
     fn failed(&self, _: &Self::Reservation) -> bool {
+        assert!(
+            !self.failed_panic.load(Ordering::Acquire),
+            "private fault predicate panic payload"
+        );
         self.failed.load(Ordering::Acquire)
     }
 }
@@ -166,6 +191,11 @@ impl Harness {
                 failed: Arc::new(AtomicBool::new(false)),
                 validation_error: Arc::new(AtomicBool::new(false)),
                 start_error: Arc::new(AtomicBool::new(false)),
+                validation_panic: Arc::new(AtomicBool::new(false)),
+                address_panic: Arc::new(AtomicBool::new(false)),
+                start_panic: Arc::new(AtomicBool::new(false)),
+                stop_panic: Arc::new(AtomicBool::new(false)),
+                failed_panic: Arc::new(AtomicBool::new(false)),
                 identity: Identity(Arc::new(()), 1),
             },
             calls: receiver,
@@ -351,6 +381,101 @@ async fn cancelling_the_open_waiter_does_not_lose_a_late_reservation() {
         DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
         _ => panic!("a lease whose result was abandoned is rolled back"),
     }
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn validation_panic_after_reserve_still_stops_the_owned_reservation() {
+    let mut harness = Harness::new();
+    harness
+        .driver
+        .validation_panic
+        .store(true, Ordering::Release);
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    let stop = tokio::time::timeout(std::time::Duration::from_millis(50), harness.calls.recv())
+        .await
+        .expect("validation panic must not discard the reservation")
+        .unwrap();
+    match stop {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("panic rollback uses STOP"),
+    }
+    assert!(opening.await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn callback_address_panic_after_object_creation_still_stops_the_reservation() {
+    let mut harness = Harness::new();
+    harness.driver.address_panic.store(true, Ordering::Release);
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    let stop = tokio::time::timeout(std::time::Duration::from_millis(50), harness.calls.recv())
+        .await
+        .expect("address panic must not discard the reservation")
+        .unwrap();
+    match stop {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("panic rollback uses STOP"),
+    }
+    assert!(opening.await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn start_panic_keeps_the_exported_callback_until_rollback_ack() {
+    let mut harness = Harness::new();
+    harness.driver.start_panic.store(true, Ordering::Release);
+    let opening = tokio::spawn(harness.open());
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Validated)
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("start follows callback registration"),
+    }
+    let stop = tokio::time::timeout(std::time::Duration::from_millis(50), harness.calls.recv())
+        .await
+        .expect("start panic must retain rollback ownership")
+        .unwrap();
+    let DriverCall::Stop(_, reply) = stop else {
+        panic!("panic rollback uses STOP")
+    };
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+    reply.send(StopOutcome::Acknowledged).unwrap();
+    assert!(opening.await.unwrap().is_err());
     assert!(harness.callback().await.is_err());
 }
 
@@ -780,5 +905,43 @@ async fn logical_failure_stops_retrying_without_claiming_acknowledgement() {
     assert!(
         harness.callback().await.is_ok(),
         "logical failure is not STOP ACK"
+    );
+}
+
+#[tokio::test]
+async fn stop_panic_after_export_parks_the_callback_without_acknowledgement() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    harness.driver.stop_panic.store(true, Ordering::Release);
+    let close = tokio::spawn(async move { lease.close().await });
+    assert!(matches!(
+        harness.calls.recv().await,
+        Some(DriverCall::Stop(_, _))
+    ));
+    assert!(close.await.unwrap().is_err());
+    assert!(
+        harness.callback().await.is_ok(),
+        "a panicking STOP has no acknowledgement"
+    );
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "panic does not start a duplicate STOP"
+    );
+}
+
+#[tokio::test]
+async fn fault_predicate_panic_parks_the_callback_without_sending_stop() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    harness.driver.failed_panic.store(true, Ordering::Release);
+    let close = tokio::spawn(async move { lease.close().await });
+    assert!(close.await.unwrap().is_err());
+    assert!(
+        harness.callback().await.is_ok(),
+        "a panicking fault check is not an ACK"
+    );
+    assert!(
+        harness.calls.try_recv().is_err(),
+        "fault check panic prevents unsafe retry"
     );
 }

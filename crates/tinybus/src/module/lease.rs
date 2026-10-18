@@ -1,23 +1,24 @@
 //! A module reservation and host callback whose cleanup waits for STOP acknowledgement.
 
+use std::{error::Error as StdError, sync::Arc, time::Duration};
+
+#[cfg(feature = "modules")]
+use super::runtime::ModuleRuntime;
+#[cfg(feature = "modules")]
 use std::{
-    error::Error as StdError,
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
-
+#[cfg(feature = "modules")]
 use tokio::{
     runtime::Handle,
     sync::{oneshot, watch},
 };
-
-use super::runtime::ModuleRuntime;
 
 /// The lifecycle operation that failed. Values deliberately contain no resource identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,10 +265,13 @@ pub trait RuntimeLeaseDriver: Send + Sync + 'static {
     fn failed(&self, reservation: &Self::Reservation) -> bool;
 }
 
+#[cfg(feature = "modules")]
 type WorkerFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+#[cfg(feature = "modules")]
 type StartWorker<E> =
     Box<dyn FnOnce(watch::Sender<CloseState<E>>) -> WorkerFuture + Send + 'static>;
 
+#[cfg(feature = "modules")]
 enum CloseState<E> {
     Open,
     Running,
@@ -275,6 +279,7 @@ enum CloseState<E> {
     Unacknowledged(Arc<LeaseError<E>>),
 }
 
+#[cfg(feature = "modules")]
 impl<E> Clone for CloseState<E> {
     fn clone(&self) -> Self {
         match self {
@@ -286,6 +291,7 @@ impl<E> Clone for CloseState<E> {
     }
 }
 
+#[cfg(feature = "modules")]
 struct LeaseControl<E> {
     runtime: Handle,
     users: AtomicUsize,
@@ -293,6 +299,7 @@ struct LeaseControl<E> {
     starter: Mutex<Option<StartWorker<E>>>,
 }
 
+#[cfg(feature = "modules")]
 impl<E: Send + Sync + 'static> LeaseControl<E> {
     fn new(runtime: Handle, starter: StartWorker<E>) -> Self {
         let (state, _) = watch::channel(CloseState::Open);
@@ -340,11 +347,13 @@ impl<E: Send + Sync + 'static> LeaseControl<E> {
 }
 
 /// A cloneable owner of a started module reservation and its callback object.
+#[cfg(feature = "modules")]
 pub struct RuntimeLease<T, E: Send + Sync + 'static> {
     object: Arc<T>,
     control: Arc<LeaseControl<E>>,
 }
 
+#[cfg(feature = "modules")]
 impl<T, E: Send + Sync + 'static> RuntimeLease<T, E> {
     /// The object or host handle created for this reservation.
     #[must_use]
@@ -361,6 +370,7 @@ impl<T, E: Send + Sync + 'static> RuntimeLease<T, E> {
     }
 }
 
+#[cfg(feature = "modules")]
 impl<T, E: Send + Sync + 'static> Clone for RuntimeLease<T, E> {
     fn clone(&self) -> Self {
         self.control.users.fetch_add(1, Ordering::Relaxed);
@@ -371,6 +381,7 @@ impl<T, E: Send + Sync + 'static> Clone for RuntimeLease<T, E> {
     }
 }
 
+#[cfg(feature = "modules")]
 impl<T, E: Send + Sync + 'static> Drop for RuntimeLease<T, E> {
     fn drop(&mut self) {
         if self.control.users.fetch_sub(1, Ordering::AcqRel) == 1 {
@@ -379,6 +390,7 @@ impl<T, E: Send + Sync + 'static> Drop for RuntimeLease<T, E> {
     }
 }
 
+#[cfg(feature = "modules")]
 impl ModuleRuntime {
     /// Reserve, validate, export a callback, and start a module on this runtime's owned task.
     ///
@@ -423,6 +435,7 @@ impl ModuleRuntime {
     }
 }
 
+#[cfg(feature = "modules")]
 async fn activate<D, F, I, R>(
     runtime: Handle,
     host_objects: Arc<tokio::sync::Mutex<super::runtime::HostObjectRegistry>>,
@@ -550,6 +563,7 @@ where
     Ok(RuntimeLease { object, control })
 }
 
+#[cfg(feature = "modules")]
 async fn cleanup_worker<D, E>(
     state: watch::Sender<CloseState<E>>,
     driver: Arc<D>,
@@ -724,11 +738,12 @@ async fn cleanup_worker<D, E>(
     unreachable!("finite retry sequence always terminates in the loop")
 }
 
+#[cfg(feature = "modules")]
 fn report(reporter: &Arc<dyn Fn(LeaseReport) + Send + Sync>, event: LeaseReport) {
     // Host reporting is observational and cannot interrupt the cleanup owner.
     let _ = catch_unwind(AssertUnwindSafe(|| reporter(event)));
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "modules"))]
 #[path = "lease_tests.rs"]
 mod tests;
