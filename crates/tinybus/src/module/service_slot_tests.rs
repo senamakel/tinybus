@@ -451,12 +451,22 @@ async fn try_close_with_waits_for_the_current_operation_to_finish() {
         .expect("operation should enter before explicit close");
 
     let closing_slot = slot.clone();
-    let mut close = Box::pin(closing_slot.try_close_with(|_| Box::pin(async { Ok(()) })));
+    let close_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let callback_calls = close_calls.clone();
+    let mut close = Box::pin(closing_slot.try_close_with(move |_| {
+        callback_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }));
     let first_poll =
         std::future::poll_fn(|context| Poll::Ready(close.as_mut().poll(context))).await;
     assert!(
         first_poll.is_pending(),
         "explicit close must wait for the locked operation"
+    );
+    assert_eq!(
+        close_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the host close callback must wait for the current operation"
     );
 
     let _ = release_tx.send(());
@@ -465,4 +475,5 @@ async fn try_close_with_waits_for_the_current_operation_to_finish() {
         .expect("operation task should finish")
         .expect("operation should succeed");
     close.await.expect("explicit close should succeed");
+    assert_eq!(close_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
