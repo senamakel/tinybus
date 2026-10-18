@@ -810,5 +810,73 @@ async fn a_confidential_call_stays_on_the_attested_unique_peer_after_name_handov
     broker_task.abort();
 }
 
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn a_bound_attested_client_and_its_objects_never_rebind_after_alias_handover() {
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker = crate::broker::Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let service_a = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service_b = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let record = strict_record();
+    let calls_a = Arc::new(Mutex::new(Vec::new()));
+    let calls_b = Arc::new(Mutex::new(Vec::new()));
+    for (service, label, calls) in [
+        (&service_a, "attested", calls_a.clone()),
+        (&service_b, "successor", calls_b.clone()),
+    ] {
+        service
+            .serve_at(
+                crate::ObjectPath::new(record.object_path).unwrap(),
+                AttestedReceiver { label, calls },
+            )
+            .await
+            .unwrap();
+    }
+    service_a.request_name(record.bus_name).await.unwrap();
+    broker.attest_module(
+        &service_a.unique_name().unwrap(),
+        crate::attest::Attestation {
+            name: crate::BusName::new(record.bus_name).unwrap(),
+            sha256: record.assets[0].sha256.to_string(),
+            library_sha256: record.assets[0].library_sha256.map(str::to_string),
+        },
+    );
+    let sink = Arc::new(Recording::default());
+    let client = ModuleClient::new(PreparedAccess {
+        record,
+        connection: caller,
+        reporter: FailureReporter::new(sink),
+        preparations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    });
+    let bound = client.bind_attested(record.id).await.unwrap();
+    let held_object = bound.object_client(record.object_path).unwrap();
+
+    service_a.release_name(record.bus_name).await.unwrap();
+    service_b.request_name(record.bus_name).await.unwrap();
+    assert_eq!(
+        bound.call::<String>("Consume", ()).await.unwrap(),
+        "attested"
+    );
+    assert_eq!(
+        held_object.call::<String>("Consume", ()).await.unwrap(),
+        "attested"
+    );
+    assert_eq!(calls_a.lock().unwrap().len(), 2);
+    assert!(calls_b.lock().unwrap().is_empty());
+
+    drop(service_a);
+    assert!(bound.call::<String>("Consume", ()).await.is_err());
+    assert!(calls_b.lock().unwrap().is_empty());
+    broker_task.abort();
+}
+
 #[path = "client_attested_timeout_tests.rs"]
 mod timeout_tests;
