@@ -440,6 +440,20 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    // Warm the executable digest through a real linked admission on a distinct
+    // record. The resolver case below is about preserving cold ModuleRuntime
+    // startup across caller teardown; it must not also budget cold executable
+    // hashing, which can be slow on hosted coverage machines.
+    let digest_warm_runtime =
+        ModuleRuntime::start(&RuntimeNames::default(), None).expect("digest warmup runtime starts");
+    digest_warm_runtime
+        .host()
+        .attach_linked_with_config(
+            linked_ordinary_factory().expect("digest warmup linked factory succeeds"),
+            serde_json::Value::Null,
+        )
+        .expect("a real linked admission warms the executable digest");
+
     RESOLVER_LINKED_STARTS.store(0, Ordering::SeqCst);
     RESOLVER_LINKED_DELIVERIES.store(0, Ordering::SeqCst);
     RESOLVER_LINKED_FACTORY_CALLS.store(0, Ordering::SeqCst);
