@@ -631,14 +631,15 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     .await
     .expect("the existing resolver attempt should finish after readiness opens");
     let pinned = client.bind(RESOLVER_LINKED_RECORD.id).await.unwrap();
+    let (runtime_task_tx, runtime_task_rx) = tokio::sync::oneshot::channel();
     let runtime_task = RUNTIME
         .get()
         .expect("the gated provider should have created the module runtime")
-        .spawn(async {
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            7
+        .spawn(async move {
+            let _ = runtime_task_tx.send(7);
         });
-    assert_eq!(runtime_task.await.unwrap(), 7);
+    runtime_task.await.unwrap();
+    assert_eq!(runtime_task_rx.await.unwrap(), 7);
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
     assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 4);
     assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
