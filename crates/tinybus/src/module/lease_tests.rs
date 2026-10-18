@@ -230,21 +230,63 @@ impl Harness {
     where
         F: FnOnce(&Reservation, &Object) -> Result<Callback, DriverError> + Send + 'static,
     {
-        let driver = self.driver.clone();
-        let reports = self.report_sender.clone();
         let policy = RetryPolicy::new(
             std::time::Duration::from_millis(20),
             vec![std::time::Duration::ZERO, std::time::Duration::ZERO],
         )
         .unwrap();
-        self.runtime
-            .lease(driver, make_callback, policy, move |report| {
-                let _ = reports.send(report);
-            })
+        self.open_with_policy(make_callback, policy)
+    }
+
+    fn open_with_policy<F>(
+        &self,
+        make_callback: F,
+        policy: RetryPolicy,
+    ) -> impl std::future::Future<
+        Output = Result<RuntimeLease<Object, DriverError>, LeaseError<DriverError>>,
+    > + Send
+    + 'static
+    where
+        F: FnOnce(&Reservation, &Object) -> Result<Callback, DriverError> + Send + 'static,
+    {
+        let reports = self.report_sender.clone();
+        self.open_with_policy_and_reporter(make_callback, policy, move |report| {
+            let _ = reports.send(report);
+        })
+    }
+
+    fn open_with_policy_and_reporter<F, R>(
+        &self,
+        make_callback: F,
+        policy: RetryPolicy,
+        reporter: R,
+    ) -> impl std::future::Future<
+        Output = Result<RuntimeLease<Object, DriverError>, LeaseError<DriverError>>,
+    > + Send
+    + 'static
+    where
+        F: FnOnce(&Reservation, &Object) -> Result<Callback, DriverError> + Send + 'static,
+        R: Fn(LeaseReport) + Send + Sync + 'static,
+    {
+        let driver = self.driver.clone();
+        self.runtime.lease(driver, make_callback, policy, reporter)
     }
 
     async fn opened(&mut self) -> RuntimeLease<Object, DriverError> {
-        let opening = tokio::spawn(self.open());
+        self.opened_with_policy(RetryPolicy::new(
+            std::time::Duration::from_millis(20),
+            vec![std::time::Duration::ZERO, std::time::Duration::ZERO],
+        ).unwrap()).await
+    }
+
+    async fn opened_with_policy(&mut self, policy: RetryPolicy) -> RuntimeLease<Object, DriverError> {
+        let calls = self.callback_calls.clone();
+        let opening = tokio::spawn(self.open_with_policy(move |reservation, object| {
+            if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
+                return Err(DriverError("reservation/object mismatch"));
+            }
+            Ok(Callback(calls))
+        }, policy));
         match self.calls.recv().await.unwrap() {
             DriverCall::Reserve(reply) => {
                 reply
@@ -350,6 +392,34 @@ async fn acknowledged_close_removes_only_its_exact_callback_registration() {
     }
     assert!(second_close.await.unwrap().is_ok());
     assert!(harness.callback_at(2).await.is_err());
+}
+
+#[tokio::test]
+async fn acknowledged_close_preserves_a_newer_registration_at_its_callback_path() {
+    let mut harness = Harness::new();
+    let lease = harness.opened().await;
+    let replacement_calls = Arc::new(AtomicUsize::new(0));
+    let replacement = harness
+        .runtime
+        .serve_host_object(
+            CALLBACK_NAME.parse().unwrap(),
+            "/ai/tinyhumans/tinybus/tests/RuntimeLease1".parse().unwrap(),
+            Callback(replacement_calls.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
+
+    let closing = tokio::spawn(async move { lease.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("close starts STOP"),
+    }
+    assert!(closing.await.unwrap().is_ok());
+    assert_eq!(harness.callback().await.unwrap(), serde_json::json!(2));
+    assert_eq!(replacement_calls.load(Ordering::Acquire), 2);
+    drop(replacement);
+    assert!(harness.callback().await.is_err());
 }
 
 #[tokio::test]
@@ -628,6 +698,75 @@ async fn callback_factory_error_rolls_back_before_start_or_export() {
 }
 
 #[tokio::test]
+async fn callback_factory_panic_still_rolls_back_the_reserved_resource() {
+    let mut harness = Harness::new();
+    let opening = tokio::spawn(harness.open_with(|_, _| -> Result<Callback, DriverError> {
+        std::panic::panic_any(());
+    }));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("factory panic still starts rollback"),
+    }
+    let Err(error) = opening.await.unwrap() else {
+        panic!("panicking callback factory cannot create a lease");
+    };
+    assert_eq!(error.phase(), LeasePhase::Callback);
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
+async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
+    let mut harness = Harness::new();
+    let calls = harness.callback_calls.clone();
+    let opening = tokio::spawn(harness.open_with_policy_and_reporter(
+        move |reservation, object| {
+            assert!(Arc::ptr_eq(&reservation.0.0, &object.0.0));
+            Ok(Callback(calls))
+        },
+        RetryPolicy::new(
+            std::time::Duration::from_millis(20),
+            vec![std::time::Duration::ZERO],
+        )
+        .unwrap(),
+        |_| std::panic::panic_any(()),
+    ));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Reserve(reply) => reply
+            .send(Ok(Reservation(harness.driver.identity.clone())))
+            .unwrap(),
+        _ => panic!("reserve is first"),
+    }
+    assert!(matches!(harness.calls.recv().await, Some(DriverCall::Validated)));
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Object(identity, reply) => reply.send(Ok(Object(identity))).unwrap(),
+        _ => panic!("object follows validation"),
+    }
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Start(reply) => reply.send(Ok(())).unwrap(),
+        _ => panic!("callback registers before start"),
+    }
+    let lease = opening.await.unwrap().unwrap();
+    let closing = tokio::spawn(async move { lease.close().await });
+    match harness.calls.recv().await.unwrap() {
+        DriverCall::Stop(_, reply) => reply.send(StopOutcome::Acknowledged).unwrap(),
+        _ => panic!("close sends STOP"),
+    }
+    assert!(closing.await.unwrap().is_ok());
+    assert!(harness.callback().await.is_err());
+}
+
+#[tokio::test]
 async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
     let mut harness = Harness::new();
     let lease = harness.opened().await;
@@ -672,6 +811,41 @@ async fn exhausted_stop_parks_the_callback_until_an_acknowledgement() {
         harness.calls.try_recv().is_err(),
         "exhaustion does not busy-loop"
     );
+}
+
+#[tokio::test]
+async fn retryable_stop_uses_the_configured_nonzero_backoff_sequence_in_order() {
+    let mut harness = Harness::new();
+    let first_delay = std::time::Duration::from_millis(40);
+    let second_delay = std::time::Duration::from_millis(5);
+    let lease = harness
+        .opened_with_policy(
+            RetryPolicy::new(
+                std::time::Duration::from_secs(1),
+                vec![first_delay, second_delay],
+            )
+            .unwrap(),
+        )
+        .await;
+    let closing = tokio::spawn(async move { lease.close().await });
+    let mut starts = Vec::new();
+    for _ in 1..=3 {
+        match harness.calls.recv().await.unwrap() {
+            DriverCall::Stop(started, reply) => {
+                starts.push(started);
+                reply
+                    .send(StopOutcome::RetryableFailure(DriverError("settled")))
+                    .unwrap();
+            }
+            _ => panic!("retry sequence contains only STOP"),
+        }
+    }
+    assert_eq!(starts.len(), 3);
+    assert!(starts[1].duration_since(starts[0]) >= first_delay);
+    assert!(starts[2].duration_since(starts[1]) >= second_delay);
+    assert!(closing.await.unwrap().is_err());
+    assert!(harness.calls.try_recv().is_err(), "the retry vector is finite");
+    assert!(harness.callback().await.is_ok());
 }
 
 #[tokio::test]
