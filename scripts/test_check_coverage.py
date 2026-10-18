@@ -274,6 +274,52 @@ class CoverageScriptPlatformTests(unittest.TestCase):
         result, calls = self.run_coverage_script("dylib")
         self.assert_coverage_contract(result, calls, "dylib")
 
+    def test_fake_cargo_harness_is_limited_to_the_posix_feature_lane(self) -> None:
+        lines = (ROOT / "scripts" / "test-features.sh").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        case_line = 'case "${RUNNER_OS:-$(uname -s)}" in'
+        self.assertIn(
+            case_line,
+            lines,
+            "the fake-Cargo coverage harness must be scoped to the POSIX runner branch",
+        )
+        case_start = lines.index(case_line)
+        windows_branch = next(
+            index for index, line in enumerate(lines) if line.startswith("  Windows|")
+        )
+        posix_branch = next(
+            index for index, line in enumerate(lines[windows_branch + 1 :], windows_branch + 1)
+            if line.strip() == "*)"
+        )
+        case_end = next(
+            index for index, line in enumerate(lines[posix_branch + 1 :], posix_branch + 1)
+            if line.strip() == "esac"
+        )
+        invocations = [
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == "python3 scripts/test_check_coverage.py"
+        ]
+
+        self.assertEqual(len(invocations), 1)
+        self.assertGreater(invocations[0], posix_branch)
+        self.assertLess(invocations[0], case_end)
+        self.assertNotIn(
+            "python3 scripts/test_check_coverage.py",
+            [line.strip() for line in lines[windows_branch + 1 : posix_branch]],
+        )
+        self.assertEqual(
+            [line.strip() for line in lines if line.strip().startswith("cargo ")],
+            [
+                "cargo check --locked --workspace --no-default-features",
+                "cargo check --locked --package tinybus --no-default-features --features modules",
+                "cargo metadata --locked --format-version 1 --manifest-path examples/Cargo.toml >/dev/null",
+                "cargo test --locked --workspace --no-default-features --features macros",
+                "cargo test --locked --workspace --all-features",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
