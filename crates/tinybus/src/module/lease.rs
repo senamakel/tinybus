@@ -597,7 +597,7 @@ async fn cleanup_worker<D, E>(
 {
     let max_attempts = policy.retry_delays.len() + 1;
     for attempt in 1..=max_attempts {
-        if !check_fault(&*driver, &reservation, &state, &reporter, attempt) {
+        if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
             std::future::pending::<()>().await;
         }
 
@@ -702,7 +702,7 @@ async fn cleanup_worker<D, E>(
         }
 
         if attempt < max_attempts {
-            if !check_fault(&*driver, &reservation, &state, &reporter, attempt) {
+            if !check_fault(&*driver, &reservation, &state, &reporter, attempt).await {
                 std::future::pending::<()>().await;
             }
             tokio::time::sleep(policy.retry_delays[attempt - 1]).await;
@@ -712,7 +712,7 @@ async fn cleanup_worker<D, E>(
 }
 
 #[cfg(feature = "modules")]
-fn check_fault<D, E>(
+async fn check_fault<D, E>(
     driver: &D,
     reservation: &D::Reservation,
     state: &watch::Sender<CloseState<E>>,
@@ -726,7 +726,7 @@ where
     match catch_unwind(AssertUnwindSafe(|| driver.failed(reservation))) {
         Ok(false) => true,
         Ok(true) => {
-            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Faulted);
+            park_unacknowledged(state, reporter, attempt, None, LeaseReportOutcome::Faulted).await;
             false
         }
         Err(_) => {
@@ -736,7 +736,8 @@ where
                 attempt,
                 None,
                 LeaseReportOutcome::Unacknowledged,
-            );
+            )
+            .await;
             false
         }
     }
