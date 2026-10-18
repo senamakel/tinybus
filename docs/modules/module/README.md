@@ -64,6 +64,16 @@ operation remains uncertain or finite retries end, the dedicated runtime parks
 the reservation and callback guard without another retry. Caller close waiters
 may time out independently; that does not cancel cleanup.
 
+`ModuleClient::bind` is the ordinary counterpart for owned module operations.
+It waits for the module's normal lazy readiness, resolves the current serving
+peer, and keeps that peer for root calls, streamed uploads and held object paths.
+It supports linked modules and explicit fixtures without claiming archive or
+library proof. A peer disconnect makes the held calls fail; they do not move to
+a new owner of the public bus name. The proxy's deadline is preserved for owner
+lookup and later calls, unless the client supplies an explicit timeout override.
+Use this for ordinary Docs and Voice operations; use strict attested calls when
+the operation requires native artifact proof or confidential delivery.
+
 `ModuleClient::bind_attested` applies the same identity rule to module calls. It
 returns a `BoundModuleClient` only after the loaded peer proves the registered
 archive and library pair. Later ordinary, detailed, confidential, and held
