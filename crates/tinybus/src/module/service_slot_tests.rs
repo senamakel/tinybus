@@ -393,10 +393,12 @@ async fn cancelling_try_close_with_retains_the_entry_and_original_stored_closer(
     });
     started_rx.await.expect("host close callback should start");
     close.abort();
-    assert!(close
-        .await
-        .expect_err("cancelled close task should stop")
-        .is_cancelled());
+    assert!(
+        close
+            .await
+            .expect_err("cancelled close task should stop")
+            .is_cancelled()
+    );
     drop(cancel_tx);
 
     let observed = slot
