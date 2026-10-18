@@ -603,21 +603,21 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
 
     let linked_initializer_started = started_rx;
     runtime_provider_gate.notify_one();
-    if tokio::time::timeout(
+    let initializer_started = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         linked_initializer_started,
     )
-    .await
-    .is_err()
-    {
+    .await;
+    if !matches!(initializer_started, Ok(Ok(()))) {
         let runtime_worker_alive = if let Some(runtime) = RUNTIME.get() {
             let (probe_tx, probe_rx) = tokio::sync::oneshot::channel();
             runtime.spawn(async move {
                 let _ = probe_tx.send(());
             });
-            tokio::time::timeout(std::time::Duration::from_secs(1), probe_rx)
-                .await
-                .is_ok()
+            matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(1), probe_rx).await,
+                Ok(Ok(()))
+            )
         } else {
             false
         };
