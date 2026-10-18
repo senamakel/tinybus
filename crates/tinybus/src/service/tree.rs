@@ -26,6 +26,7 @@ pub struct ObjectTree {
 struct ObjectRegistration {
     #[cfg_attr(not(feature = "modules"), allow(dead_code))]
     id: u64,
+    name: InterfaceName,
     interface: Arc<dyn Interface>,
 }
 
@@ -49,41 +50,48 @@ impl ObjectTree {
     /// Export `interface` and return the identity of this exact registration.
     /// A later replacement at the same path and interface gets a different
     /// identity, so an older owner cannot unregister the newer implementation.
-    pub(crate) fn insert_owned(&mut self, path: ObjectPath, interface: Arc<dyn Interface>) -> u64 {
+    pub(crate) fn insert_owned(
+        &mut self,
+        path: ObjectPath,
+        name: InterfaceName,
+        interface: Arc<dyn Interface>,
+    ) -> (u64, Vec<Arc<dyn Interface>>) {
         self.next_registration = self
             .next_registration
             .checked_add(1)
             .expect("object registration identity exhausted");
         let id = self.next_registration;
-        let name = interface.name();
         let entry = self.objects.entry(path).or_default();
-        entry.retain(|existing| existing.interface.name() != name);
-        entry.push(ObjectRegistration { id, interface });
-        id
+        let replaced = entry
+            .extract_if(.., |existing| existing.name == name)
+            .map(|existing| existing.interface)
+            .collect();
+        entry.push(ObjectRegistration { id, name, interface });
+        (id, replaced)
     }
 
     /// Remove one interface only if it is still the same registration.
     #[cfg(feature = "modules")]
-    pub(crate) fn remove_if_owned(
+    pub(crate) fn take_if_owned(
         &mut self,
         path: &ObjectPath,
         interface: &InterfaceName,
         id: u64,
-    ) -> bool {
+    ) -> Option<Arc<dyn Interface>> {
         let Some(entries) = self.objects.get_mut(path) else {
-            return false;
+            return None;
         };
         let Some(index) = entries
             .iter()
-            .position(|entry| entry.id == id && entry.interface.name() == *interface)
+            .position(|entry| entry.id == id && entry.name == *interface)
         else {
-            return false;
+            return None;
         };
-        entries.remove(index);
+        let removed = entries.remove(index).interface;
         if entries.is_empty() {
             self.objects.remove(path);
         }
-        true
+        Some(removed)
     }
 
     /// Stop exporting everything at `path`. Returns whether anything went away.
@@ -102,7 +110,7 @@ impl ObjectTree {
     pub fn interfaces_at(&self, path: &ObjectPath) -> Vec<InterfaceName> {
         self.objects
             .get(path)
-            .map(|list| list.iter().map(|entry| entry.interface.name()).collect())
+            .map(|list| list.iter().map(|entry| entry.name.clone()).collect())
             .unwrap_or_default()
     }
 
@@ -118,7 +126,7 @@ impl ObjectTree {
             .get(path)
             .ok_or_else(|| Error::UnknownObject { path: path.clone() })?;
         list.iter()
-            .find(|entry| &entry.interface.name() == interface)
+            .find(|entry| &entry.name == interface)
             .map(|entry| entry.interface.clone())
             .ok_or_else(|| Error::UnknownInterface {
                 path: path.clone(),
