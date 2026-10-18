@@ -599,11 +599,11 @@ async fn cleanup_worker<D, E>(
                                 outcome: LeaseReportOutcome::Acknowledged,
                             },
                         );
-                        if let Some(guard) = callback_guard
+                        let guard = callback_guard
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .take()
-                        {
+                            .take();
+                        if let Some(guard) = guard {
                             guard.remove().await;
                         }
                         state.send_replace(CloseState::Acknowledged);
@@ -644,11 +644,11 @@ async fn cleanup_worker<D, E>(
                         outcome: LeaseReportOutcome::Acknowledged,
                     },
                 );
-                if let Some(guard) = callback_guard
+                let guard = callback_guard
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take()
-                {
+                    .take();
+                if let Some(guard) = guard {
                     guard.remove().await;
                 }
                 state.send_replace(CloseState::Acknowledged);
