@@ -856,6 +856,11 @@ async fn actual_linked_rejected_physical_spawn_retains_received_resources_withou
     // cannot strand the request thread during unwinding.
     let _ = request_release_tx.send(());
     fault.join().unwrap();
+    // A re-entrant host shutdown may own and finish this one-shot callback on
+    // its physical worker; joining the signal trigger need not join that worker.
+    assert!(view
+        .inner
+        .wait_request_done_for_test(Duration::from_secs(3)));
     assert!(view.inner.request_done_for_test());
     // One deliberately retained, bounded original State/job/Runtime remains.
 }
