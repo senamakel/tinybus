@@ -323,6 +323,7 @@ class CoverageScriptPlatformTests(unittest.TestCase):
             [line.strip() for line in lines if line.strip().startswith("cargo ")],
             [
                 "cargo check --locked --workspace --no-default-features",
+                "cargo check --locked --package tinybus --tests",
                 "cargo check --locked --package tinybus --no-default-features --features modules",
                 "cargo metadata --locked --format-version 1 --manifest-path examples/Cargo.toml >/dev/null",
                 "cargo test --locked --workspace --no-default-features --features macros",

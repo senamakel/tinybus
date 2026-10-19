@@ -762,6 +762,23 @@ impl TerminalState {
             RequestState::Done | RequestState::Panicked
         )
     }
+    #[cfg(test)]
+    pub(super) fn wait_request_done_for_test(self: &Arc<Self>, timeout: Duration) -> bool {
+        let control = self.lock();
+        let (control, _) = self
+            .changed
+            .wait_timeout_while(control, timeout, |control| {
+                !matches!(
+                    control.request_state,
+                    RequestState::Done | RequestState::Panicked
+                )
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        matches!(
+            control.request_state,
+            RequestState::Done | RequestState::Panicked
+        )
+    }
     fn schedule(self: &Arc<Self>) {
         let job = {
             let mut control = self.lock();
