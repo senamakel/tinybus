@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.5
+
+### Added
+
+- Expose `module::Availability` and its stable serialized status names without
+  enabling the optional module loader.
+
+### Fixed
+
+- Make the rejected native-worker spawn test deterministic when another
+  request callback is already in flight, while retaining the uncertain
+  instance's resources until callback settlement.
+
 ## 0.3.4
 
 ### Added

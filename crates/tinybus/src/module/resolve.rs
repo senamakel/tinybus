@@ -28,15 +28,14 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::module::LinkedModule;
-use crate::module::SearchPathConfig;
 use crate::module::failure::{FailureReporter, Reason};
 use crate::module::manifest::ModuleManifest;
 use crate::module::platform::host_candidates;
 use crate::module::resolution::{self, Claim, Resolution, ResolutionState, Waited};
 use crate::module::runtime::ModuleRuntime;
 use crate::module::{
-    ReleaseAsset, ReleasePlan, ReleaseRecord, load_first_admitted, prune_stale_versions,
+    Availability, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord, SearchPathConfig,
+    load_first_admitted, prune_stale_versions,
 };
 
 /// Result indexes refer to the input manifest slice.
@@ -163,27 +162,6 @@ pub enum ModuleSource {
     /// executable's digest is the attestation. A missing factory is a terminal
     /// failure, never a silent fall back to the release.
     Linked,
-}
-
-/// A module's state as a host reports it.
-///
-/// Coarser than [`super::ModuleState`]: a caller wants to know whether it can
-/// use the module, not which admission step it is on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Availability {
-    /// Known to this build, not loaded yet.
-    Available,
-    /// Being downloaded, verified or initialised.
-    Loading,
-    /// Serving its interface.
-    Ready,
-    /// Cannot be loaded in this process, and will not be retried.
-    Failed,
-    /// No artifact is published for this host, or modules are disabled.
-    Unsupported,
-    /// Switched off by the host's [`ModuleGate`].
-    Disabled,
 }
 
 /// Why a bounded [`Resolver::ensure_loaded_within`] did not end with the module

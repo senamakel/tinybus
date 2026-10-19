@@ -317,6 +317,8 @@ mod controlled {
         pub config_drops: AtomicUsize,
         pub config_parse_control: StdMutex<Option<Arc<std::sync::Barrier>>>,
         pub initial_poll_gate: StdMutex<Option<Arc<std::sync::Barrier>>>,
+        pub request_gate:
+            StdMutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
         pub drop_off_lock: AtomicBool,
         pub request_off_lock: AtomicBool,
         pub future_drop_control: StdMutex<Option<(Arc<std::sync::Barrier>, bool)>>,
@@ -341,6 +343,7 @@ mod controlled {
             config_drops: AtomicUsize::new(0),
             config_parse_control: StdMutex::new(None),
             initial_poll_gate: StdMutex::new(None),
+            request_gate: StdMutex::new(None),
             drop_off_lock: AtomicBool::new(true),
             request_off_lock: AtomicBool::new(true),
             future_drop_control: StdMutex::new(None),
@@ -514,6 +517,10 @@ mod controlled {
                 *request.wake.0.lock().unwrap() = true;
                 request.wake.1.notify_all();
                 request.events.send(Event::Request).unwrap();
+                if let Some((entered, release)) = request.request_gate.lock().unwrap().take() {
+                    let _ = entered.send(());
+                    let _ = release.recv();
+                }
                 if request.hook_failure.load(Ordering::Acquire) == 1 {
                     std::panic::panic_any(HookPayload(request.clone()));
                 }
@@ -748,6 +755,9 @@ async fn actual_linked_rejected_physical_spawn_retains_received_resources_withou
     let (fixture, events) = controlled::fixture();
     let poll_gate = Arc::new(std::sync::Barrier::new(2));
     *fixture.initial_poll_gate.lock().unwrap() = Some(poll_gate.clone());
+    let (request_entered, request_entered_rx) = std::sync::mpsc::channel();
+    let (request_release_tx, request_release_rx) = std::sync::mpsc::channel();
+    *fixture.request_gate.lock().unwrap() = Some((request_entered, request_release_rx));
     let broker = tinybus::broker::Broker::new();
     broker
         .clone()
@@ -787,7 +797,15 @@ async fn actual_linked_rejected_physical_spawn_retains_received_resources_withou
     );
     let context = view.inner.context();
     view.inner.reject_worker_spawn_for_test();
-    view.request_fault();
+
+    // Hold the first request callback after its bounded wake signal. A second
+    // terminal cause then hits the already-running callback and rejects the
+    // physical worker submission.
+    let fault_view = view.clone();
+    let fault = std::thread::spawn(move || fault_view.request_fault());
+    request_entered_rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
     host.shutdown(Duration::from_secs(3)).await;
     // Submission failure cannot execute original finish. The fixture alone
     // releases/joins its independent worker; this is not SDK finish evidence.
@@ -797,7 +815,7 @@ async fn actual_linked_rejected_physical_spawn_retains_received_resources_withou
     let native = view.inner.host.0;
     let flags = unsafe { native.native_terminal_state.unwrap()(native.host_ctx) };
     assert_eq!(completed, TerminalCompletion::Uncertain);
-    assert!(view.inner.request_done_for_test());
+    assert!(!view.inner.request_done_for_test());
     assert_ne!(flags & tinybus::module::abi::TB_NATIVE_TERMINAL_FAULT, 0);
     assert_eq!(fixture.requests.load(Ordering::Acquire), 1);
     assert_eq!(fixture.finishes.load(Ordering::Acquire), 0);
@@ -823,6 +841,13 @@ async fn actual_linked_rejected_physical_spawn_retains_received_resources_withou
     assert!(resources.runtime.is_some());
     assert!(resources.initial.is_some());
     assert!(resources.initial_future.lock().unwrap().is_some());
+    drop(resources);
+
+    // The sender disconnects on assertion failure, so this test-only gate
+    // cannot strand the request thread during unwinding.
+    let _ = request_release_tx.send(());
+    fault.join().unwrap();
+    assert!(view.inner.request_done_for_test());
     // One deliberately retained, bounded original State/job/Runtime remains.
 }
 
