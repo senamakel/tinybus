@@ -915,12 +915,11 @@ async fn pin_owner_reports_an_alias_that_has_lost_its_owner_as_unavailable() {
         proxy_failure: None,
         proxy_timeout: None,
     };
-    let client = ModuleClient::new(access)
-        .with_fixture(
-            caller
-                .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
-                .unwrap(),
-        );
+    let client = ModuleClient::new(access).with_fixture(
+        caller
+            .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+            .unwrap(),
+    );
     let object = client
         .object_client(RECORD.id, RECORD.object_path)
         .await
