@@ -97,7 +97,8 @@ impl ModuleAccess for ReadyAccess {
             if let Some(failure) = self.proxy_failure {
                 return Err(failure);
             }
-            let proxy = self.connection
+            let proxy = self
+                .connection
                 .proxy(bus_name, object_path, bus_name)
                 .map_err(|_| ProxyFailure::Contract)?;
             Ok(self
@@ -122,10 +123,7 @@ impl HeldMetadataBus {
         }
     }
 
-    async fn connect(
-        &self,
-        held_member: Option<&'static str>,
-    ) -> (crate::Connection, Arc<Notify>) {
+    async fn connect(&self, held_member: Option<&'static str>) -> (crate::Connection, Arc<Notify>) {
         let (client, broker) = MemoryTransport::pair();
         let held = Arc::new(Notify::new());
         self.accepted
@@ -440,6 +438,7 @@ async fn detailed_call_preserves_remote_failure_without_rendering_it() {
         connection: caller,
         reporter: FailureReporter::new(sink.clone()),
         proxy_failure: None,
+        proxy_timeout: None,
     })
     .with_fixture(proxy);
 
@@ -521,6 +520,7 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
         connection: caller.clone(),
         reporter: FailureReporter::new(direct_sink.clone()),
         proxy_failure: None,
+        proxy_timeout: None,
     });
     let direct_object = direct.object_client(RECORD.id, "/child").await.unwrap();
     let reply: String = direct_object.call("Json", ()).await.unwrap();
@@ -543,6 +543,7 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
             connection: caller.clone(),
             reporter: FailureReporter::new(reporter.clone()),
             proxy_failure: Some(failure),
+            proxy_timeout: None,
         });
         let result: Result<String, _> = failing.call(RECORD.id, "Json", ()).await;
         assert_eq!(result, Err(expected));
@@ -675,6 +676,114 @@ impl crate::Interface for OwnerFixture {
         }
         Ok(serde_json::json!(self.0))
     }
+}
+
+struct StalledObject(tokio::sync::oneshot::Sender<()>);
+
+#[async_trait::async_trait]
+impl crate::Interface for StalledObject {
+    fn name(&self) -> crate::InterfaceName {
+        crate::InterfaceName::new(RECORD.bus_name).unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec![crate::MemberName::new("Block").unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        let _ = self.0.send(());
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn pin_owner_obeys_the_object_proxy_deadline_for_name_owner_lookup() {
+    let bus = HeldMetadataBus::new();
+    let broker_task = crate::broker::Broker::new().spawn(bus.clone());
+    let (connection, held) = bus.connect(Some("GetNameOwner")).await;
+    let proxy = connection
+        .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+        .unwrap();
+    let client = ModuleClient::new(ReadyAccess {
+        connection,
+        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        proxy_failure: None,
+        proxy_timeout: None,
+    })
+    .with_fixture(proxy)
+    .with_timeout(Duration::from_millis(5));
+    let object = client
+        .object_client(RECORD.id, RECORD.object_path)
+        .await
+        .unwrap();
+    let mut pin = tokio::spawn(async move { object.pin_owner().await });
+
+    tokio::time::timeout(Duration::from_millis(100), held.notified())
+        .await
+        .expect("pin_owner should issue GetNameOwner");
+    tokio::time::advance(Duration::from_millis(5)).await;
+    let result = match tokio::time::timeout(Duration::from_millis(100), &mut pin).await {
+        Ok(joined) => joined.unwrap(),
+        Err(_) => {
+            pin.abort();
+            panic!("pin_owner should use the object's configured metadata deadline");
+        }
+    };
+
+    assert_eq!(result, Err(ModuleCallError::TransportFailed));
+    broker_task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn derived_object_keeps_a_custom_module_access_proxy_deadline() {
+    let bus = MemoryBus::new();
+    let _broker = crate::broker::Broker::new().spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    service.request_name(RECORD.bus_name).await.unwrap();
+    let (started, started_rx) = tokio::sync::oneshot::channel();
+    service
+        .serve_at(
+            crate::ObjectPath::new("/child").unwrap(),
+            StalledObject(started),
+        )
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let access = ReadyAccess {
+        connection: caller,
+        reporter: FailureReporter::new(Arc::new(Recording::default())),
+        proxy_failure: None,
+        proxy_timeout: Some(Duration::from_millis(5)),
+    };
+    let root = ModuleClient::new(access)
+        .object_client(RECORD.id, RECORD.object_path)
+        .await
+        .unwrap();
+    let child = root.object_at("/child").unwrap();
+    let mut call = tokio::spawn(async move { child.call::<String>("Block", ()).await });
+
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("the child method should reach its service")
+        .unwrap();
+    tokio::time::advance(Duration::from_millis(5)).await;
+    let result = match tokio::time::timeout(Duration::from_millis(100), &mut call).await {
+        Ok(joined) => joined.unwrap(),
+        Err(_) => {
+            call.abort();
+            panic!("a derived child should keep ModuleAccess's proxy deadline");
+        }
+    };
+
+    assert_eq!(result, Err(ModuleCallError::TransportFailed));
 }
 
 #[tokio::test]
