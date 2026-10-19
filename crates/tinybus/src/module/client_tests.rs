@@ -889,3 +889,85 @@ async fn derived_objects_keep_the_configured_deadline_and_report_failures() {
         Err(ModuleCallError::Unavailable)
     ));
 }
+
+#[tokio::test]
+async fn pin_owner_reports_an_alias_that_has_lost_its_owner_as_unavailable() {
+    let sink = Arc::new(Recording::default());
+    let bus = crate::transport::memory::MemoryBus::new();
+    crate::broker::Broker::new().spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    service.request_name(RECORD.bus_name).await.unwrap();
+    service
+        .serve_at(
+            crate::ObjectPath::new(RECORD.object_path).unwrap(),
+            OwnerFixture("owner"),
+        )
+        .await
+        .unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let access = ReadyAccess {
+        connection: caller.clone(),
+        reporter: FailureReporter::new(sink.clone()),
+        proxy_failure: None,
+        proxy_timeout: None,
+    };
+    let client = ModuleClient::new(access)
+        .with_fixture(
+            caller
+                .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+                .unwrap(),
+        );
+    let object = client
+        .object_client(RECORD.id, RECORD.object_path)
+        .await
+        .unwrap();
+
+    service.release_name(RECORD.bus_name).await.unwrap();
+    assert_eq!(object.pin_owner().await, Err(ModuleCallError::Unavailable));
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::ModuleUnavailable)]
+    );
+}
+
+#[tokio::test]
+async fn derived_object_rejecting_an_invalid_path_reports_incompatible_contract() {
+    let sink = Arc::new(Recording::default());
+    let bus = crate::transport::memory::MemoryBus::new();
+    crate::broker::Broker::new().spawn(bus.clone());
+    let service = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    service.request_name(RECORD.bus_name).await.unwrap();
+    let caller = crate::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let access = ReadyAccess {
+        connection: caller.clone(),
+        reporter: FailureReporter::new(sink.clone()),
+        proxy_failure: None,
+        proxy_timeout: None,
+    };
+    let client = ModuleClient::new(access).with_fixture(
+        caller
+            .proxy(RECORD.bus_name, RECORD.object_path, RECORD.bus_name)
+            .unwrap(),
+    );
+    let object = client
+        .object_client(RECORD.id, RECORD.object_path)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        object.object_at("invalid path"),
+        Err(ModuleCallError::IncompatibleContract)
+    ));
+    assert_eq!(
+        sink.0.lock().unwrap().as_slice(),
+        &[(RECORD.id.to_string(), Reason::IncompatibleContract)]
+    );
+}
