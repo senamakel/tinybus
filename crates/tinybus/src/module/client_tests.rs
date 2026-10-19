@@ -1,6 +1,10 @@
 use super::*;
+use crate::message::{Message, MessageKind};
 use crate::module::failure::{FailureReport, FailureReporter, FailureSink};
+use crate::ports::{Listener, Transport};
+use crate::transport::memory::{MemoryBus, MemoryTransport};
 use std::sync::{Arc, Mutex};
+use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 
 #[derive(Default)]
 struct Recording(Mutex<Vec<(String, Reason)>>);
@@ -64,6 +68,7 @@ struct ReadyAccess {
     connection: crate::Connection,
     reporter: FailureReporter,
     proxy_failure: Option<ProxyFailure>,
+    proxy_timeout: Option<Duration>,
 }
 
 impl ModuleAccess for ReadyAccess {
@@ -92,10 +97,102 @@ impl ModuleAccess for ReadyAccess {
             if let Some(failure) = self.proxy_failure {
                 return Err(failure);
             }
-            self.connection
+            let proxy = self.connection
                 .proxy(bus_name, object_path, bus_name)
-                .map_err(|_| ProxyFailure::Contract)
+                .map_err(|_| ProxyFailure::Contract)?;
+            Ok(self
+                .proxy_timeout
+                .map_or(proxy.clone(), |timeout| proxy.with_timeout(timeout)))
         })
+    }
+}
+
+#[derive(Clone)]
+struct HeldMetadataBus {
+    accepted: mpsc::Sender<Box<dyn Transport>>,
+    pending: Arc<AsyncMutex<mpsc::Receiver<Box<dyn Transport>>>>,
+}
+
+impl HeldMetadataBus {
+    fn new() -> Self {
+        let (accepted, pending) = mpsc::channel(8);
+        Self {
+            accepted,
+            pending: Arc::new(AsyncMutex::new(pending)),
+        }
+    }
+
+    async fn connect(
+        &self,
+        held_member: Option<&'static str>,
+    ) -> (crate::Connection, Arc<Notify>) {
+        let (client, broker) = MemoryTransport::pair();
+        let held = Arc::new(Notify::new());
+        self.accepted
+            .send(Box::new(HoldMetadataRequest {
+                inner: broker,
+                held_member,
+                held: held.clone(),
+            }))
+            .await
+            .unwrap();
+        (
+            crate::Connection::connect(Box::new(client)).await.unwrap(),
+            held,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl Listener for HeldMetadataBus {
+    async fn accept(&self) -> crate::Result<Option<Box<dyn Transport>>> {
+        Ok(self.pending.lock().await.recv().await)
+    }
+
+    fn describe(&self) -> String {
+        "test-held-metadata".to_string()
+    }
+}
+
+struct HoldMetadataRequest {
+    inner: MemoryTransport,
+    held_member: Option<&'static str>,
+    held: Arc<Notify>,
+}
+
+#[async_trait::async_trait]
+impl Transport for HoldMetadataRequest {
+    async fn send(&self, message: Message) -> crate::Result<()> {
+        self.inner.send_brokered(message).await
+    }
+
+    async fn recv(&self) -> crate::Result<Option<Message>> {
+        loop {
+            let Some((message, _)) = self.inner.recv_with_provenance().await? else {
+                return Ok(None);
+            };
+            let is_held_query = self.held_member.is_some_and(|member| {
+                message.header.kind == MessageKind::MethodCall
+                    && message
+                        .header
+                        .member
+                        .as_ref()
+                        .is_some_and(|actual| actual.as_str() == member)
+            });
+            if is_held_query {
+                self.held.notify_one();
+                continue;
+            }
+            return Ok(Some(message));
+        }
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        self.inner.close().await
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
     }
 }
 
