@@ -1215,7 +1215,10 @@ impl ModuleObjectClient {
             .name_owner_with_timeout(self.proxy.destination().as_str(), self.proxy.timeout())
             .await
             .map_err(|error| report_proxy_failure(self.access.reporter(), self.record, &error))?
-            .ok_or(ModuleCallError::Unavailable)?;
+            .ok_or_else(|| {
+                report(&*self.access, self.record, Reason::ModuleUnavailable);
+                ModuleCallError::Unavailable
+            })?;
         self.derive(owner.as_str(), self.proxy.path().as_str())
     }
 
@@ -1234,7 +1237,9 @@ impl ModuleObjectClient {
             .proxy
             .connection()
             .proxy(destination, path, self.proxy.interface().as_str())
-            .map_err(|error| report_proxy_failure(self.access.reporter(), self.record, &error))?;
+            .map_err(|error| {
+                report_proxy_failure_detailed(self.access.reporter(), self.record, &error).kind
+            })?;
         Ok(Self {
             access: Arc::clone(&self.access),
             record: self.record,
@@ -1355,6 +1360,10 @@ fn report_invocation(access: &dyn ModuleAccess, record: &ReleaseRecord, reason: 
 #[must_use]
 pub fn classify(error: &Error) -> (ModuleCallError, Reason) {
     match error {
+        Error::InvalidName { .. } => (
+            ModuleCallError::IncompatibleContract,
+            Reason::IncompatibleContract,
+        ),
         Error::ModuleUnavailable { .. } => {
             (ModuleCallError::Unavailable, Reason::ModuleUnavailable)
         }
