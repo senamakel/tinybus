@@ -927,7 +927,10 @@ async fn pin_owner_reports_an_alias_that_has_lost_its_owner_as_unavailable() {
         .unwrap();
 
     service.release_name(RECORD.bus_name).await.unwrap();
-    assert_eq!(object.pin_owner().await, Err(ModuleCallError::Unavailable));
+    assert!(matches!(
+        object.pin_owner().await,
+        Err(ModuleCallError::Unavailable)
+    ));
     assert_eq!(
         sink.0.lock().unwrap().as_slice(),
         &[(RECORD.id.to_string(), Reason::ModuleUnavailable)]
