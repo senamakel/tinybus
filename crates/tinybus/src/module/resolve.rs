@@ -410,6 +410,15 @@ impl Resolver {
             return Err(LoadError::Disabled(label));
         }
 
+        // Start the process-lifetime runtime before claiming the global slot.
+        // Once a caller claims `Run`, there must be no await before its work
+        // is spawned on that runtime: cancellation in that gap would drop the
+        // only sender and permanently cache an "abandoned" resolution.
+        let runtime = if matches!(resolution::global().peek(id), ResolutionState::Unresolved) {
+            Some(self.runtime().await)
+        } else {
+            None
+        };
         let receiver = match resolution::global().claim(id) {
             Claim::Done(Resolution::Ready) => return Ok(()),
             Claim::Done(Resolution::Failed(reason)) => {
@@ -421,7 +430,11 @@ impl Resolver {
             }
             Claim::Wait(receiver) => receiver,
             Claim::Run { sender, receiver } => {
-                self.start_resolution(record, sender).await;
+                self.start_resolution(
+                    record,
+                    sender,
+                    runtime.expect("an unresolved slot was prepared before it was claimed"),
+                );
                 receiver
             }
         };
@@ -493,61 +506,78 @@ impl Resolver {
     /// outcome. A caller runtime that shuts down mid-load must not cancel a
     /// resolution other callers are waiting on. Without a module runtime there is
     /// nothing to load into, so the outcome is recorded inline instead.
-    async fn start_resolution(
+    fn start_resolution(
         &self,
         record: &'static ReleaseRecord,
         sender: tokio::sync::watch::Sender<Option<Resolution>>,
+        runtime: crate::Result<&'static ModuleRuntime>,
     ) {
-        let this = self.clone();
-        let id = record.id;
-        let work = async move {
-            tracing::info!(
-                module = id,
-                version = record.version,
-                "[tinybus::module] resolving"
-            );
-            let resolution = match this.ladder(record).await {
-                Ok(()) => {
-                    tracing::info!(module = id, "[tinybus::module] serving");
-                    Resolution::Ready
-                }
-                Err(reason) => {
-                    // Every failure is terminal for the process (the outcome is
-                    // cached), whichever rung produced it.
-                    let reason = this.mark_terminal(reason);
-                    this.report(record, Reason::ResolutionFailed);
-                    Resolution::Failed(reason)
-                }
-            };
-            if let Some(hook) = &this.inner.on_resolved {
-                // A hook that panics must not strand the callers waiting on
-                // this resolution.
-                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook(id))).is_err() {
-                    tracing::warn!(module = id, "[tinybus::module] resolved hook panicked");
-                }
-            }
-            resolution::global().complete(id, resolution, sender);
-        };
-        match self.runtime().await {
+        match runtime {
             Ok(runtime) => {
+                let this = self.clone();
+                let work = async move {
+                    tracing::info!(
+                        module = record.id,
+                        version = record.version,
+                        "[tinybus::module] resolving"
+                    );
+                    let result = this.ladder(record, runtime).await;
+                    this.complete_resolution(record, sender, result);
+                };
                 runtime.spawn(work);
             }
             Err(error) => {
                 tracing::warn!(error = %error, "[tinybus::module] the module bus could not start");
-                work.await;
+                self.complete_resolution(
+                    record,
+                    sender,
+                    Err(format!(
+                        "module '{}' is unavailable: the module bus could not start",
+                        record.id
+                    )),
+                );
             }
         }
     }
 
-    /// Get `record` serving: loaded, override, search path, release cache, prune.
-    async fn ladder(&self, record: &'static ReleaseRecord) -> Result<(), String> {
-        let runtime = self.runtime().await.map_err(|_| {
-            format!(
-                "module '{}' is unavailable: the module bus could not start",
-                record.id
-            )
-        })?;
+    fn complete_resolution(
+        &self,
+        record: &'static ReleaseRecord,
+        sender: tokio::sync::watch::Sender<Option<Resolution>>,
+        result: Result<(), String>,
+    ) {
+        let resolution = match result {
+            Ok(()) => {
+                tracing::info!(module = record.id, "[tinybus::module] serving");
+                Resolution::Ready
+            }
+            Err(reason) => {
+                // Every failure is terminal for the process (whichever rung
+                // produced it).
+                let reason = self.mark_terminal(reason);
+                self.report(record, Reason::ResolutionFailed);
+                Resolution::Failed(reason)
+            }
+        };
+        if let Some(hook) = &self.inner.on_resolved {
+            // A hook that panics must not strand callers waiting on the
+            // process-wide result.
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook(record.id))).is_err() {
+                tracing::warn!(
+                    module = record.id,
+                    "[tinybus::module] resolved hook panicked"
+                );
+            }
+        }
+        resolution::global().complete(record.id, resolution, sender);
+    }
 
+    /// Get `record` serving: loaded, override, search path, release cache, prune.
+    async fn ladder(
+        &self,
+        record: &'static ReleaseRecord,
+        runtime: &'static ModuleRuntime,
+    ) -> Result<(), String> {
         // Already serving: loaded from the search path at boot, or by an earlier
         // explicit local load.
         if runtime
@@ -567,14 +597,18 @@ impl Resolver {
                 let path = PathBuf::from(path);
                 let module_config = (self.inner.module_config)(record.id);
                 return self
-                    .blocking(move || Self::load_local(runtime, &path, record.id, module_config))
+                    .blocking(runtime, move || {
+                        Self::load_local(runtime, &path, record.id, module_config)
+                    })
                     .await;
             }
             Some(ModuleSource::Linked) => {
                 let factory = self.inner.linked.get(record.id).copied();
                 let module_config = (self.inner.module_config)(record.id);
                 return self
-                    .blocking(move || Self::load_linked(runtime, record, factory, module_config))
+                    .blocking(runtime, move || {
+                        Self::load_linked(runtime, record, factory, module_config)
+                    })
                     .await;
             }
             Some(ModuleSource::Pinned) | None => {}
@@ -612,7 +646,7 @@ impl Resolver {
         let module_config = (self.inner.module_config)(record.id);
         let cache_root = root.clone();
         let bundled = self.inner.bundled_dir.clone();
-        self.blocking(move || {
+        self.blocking(runtime, move || {
             Self::load_cached(
                 runtime,
                 record,
@@ -630,15 +664,11 @@ impl Resolver {
     /// Run a blocking module operation on the blocking pool. A panic in the
     /// loader is reported rather than propagated, and every error is marked
     /// terminal.
-    async fn blocking<F>(&self, work: F) -> Result<(), String>
+    async fn blocking<F>(&self, runtime: &'static ModuleRuntime, work: F) -> Result<(), String>
     where
         F: FnOnce() -> Result<(), String> + Send + 'static,
     {
-        self.runtime()
-            .await
-            .map_err(|error| {
-                self.mark_terminal(format!("the module bus could not start: {error}"))
-            })?
+        runtime
             .blocking(work)
             .await
             .map_err(|error| self.mark_terminal(error))
