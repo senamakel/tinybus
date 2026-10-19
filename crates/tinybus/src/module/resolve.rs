@@ -697,17 +697,18 @@ impl Resolver {
         let module_config = (self.inner.module_config)(record.id);
         let cache_root = root.clone();
         let bundled = self.inner.bundled_dir.clone();
-        let result = self.blocking(runtime, move || {
-            Self::load_cached(
-                runtime,
-                record,
-                &cache_root,
-                &module_config,
-                allow_download,
-                bundled.as_deref(),
-            )
-        })
-        .await;
+        let result = self
+            .blocking(runtime, move || {
+                Self::load_cached(
+                    runtime,
+                    record,
+                    &cache_root,
+                    &module_config,
+                    allow_download,
+                    bundled.as_deref(),
+                )
+            })
+            .await;
         if let Err(error) = result {
             return recover_admission(Err(error), &runtime.host().list(), record);
         }
