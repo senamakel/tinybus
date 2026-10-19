@@ -678,7 +678,7 @@ impl crate::Interface for OwnerFixture {
     }
 }
 
-struct StalledObject(tokio::sync::oneshot::Sender<()>);
+struct StalledObject(Mutex<Option<tokio::sync::oneshot::Sender<()>>>);
 
 #[async_trait::async_trait]
 impl crate::Interface for StalledObject {
@@ -695,7 +695,7 @@ impl crate::Interface for StalledObject {
         _: &crate::MemberName,
         _: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
-        let _ = self.0.send(());
+        let _ = self.0.lock().unwrap().take().unwrap().send(());
         std::future::pending().await
     }
 }
@@ -734,7 +734,7 @@ async fn pin_owner_obeys_the_object_proxy_deadline_for_name_owner_lookup() {
         }
     };
 
-    assert_eq!(result, Err(ModuleCallError::TransportFailed));
+    assert!(matches!(result, Err(ModuleCallError::TransportFailed)));
     broker_task.abort();
 }
 
@@ -750,7 +750,7 @@ async fn derived_object_keeps_a_custom_module_access_proxy_deadline() {
     service
         .serve_at(
             crate::ObjectPath::new("/child").unwrap(),
-            StalledObject(started),
+            StalledObject(Mutex::new(Some(started))),
         )
         .await
         .unwrap();
