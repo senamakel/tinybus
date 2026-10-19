@@ -560,6 +560,57 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn cancelling_runtime_startup_does_not_poison_the_resolution_slot() {
+        let record = record("resolver-cancel-runtime-startup");
+        let sink = Arc::new(Recording::default());
+        let runtime_calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let counted = runtime_calls.clone();
+        let started_callback = started.clone();
+        let resolver = Resolver::new(ResolverInputs {
+            enabled: true,
+            install_dir: None,
+            allow_download: false,
+            bundled_dir: None,
+            sources: HashMap::new(),
+            linked: HashMap::new(),
+            search_skip: Vec::new(),
+            gate: None,
+            on_resolved: None,
+            records: vec![record],
+            terminal_marker: "This is terminal for the running process".to_string(),
+            runtime: Arc::new(move || {
+                let call = counted.fetch_add(1, Ordering::SeqCst);
+                if call == 0 {
+                    started_callback.notify_one();
+                    Box::pin(async {
+                        std::future::pending::<crate::Result<&'static ModuleRuntime>>().await
+                    })
+                } else {
+                    Box::pin(async { Ok(shared_runtime()) })
+                }
+            }),
+            module_config: Arc::new(|_| serde_json::json!({})),
+            reporter: Arc::new(FailureReporter::new(sink)),
+        });
+
+        let abandoned = {
+            let resolver = resolver.clone();
+            tokio::spawn(async move { resolver.ensure_loaded(record.id).await })
+        };
+        started.notified().await;
+        abandoned.abort();
+        let _ = abandoned.await;
+
+        assert_eq!(resolver.state_of(record.id), Availability::Available);
+        let error = resolver.ensure_loaded(record.id).await.unwrap_err();
+        assert!(error.contains("no directory is available"), "{error}");
+        assert!(!error.contains("resolution was abandoned"), "{error}");
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
+        assert_eq!(runtime_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn a_missing_install_dir_is_terminal() {
         let record = record("resolver-no-install-dir");
         let f = fixture(record, true, HashMap::new(), None);
