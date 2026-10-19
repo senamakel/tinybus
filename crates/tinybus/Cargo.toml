@@ -2,7 +2,7 @@
 name = "tinybus"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
 build = "build.rs"
@@ -94,6 +94,9 @@ test-support = ["modules", "macros"]
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "io-util", "test-util"] }
 tempfile = "3"
+# Archive writer used only to construct hostile ZIP regression fixtures. The
+# production loader remains the bounded rawzip parser/extractor.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [[bin]]
 name = "tinybus"

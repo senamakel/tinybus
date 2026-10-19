@@ -101,14 +101,13 @@ impl Drop for StagedModulePeer {
     fn drop(&mut self) {
         if self.id.is_some() {
             self.broker.detach_unique(&self.unique);
-            if let Some(transport) = self.transport.as_deref() {
-                if let Some(module) = crate::transport::downcast::<
+            if let Some(transport) = self.transport.as_deref()
+                && let Some(module) = crate::transport::downcast::<
                     crate::module::transport::ModuleTransport,
                 >(transport)
-                {
-                    module.commit_terminal(true);
-                    module.request_terminal(true);
-                }
+            {
+                module.commit_terminal(true);
+                module.request_terminal(true);
             }
         }
     }

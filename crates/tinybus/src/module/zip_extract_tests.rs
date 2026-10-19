@@ -341,13 +341,21 @@ fn casefold_key_expansion_counts_toward_the_path_metadata_limit() {
 #[test]
 fn link_and_special_mode_metadata_never_create_links_or_privileges() {
     let (_root, destination, result) = extract_fixture("unix_link_mode.zip");
-    result.unwrap();
-    let link = fs::symlink_metadata(destination.join("link")).unwrap();
-    assert!(link.file_type().is_file());
-    assert_eq!(
-        fs::read(destination.join("link")).unwrap(),
-        b"../outside.txt"
-    );
+    assert!(result.is_err(), "symbolic-link metadata must be refused");
+    assert!(!destination.join("link").exists());
+
+    let mut special = include_bytes!("fixtures/compat_store.zip").to_vec();
+    let central = special
+        .windows(4)
+        .position(|signature| signature == b"PK\x01\x02")
+        .unwrap();
+    // Mark the first regular entry as a Unix FIFO. The extractor must reject
+    // the metadata before materializing the entry as a regular file.
+    special[central + 4..central + 6].copy_from_slice(&((3_u16 << 8) | 20).to_le_bytes());
+    special[central + 38..central + 42].copy_from_slice(&(0o010644_u32 << 16).to_le_bytes());
+    let (_root, destination, result) = extract_fixture_bytes(&special);
+    assert!(result.is_err(), "special-file metadata must be refused");
+    assert!(fs::read_dir(destination).unwrap().next().is_none());
 
     let (_root, destination, result) = extract_fixture("suid_mode.zip");
     result.unwrap();

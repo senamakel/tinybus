@@ -179,10 +179,8 @@ async fn remove_host_object(
     } else {
         false
     };
-    if release {
-        if let Some(unique) = state.connection.unique_name() {
-            let _ = state.broker.release_host_name(&unique, &name);
-        }
+    if release && let Some(unique) = state.connection.unique_name() {
+        let _ = state.broker.release_host_name(&unique, &name);
     }
     drop(state);
     if let Some(interface) = detached {

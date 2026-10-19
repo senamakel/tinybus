@@ -221,6 +221,22 @@ fn extract_with_limits(
             return Err(refused("release archive path metadata exceeds its limit"));
         }
         let (path, is_dir, components) = checked_path(original, limits.path_depth)?;
+        let creator_system = entry.version_made_by().creator_system();
+        if matches!(
+            creator_system,
+            rawzip::CreatorSystem::UNIX | rawzip::CreatorSystem::MACOS
+        ) {
+            // Inspect the raw type bits: rawzip's normalized mode synthesizes
+            // S_IFREG when a Unix archive omits the type, which would combine
+            // with a slash-marked directory as a false special-file type.
+            let file_type = (entry.external_attributes() >> 16) & 0o170000;
+            let allowed_type = if is_dir { 0o040000 } else { 0o100000 };
+            if file_type != 0 && file_type != allowed_type {
+                return Err(refused(
+                    "release archive contains an unsupported entry type",
+                ));
+            }
+        }
         path_component_count = path_component_count
             .checked_add(components)
             .ok_or_else(|| refused("release archive path metadata exceeds its limit"))?;
