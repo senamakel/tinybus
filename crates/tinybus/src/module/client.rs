@@ -1212,7 +1212,7 @@ impl ModuleObjectClient {
         let owner = self
             .proxy
             .connection()
-            .name_owner(self.proxy.destination())
+            .name_owner_with_timeout(self.proxy.destination().as_str(), self.proxy.timeout())
             .await
             .map_err(|error| report_proxy_failure(self.access.reporter(), self.record, &error))?
             .ok_or(ModuleCallError::Unavailable)?;
@@ -1229,6 +1229,7 @@ impl ModuleObjectClient {
     }
 
     fn derive(&self, destination: &str, path: &str) -> Result<Self, ModuleCallError> {
+        let timeout = self.timeout.unwrap_or_else(|| self.proxy.timeout());
         let proxy = self
             .proxy
             .connection()
@@ -1237,10 +1238,8 @@ impl ModuleObjectClient {
         Ok(Self {
             access: Arc::clone(&self.access),
             record: self.record,
-            proxy: self
-                .timeout
-                .map_or(proxy.clone(), |timeout| proxy.with_timeout(timeout)),
-            timeout: self.timeout,
+            proxy: proxy.with_timeout(timeout),
+            timeout: Some(timeout),
         })
     }
 
