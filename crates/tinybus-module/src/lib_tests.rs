@@ -8,6 +8,12 @@ static HOST_LOGS: AtomicUsize = AtomicUsize::new(0);
 static HOST_READY: AtomicBool = AtomicBool::new(false);
 static HOST_FAULTED: AtomicBool = AtomicBool::new(false);
 static START_OUTGOING: OnceLock<StdMutex<Option<SyncSender<Vec<u8>>>>> = OnceLock::new();
+static TRUSTED_HOST_REPLY: AtomicUsize = AtomicUsize::new(0);
+static CAPTURED_TRUSTED_HOST: OnceLock<StdMutex<Option<TrustedHost>>> = OnceLock::new();
+static CAPTURED_MODULE_NAME: OnceLock<StdMutex<Option<BusName>>> = OnceLock::new();
+static CAPTURED_MODULE_CONTEXT: OnceLock<StdMutex<Option<CallContext>>> = OnceLock::new();
+static FOREIGN_CONTEXT_SENDER: OnceLock<StdMutex<Option<tokio::sync::oneshot::Sender<CallContext>>>> =
+    OnceLock::new();
 // These tests share host callbacks and the module's process-global runtime
 // capture, so overlapping tests would make their assertions order-dependent.
 static HOST_STATE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -77,6 +83,308 @@ fn host(config: &[u8]) -> TbHostVtable {
         native_terminal_state: None,
         trusted_host_binding: None,
     }
+}
+
+unsafe extern "C" fn test_trusted_host_binding(
+    _: *mut c_void,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> i32 {
+    if out_len.is_null() {
+        return TB_BAD_ARGUMENT;
+    }
+    let (code, bytes): (i32, &[u8]) = match TRUSTED_HOST_REPLY.load(Ordering::Acquire) {
+        0 => (TB_OK, b":1.2"),
+        1 => (TB_OK, b":1.3"),
+        2 => (TB_CLOSED, b""),
+        3 => {
+            unsafe { out_len.write(capacity + 1) };
+            return TB_OK;
+        }
+        4 => (TB_OK, b"\xff"),
+        5 => (TB_OK, b"org.example.Controller"),
+        _ => (91, b""),
+    };
+    unsafe { out_len.write(bytes.len()) };
+    if code != TB_OK {
+        return code;
+    }
+    if bytes.len() > capacity || (out.is_null() && !bytes.is_empty()) {
+        return TB_BAD_ARGUMENT;
+    }
+    if !bytes.is_empty() {
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+    }
+    TB_OK
+}
+
+unsafe extern "C" fn assert_test_broker_routed(_: *mut c_void) -> u32 {
+    1
+}
+
+async fn setup_with_context(context: ModuleSetupContext) -> Result<()> {
+    let trusted_host = context.trusted_host().cloned();
+    *CAPTURED_TRUSTED_HOST
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("captured trusted host lock") = trusted_host.clone();
+    *CAPTURED_MODULE_NAME
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("captured module name lock") = context.connection().unique_name();
+    context
+        .connection()
+        .serve_at(
+            "/authorization".parse().unwrap(),
+            ContextAuthorizationProbe { trusted_host },
+        )
+        .await?;
+    Ok(())
+}
+
+struct ContextAuthorizationProbe {
+    trusted_host: Option<TrustedHost>,
+}
+
+#[async_trait::async_trait]
+impl tinybus::service::Interface for ContextAuthorizationProbe {
+    fn name(&self) -> tinybus::InterfaceName {
+        "org.example.TrustedHostProbe".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<tinybus::MemberName> {
+        vec!["Authorize".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &tinybus::MemberName,
+        _: serde_json::Value,
+    ) -> tinybus::Result<serde_json::Value> {
+        Err(Error::failed("context-aware dispatch required"))
+    }
+
+    async fn call_with_context(
+        &self,
+        _: &tinybus::MemberName,
+        _: serde_json::Value,
+        context: &CallContext,
+    ) -> tinybus::Result<serde_json::Value> {
+        *CAPTURED_MODULE_CONTEXT
+            .get_or_init(|| StdMutex::new(None))
+            .lock()
+            .expect("captured module context lock") = Some(context.clone());
+        Ok(serde_json::json!(self
+            .trusted_host
+            .as_ref()
+            .is_some_and(|trusted_host| trusted_host.authorizes(context))))
+    }
+}
+
+async fn setup_foreign_context_capture(connection: Connection) -> Result<()> {
+    connection
+        .serve_at(
+            "/capture".parse().unwrap(),
+            ForeignContextCapture,
+        )
+        .await?;
+    Ok(())
+}
+
+struct ForeignContextCapture;
+
+#[async_trait::async_trait]
+impl tinybus::service::Interface for ForeignContextCapture {
+    fn name(&self) -> tinybus::InterfaceName {
+        "org.example.ForeignContext".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<tinybus::MemberName> {
+        vec!["Capture".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &tinybus::MemberName,
+        _: serde_json::Value,
+    ) -> tinybus::Result<serde_json::Value> {
+        Err(Error::failed("context-aware dispatch required"))
+    }
+
+    async fn call_with_context(
+        &self,
+        _: &tinybus::MemberName,
+        _: serde_json::Value,
+        context: &CallContext,
+    ) -> tinybus::Result<serde_json::Value> {
+        FOREIGN_CONTEXT_SENDER
+            .get_or_init(|| StdMutex::new(None))
+            .lock()
+            .expect("foreign context sender lock")
+            .take()
+            .expect("one foreign context capture")
+            .send(context.clone())
+            .map_err(|_| Error::failed("foreign context receiver closed"))?;
+        Ok(serde_json::Value::Null)
+    }
+}
+
+mod dynamic_context_export {
+    crate::module_export! {
+        setup_with_context = super::setup_with_context,
+        worker_threads = 1,
+        provides = ["org.example.DynamicContext"],
+        methods = ["Authorize"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
+mod static_context_export {
+    crate::module_export_static! {
+        setup_with_context = super::setup_with_context,
+        worker_threads = 1,
+        provides = ["org.example.StaticContext"],
+        methods = ["Authorize"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
+mod foreign_context_export {
+    crate::module_export_static! {
+        setup = super::setup_foreign_context_capture,
+        worker_threads = 1,
+        provides = ["org.example.ForeignContext"],
+        methods = ["Capture"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
+fn start_context_export(
+    init: unsafe extern "C" fn(*const TbHostVtable, *mut TbModuleVtable) -> i32,
+    include_binding: bool,
+    include_routing: bool,
+) -> (TbModuleVtable, std::sync::mpsc::Receiver<Vec<u8>>) {
+    HOST_READY.store(false, Ordering::Release);
+    HOST_FAULTED.store(false, Ordering::Release);
+    let (outgoing_tx, outgoing_rx) = std::sync::mpsc::sync_channel(8);
+    *START_OUTGOING
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("startup capture lock") = Some(outgoing_tx);
+    let mut host = host(b"{}");
+    host.send = capture_host_send;
+    if include_binding {
+        host.trusted_host_binding = Some(test_trusted_host_binding);
+    }
+    if include_routing {
+        host.broker_routing = Some(assert_test_broker_routed);
+    }
+    let mut out = TbModuleVtable::default();
+    assert_eq!(unsafe { init(&host, &mut out) }, TB_OK);
+    let hello_bytes = outgoing_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("contextual module sends Hello");
+    let hello: Message = serde_json::from_slice(&hello_bytes).unwrap();
+    let reply = Message::method_return(&hello.header, serde_json::json!(":1.1"));
+    let reply_bytes = serde_json::to_vec(&reply).unwrap();
+    assert_eq!(
+        unsafe { (out.deliver)(out.module_ctx, reply_bytes.as_ptr(), reply_bytes.len()) },
+        TB_OK
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while !HOST_READY.load(Ordering::Acquire) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "contextual setup did not become ready"
+        );
+        std::thread::yield_now();
+    }
+    (out, outgoing_rx)
+}
+
+fn send_context_probe_call(
+    out: &TbModuleVtable,
+    receiver: &BusName,
+    sender: &str,
+    confidential: bool,
+    outgoing: &std::sync::mpsc::Receiver<Vec<u8>>,
+) -> serde_json::Value {
+    let destination = receiver.clone();
+    let path = "/authorization".parse().unwrap();
+    let interface = "org.example.TrustedHostProbe".parse().unwrap();
+    let member = "Authorize".parse().unwrap();
+    let mut call = if confidential {
+        Message::confidential_call(destination, path, interface, member, serde_json::Value::Null)
+    } else {
+        Message::method_call(destination, path, interface, member, serde_json::Value::Null)
+    };
+    call.header.sender = Some(sender.parse().unwrap());
+    call.header.serial = 42;
+    let bytes = serde_json::to_vec(&call).unwrap();
+    assert_eq!(
+        unsafe { (out.deliver)(out.module_ctx, bytes.as_ptr(), bytes.len()) },
+        TB_OK
+    );
+    let reply = outgoing
+        .recv_timeout(Duration::from_secs(1))
+        .expect("contextual call reply");
+    let reply: Message = serde_json::from_slice(&reply).unwrap();
+    assert_eq!(reply.header.reply_serial, Some(42));
+    reply.body
+}
+
+async fn capture_foreign_confidential_context() -> (
+    CallContext,
+    Connection,
+    tinybus::module::ModuleHost,
+    tokio::task::JoinHandle<Result<()>>,
+) {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    let broker = tinybus::broker::Broker::new();
+    let broker_task = broker.clone().spawn(bus.clone());
+    let module_host = tinybus::module::ModuleHost::new(broker);
+    let linked = foreign_context_export::linked_module().unwrap();
+    let info = module_host
+        .attach_linked_with_config(linked, serde_json::json!({}))
+        .unwrap();
+    module_host
+        .ensure_ready(info.manifest.bus_name.as_str())
+        .await
+        .unwrap();
+    let (captured_tx, captured_rx) = tokio::sync::oneshot::channel();
+    *FOREIGN_CONTEXT_SENDER
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .expect("foreign context sender lock") = Some(captured_tx);
+    let caller = Connection::connect(bus.connect().await.unwrap()).await.unwrap();
+    let expected_sender = BusName::new(":1.2").unwrap();
+    assert_eq!(caller.unique_name(), Some(expected_sender));
+    caller
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/capture",
+            "org.example.ForeignContext",
+        )
+        .unwrap()
+        .call_confidential::<serde_json::Value>("Capture", ())
+        .await
+        .unwrap();
+    (
+        captured_rx.await.unwrap(),
+        caller,
+        module_host,
+        broker_task,
+    )
 }
 
 fn message() -> Message {
