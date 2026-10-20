@@ -183,6 +183,8 @@ class CoverageScriptPlatformTests(unittest.TestCase):
                 "--example",
                 "module_context_eager",
                 "--example",
+                "module_trusted_migration",
+                "--example",
                 "module_host_callback",
                 "--example",
                 "module_controlled_init",
