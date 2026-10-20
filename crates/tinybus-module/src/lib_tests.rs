@@ -236,7 +236,8 @@ impl tinybus::service::Interface for ForeignContextCapture {
 #[cfg(feature = "static-link")]
 mod dynamic_context_export {
     crate::module_export! {
-        setup_with_context = super::setup_with_context,
+        setup_factory_with_context = super::setup_context_factory,
+        config = super::ContextFactoryConfig,
         worker_threads = 1,
         provides = ["org.example.DynamicContext"],
         methods = ["Authorize"],
@@ -272,21 +273,6 @@ fn setup_context_factory()
             CONTEXT_FACTORY_SETUPS.fetch_add(1, Ordering::SeqCst);
             setup_with_context(context).await
         })
-    }
-}
-
-#[cfg(feature = "static-link")]
-mod dynamic_context_factory_export {
-    crate::module_export! {
-        setup_factory_with_context = super::setup_context_factory,
-        config = super::ContextFactoryConfig,
-        worker_threads = 1,
-        provides = ["org.example.DynamicContextFactory"],
-        methods = ["Authorize"],
-        signals = [],
-        requires = [],
-        optional = [],
-        lazy = false,
     }
 }
 
@@ -431,6 +417,8 @@ async fn trusted_host_binding_parser_fails_closed_for_missing_or_malformed_callb
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() {
     let _host_state = host_state_guard().await;
+    let before_factory = CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst);
+    let before_setups = CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst);
     TRUSTED_HOST_REPLY.store(0, Ordering::Release);
     *CAPTURED_TRUSTED_HOST
         .get_or_init(|| StdMutex::new(None))
@@ -444,6 +432,15 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
     let init: unsafe extern "C" fn(*const TbHostVtable, *mut TbModuleVtable) -> i32 =
         dynamic_context_export::tinybus_module_init_v1;
     let (out, outgoing) = start_context_export(init, true, true);
+    assert_eq!(
+        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
+        1,
+        "the context factory runs once for this ABI instance"
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
+        1
+    );
     let receiver = CAPTURED_MODULE_NAME
         .get_or_init(|| StdMutex::new(None))
         .lock()
@@ -497,6 +494,27 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
     assert!(
         !trusted_host.authorizes(&foreign_context),
         "a confidential context from another live receiver cannot match even with the same sender name"
+    );
+
+    let reinitialize = out.reinitialize.expect("configured factory supports reinit");
+    let config = b"{}";
+    assert_eq!(
+        unsafe { reinitialize(out.module_ctx, config.as_ptr(), config.len()) },
+        TB_OK
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
+        1,
+        "reinitialization reuses the captured callback"
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
+        2
+    );
+    assert_eq!(
+        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
+        serde_json::json!(true),
+        "reinitialization gets a setup context for the active connection"
     );
 
     let captured = CAPTURED_MODULE_CONTEXT

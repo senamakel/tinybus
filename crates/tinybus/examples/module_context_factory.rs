@@ -109,7 +109,7 @@ fn setup_factory() -> impl Fn(ModuleSetupContext, Config) -> SetupFuture + Send 
     }
 }
 
-tinybus_module::module_export! {
+tinybus_module::module_export_optional_static! {
     setup_factory_with_context = setup_factory,
     config = Config,
     worker_threads = 1,
