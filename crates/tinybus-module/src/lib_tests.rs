@@ -240,6 +240,7 @@ mod dynamic_context_export {
     }
 }
 
+#[allow(dead_code)]
 mod static_context_export {
     crate::module_export_static! {
         setup_with_context = super::setup_with_context,
@@ -357,7 +358,7 @@ fn send_context_probe_call(
 
 #[test]
 fn trusted_host_binding_parser_fails_closed_for_missing_or_malformed_callbacks() {
-    let mut missing = HostCalls(host(b"{}"));
+    let missing = HostCalls(host(b"{}"));
     assert!(missing.trusted_host_peer().is_none());
 
     let mut table = host(b"{}");
@@ -451,7 +452,8 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         .unwrap()
         .clone()
         .expect("authorization probe retained an actual routed context");
-    assert_eq!(unsafe { (out.shutdown)(out.module_ctx, 1000) }, TB_OK);
+    let shutdown_code = unsafe { (out.shutdown)(out.module_ctx, 1000) };
+    assert_eq!(shutdown_code, TB_OK, "contextual module shutdown code");
     assert!(
         !trusted_host.authorizes(&captured),
         "the cloned capability cannot outlive its module connection"
