@@ -20,10 +20,11 @@ use async_trait::async_trait;
 use tinybus::message::Message;
 use tinybus::message::codec::MAX_FRAME_LEN;
 use tinybus::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
-    TB_TIMEOUT, TbHostVtable, TbModuleVtable, TbModuleVtableV1Prefix,
+    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED,
+    TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable,
+    TbModuleVtable, TbModuleVtableV1Prefix,
 };
-use tinybus::{Connection, Error, Result, Transport};
+use tinybus::{BusName, CallContext, Connection, Error, Result, Transport, WeakConnection};
 use tokio::sync::{Mutex, mpsc, watch};
 
 mod terminal;
@@ -199,6 +200,91 @@ impl HostCalls {
 
     fn ready(&self) {
         unsafe { (self.0.ready)(self.0.host_ctx) }
+    }
+
+    fn trusted_host_peer(&self) -> Option<BusName> {
+        let query = self.0.trusted_host_binding?;
+        let mut bytes = [0_u8; tinybus::name::MAX_NAME_LEN];
+        let mut len = 0;
+        let code = unsafe {
+            query(
+                self.0.host_ctx,
+                bytes.as_mut_ptr(),
+                bytes.len(),
+                &mut len,
+            )
+        };
+        if code != TB_OK || len > bytes.len() {
+            return None;
+        }
+        let sender = std::str::from_utf8(&bytes[..len]).ok()?.parse().ok()?;
+        sender.is_unique().then_some(sender)
+    }
+}
+
+/// Setup-time connection and the optional SDK-issued migration-host binding.
+///
+/// Constructed only by the module runtime after its broker handshake. A
+/// migration module must reject `None` before registering storage leases or
+/// signaling ready.
+pub struct ModuleSetupContext {
+    connection: Connection,
+    trusted_host: Option<TrustedHost>,
+}
+
+impl ModuleSetupContext {
+    fn new(connection: Connection, grant: Option<TrustedHostGrant>) -> Self {
+        let trusted_host = grant.map(|grant| TrustedHost {
+            host: grant.host,
+            peer: grant.peer,
+            origin: connection.downgrade(),
+        });
+        Self {
+            connection,
+            trusted_host,
+        }
+    }
+
+    /// The module's broker-authenticated connection used for setup.
+    pub fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
+    /// The optional immutable migration-host capability for this attachment.
+    pub fn trusted_host(&self) -> Option<&TrustedHost> {
+        self.trusted_host.as_ref()
+    }
+}
+
+#[derive(Clone)]
+struct TrustedHostGrant {
+    host: HostCalls,
+    peer: BusName,
+}
+
+/// An SDK-issued, attachment-scoped authorization check for migration calls.
+///
+/// The capability has no public constructor or serialized representation. It
+/// stores only the initial unique peer, an opaque weak receiver identity, and
+/// the host callback used to confirm that the same peer remains live.
+#[derive(Clone)]
+pub struct TrustedHost {
+    host: HostCalls,
+    peer: BusName,
+    origin: WeakConnection,
+}
+
+impl TrustedHost {
+    /// Check a confidential call from the pinned controller on this exact
+    /// module connection, refreshing the loader binding on every decision.
+    pub fn authorizes(&self, context: &CallContext) -> bool {
+        if !context.is_confidential()
+            || !context.is_for_connection(&self.origin)
+            || context.authenticated_sender() != Some(&self.peer)
+        {
+            return false;
+        }
+        self.host.trusted_host_peer().as_ref() == Some(&self.peer)
     }
 }
 
@@ -540,6 +626,49 @@ where
     }
 }
 
+/// Initialize the module runtime with its setup connection and loader binding.
+///
+/// This additive entry point leaves [`start_module`] and its
+/// `FnOnce(Connection)` contract unchanged. If the host does not provide a
+/// trusted binding, `ModuleSetupContext::trusted_host()` is `None`.
+///
+/// # Safety
+/// The host vtable must meet [`TbHostVtable::read_compatible`] requirements;
+/// the output buffer must satisfy [`start_module`] requirements.
+#[doc(hidden)]
+pub unsafe fn start_module_with_context<F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    F: FnOnce(ModuleSetupContext) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let Some((_, compatible_host)) =
+        (unsafe { validate_start_arguments(host, out, worker_threads) })
+    else {
+        return TB_BAD_ARGUMENT;
+    };
+    let grant = HostCalls(compatible_host)
+        .trusted_host_peer()
+        .map(|peer| TrustedHostGrant {
+            host: HostCalls(compatible_host),
+            peer,
+        });
+    unsafe {
+        start_module(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            move |connection| setup(ModuleSetupContext::new(connection, grant)),
+        )
+    }
+}
+
 /// Start a linked module without replacing the host's process-global hooks.
 ///
 /// # Safety
@@ -566,6 +695,44 @@ where
             setup,
             None,
             None,
+        )
+    }
+}
+
+/// Linked counterpart to [`start_module_with_context`].
+///
+/// # Safety
+/// The host vtable and output storage must satisfy [`start_module`] requirements.
+#[doc(hidden)]
+pub unsafe fn start_linked_module_with_context<F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    F: FnOnce(ModuleSetupContext) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let Some((_, compatible_host)) =
+        (unsafe { validate_start_arguments(host, out, worker_threads) })
+    else {
+        return TB_BAD_ARGUMENT;
+    };
+    let grant = HostCalls(compatible_host)
+        .trusted_host_peer()
+        .map(|peer| TrustedHostGrant {
+            host: HostCalls(compatible_host),
+            peer,
+        });
+    unsafe {
+        start_linked_module(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            move |connection| setup(ModuleSetupContext::new(connection, grant)),
         )
     }
 }
