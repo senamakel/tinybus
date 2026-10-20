@@ -244,6 +244,14 @@ impl Broker {
                 }
             }
         };
+        if !self
+            .router
+            .lock()
+            .ok()?
+            .has_unique_peer(&selected_peer)
+        {
+            return None;
+        }
         Some(RestrictedModuleControllerBinding {
             peer: selected_peer,
             controller: Arc::downgrade(controller),
