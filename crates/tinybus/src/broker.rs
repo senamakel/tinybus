@@ -122,6 +122,43 @@ enum ModuleControllerBinding {
     Selected(BusName),
 }
 
+/// A non-owning snapshot of the controller selected when one module transport
+/// is created. It retains no connection or transport endpoint.
+#[cfg(feature = "modules")]
+#[derive(Clone)]
+pub(crate) struct RestrictedModuleControllerBinding {
+    peer: BusName,
+    controller: Weak<Mutex<ModuleControllerBinding>>,
+    router: Weak<Mutex<Router>>,
+}
+
+#[cfg(feature = "modules")]
+impl RestrictedModuleControllerBinding {
+    pub(crate) fn peer(&self) -> &BusName {
+        &self.peer
+    }
+
+    /// Confirm that the selected peer is unchanged and still attached.
+    pub(crate) fn is_live(&self) -> bool {
+        let Some(controller) = self.controller.upgrade() else {
+            return false;
+        };
+        let selected = match controller.lock() {
+            Ok(binding) => matches!(&*binding, ModuleControllerBinding::Selected(peer) if peer == &self.peer),
+            Err(_) => false,
+        };
+        if !selected {
+            return false;
+        }
+        let Some(router) = self.router.upgrade() else {
+            return false;
+        };
+        router
+            .lock()
+            .is_ok_and(|router| router.has_unique_peer(&self.peer))
+    }
+}
+
 impl Broker {
     /// Build a broker with an empty routing table.
     pub fn new() -> Self {
@@ -188,6 +225,30 @@ impl Broker {
         *binding.lock().expect("module controller lock") =
             ModuleControllerBinding::Selected(unique.clone());
         Ok(unique)
+    }
+
+    /// Snapshot the selected restricted controller for a new module transport.
+    /// A missing selection is final for that transport; later selection does
+    /// not bind an already-created module context.
+    #[cfg(feature = "modules")]
+    pub(crate) fn restricted_module_controller_binding(
+        &self,
+    ) -> Option<RestrictedModuleControllerBinding> {
+        let controller = self.module_controller.as_ref()?;
+        let selected_peer = {
+            let binding = controller.lock().ok()?;
+            match &*binding {
+                ModuleControllerBinding::Selected(peer) => peer.clone(),
+                ModuleControllerBinding::Unselected | ModuleControllerBinding::Attaching => {
+                    return None;
+                }
+            }
+        };
+        Some(RestrictedModuleControllerBinding {
+            peer: selected_peer,
+            controller: Arc::downgrade(controller),
+            router: Arc::downgrade(&self.router),
+        })
     }
 
     /// This broker's id, as reported by the bus's `GetId`.

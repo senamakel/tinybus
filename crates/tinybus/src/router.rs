@@ -226,6 +226,15 @@ pub(crate) struct NameChange {
 }
 
 impl Router {
+    /// Whether a broker-minted unique peer remains attached under that exact
+    /// identity. Well-known aliases never satisfy this check.
+    pub(crate) fn has_unique_peer(&self, unique: &BusName) -> bool {
+        self.names
+            .get(unique)
+            .and_then(|id| self.peers.get(id).map(|peer| (id, peer)))
+            .is_some_and(|(id, peer)| self.names.get(unique) == Some(id) && peer.unique == *unique)
+    }
+
     /// Verify that `id` is still attached under the unique identity stamped by
     /// the broker for that connection.
     pub(crate) fn ensure_peer_attached(&self, id: u64, unique: &BusName) -> Result<()> {
