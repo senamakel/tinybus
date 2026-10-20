@@ -269,26 +269,9 @@ fn setup_context_factory()
     move |context, _config| {
         let setups = Arc::clone(&setups);
         Box::pin(async move {
-            let setup_number = setups.fetch_add(1, Ordering::SeqCst);
-            eprintln!("context factory setup {setup_number}");
+            setups.fetch_add(1, Ordering::SeqCst);
             CONTEXT_FACTORY_SETUPS.fetch_add(1, Ordering::SeqCst);
-            if setup_number == 0 {
-                return setup_with_context(context).await;
-            }
-            let trusted_host = context
-                .trusted_host()
-                .cloned()
-                .ok_or_else(|| Error::failed("factory context binding unavailable"))?;
-            eprintln!("captured context binding for reinitialize");
-            *CAPTURED_TRUSTED_HOST
-                .get_or_init(|| StdMutex::new(None))
-                .lock()
-                .expect("captured trusted host lock") = Some(trusted_host);
-            *CAPTURED_MODULE_NAME
-                .get_or_init(|| StdMutex::new(None))
-                .lock()
-                .expect("captured module name lock") = context.connection().unique_name();
-            Ok(())
+            setup_with_context(context).await
         })
     }
 }
