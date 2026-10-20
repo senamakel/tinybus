@@ -387,6 +387,35 @@ mod context_factory_export {
         optional = [],
         lazy = false,
     }
+
+    #[test]
+    fn invalid_initial_configuration_does_not_construct_context_factory_state() {
+        let before = FACTORIES.load(Ordering::SeqCst);
+        let host = ModuleHost::new(Broker::new());
+        assert!(host
+            .attach_linked_with_config(
+                linked_module().unwrap(),
+                serde_json::json!({"restricted":"invalid"}),
+            )
+            .is_err());
+        assert_eq!(FACTORIES.load(Ordering::SeqCst), before);
+    }
+
+    #[test]
+    fn invalid_host_is_rejected_before_context_factory_construction() {
+        let before = FACTORIES.load(Ordering::SeqCst);
+        let result = unsafe {
+            start_linked_reconfigurable_module_with_context_factory::<Config, _, _>(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                1,
+                true,
+                factory,
+            )
+        };
+        assert_eq!(result, TB_BAD_ARGUMENT);
+        assert_eq!(FACTORIES.load(Ordering::SeqCst), before);
+    }
 }
 
 async fn contextual_factory_instance(
