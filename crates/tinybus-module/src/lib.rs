@@ -1406,6 +1406,10 @@ macro_rules! module_export {
 
         /// Rust-only initializer used when a host supplies per-attachment
         /// setup state. It replaces this export's default setup callback.
+        ///
+        /// # Safety
+        /// `host` and `out` must point to valid TinyBus ABI structures that
+        /// remain readable and writable for the duration of initialization.
         #[doc(hidden)]
         pub unsafe fn tinybus_module_init_with_setup_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
@@ -1426,6 +1430,8 @@ macro_rules! module_export {
         lazy = $lazy:expr $(,)?
     ) => {
         $($export)*
+        #[doc = "The ABI descriptor exported for this TinyBus module."]
+        #[doc = "It identifies the package name, version and compatible host ABI."]
         pub static TINYBUS_MODULE_ABI_V1: ::tinybus::module::abi::TbAbiDescriptor =
             ::tinybus::module::abi::TbAbiDescriptor::current(
                 env!("CARGO_PKG_NAME"),
@@ -1433,6 +1439,8 @@ macro_rules! module_export {
             );
 
         $($export)*
+        #[doc = "Return the retained manifest for this TinyBus module."]
+        #[doc = "The returned byte slice remains valid for the process lifetime."]
         pub extern "C" fn tinybus_module_manifest_v1() -> ::tinybus::module::abi::TbSlice {
             static MANIFEST_BYTES: ::std::sync::OnceLock<::std::vec::Vec<u8>> =
                 ::std::sync::OnceLock::new();
@@ -1475,6 +1483,11 @@ macro_rules! module_export {
         }
 
         $($export)*
+        /// Initialize this module through the TinyBus loader.
+        ///
+        /// The loader supplies the host ABI table and output storage used to
+        /// start the module runtime. Applications should initialize modules
+        /// through `ModuleHost`, which validates and retains the artifact.
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
@@ -1528,6 +1541,11 @@ macro_rules! module_export {
         }
 
         $($export)*
+        /// Initialize this module through the TinyBus loader.
+        ///
+        /// The loader supplies the host ABI table and output storage used to
+        /// start the module runtime. Applications should initialize modules
+        /// through `ModuleHost`, which validates and retains the artifact.
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,

@@ -276,9 +276,12 @@ async fn factory_callback_with_copying_clone_keeps_initial_admission_on_reinitia
 }
 
 mod context_factory_export {
+    #![deny(missing_docs)]
+
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
+    /// Counts constructions so the test can distinguish instances from setups.
     pub(super) static FACTORIES: AtomicUsize = AtomicUsize::new(0);
 
     #[derive(serde::Deserialize)]

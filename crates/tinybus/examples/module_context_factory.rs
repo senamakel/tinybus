@@ -1,4 +1,5 @@
 //! Compiled fixture for configured setup factories that need loader context.
+#![deny(missing_docs)]
 
 use std::{
     future::Future,
