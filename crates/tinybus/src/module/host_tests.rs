@@ -2516,12 +2516,7 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
         )
         .unwrap();
     assert!(other_proxy.attestation().await.unwrap().is_some());
-    assert!(
-        proxy
-            .call::<serde_json::Value>("Schema", ())
-            .await
-            .is_err()
-    );
+    assert!(proxy.call::<serde_json::Value>("Schema", ()).await.is_err());
     assert!(
         other_proxy
             .call_confidential::<serde_json::Value>("Schema", ())

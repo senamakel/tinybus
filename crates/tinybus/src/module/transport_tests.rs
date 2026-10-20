@@ -2721,11 +2721,10 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
     assert!(!transport.is_ready(), "binding is queried during setup");
 
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
-    let mut output_len = usize::MAX;
     assert!(!transport.is_ready());
 
     let mut short = [0xa5_u8; crate::name::MAX_NAME_LEN];
-    output_len = usize::MAX;
+    let mut output_len = usize::MAX;
     assert_eq!(
         unsafe {
             query(
