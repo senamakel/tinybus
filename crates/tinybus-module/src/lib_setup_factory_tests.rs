@@ -392,12 +392,13 @@ mod context_factory_export {
     fn invalid_initial_configuration_does_not_construct_context_factory_state() {
         let before = FACTORIES.load(Ordering::SeqCst);
         let host = ModuleHost::new(Broker::new());
-        assert!(host
-            .attach_linked_with_config(
+        assert!(
+            host.attach_linked_with_config(
                 linked_module().unwrap(),
                 serde_json::json!({"restricted":"invalid"}),
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(FACTORIES.load(Ordering::SeqCst), before);
     }
 
