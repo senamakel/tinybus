@@ -1440,7 +1440,7 @@ macro_rules! module_export {
 
         $($export)*
         #[doc = "Return the retained manifest for this TinyBus module."]
-        #[doc = "The returned byte slice remains valid for the process lifetime."]
+        #[doc = "The returned byte slice remains valid while this module library remains loaded."]
         pub extern "C" fn tinybus_module_manifest_v1() -> ::tinybus::module::abi::TbSlice {
             static MANIFEST_BYTES: ::std::sync::OnceLock<::std::vec::Vec<u8>> =
                 ::std::sync::OnceLock::new();
@@ -1491,7 +1491,9 @@ macro_rules! module_export {
         ///
         /// # Safety
         /// `host` and `out` must point to readable and writable ABI structures
-        /// that remain valid for the duration of initialization.
+        /// that remain valid for the duration of initialization. The host
+        /// context and callbacks referenced by `host` must remain valid until
+        /// the module runtime has shut down.
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
@@ -1553,7 +1555,9 @@ macro_rules! module_export {
         ///
         /// # Safety
         /// `host` and `out` must point to readable and writable ABI structures
-        /// that remain valid for the duration of initialization.
+        /// that remain valid for the duration of initialization. The host
+        /// context and callbacks referenced by `host` must remain valid until
+        /// the module runtime has shut down.
         pub unsafe extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
