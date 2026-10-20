@@ -7,12 +7,14 @@
 # lockstep with the host ABI so the two definitions cannot drift. Integrations
 # themselves remain separate repositories and are never workspace members.
 members = ["crates/tinybus", "crates/tinybus-macros", "crates/tinybus-module"]
-exclude = ["examples"]
+exclude = ["examples", "proof-workspaces/msrv-185-client"]
 resolver = "3"
 
 [workspace.package]
 version = "0.3.8"
 edition = "2024"
+# The host/core crate and macros support Rust 1.85; the separate module-side
+# runtime deliberately remains on Rust 1.88 for its fixture and ABI surface.
 rust-version = "1.85"
 license = "GPL-3.0-only"
 repository = "https://github.com/tinyhumansai/tinybus"
