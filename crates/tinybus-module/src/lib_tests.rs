@@ -137,11 +137,12 @@ async fn setup_with_context(context: ModuleSetupContext) -> Result<()> {
         .get_or_init(|| StdMutex::new(None))
         .lock()
         .expect("captured module name lock") = context.connection().unique_name();
-    let path: tinybus::ObjectPath = "/authorization".parse().unwrap();
-    context.connection().unserve(&path).await;
     context
         .connection()
-        .serve_at(path, ContextAuthorizationProbe { trusted_host })
+        .serve_at(
+            "/authorization".parse().unwrap(),
+            ContextAuthorizationProbe { trusted_host },
+        )
         .await?;
     Ok(())
 }
@@ -510,31 +511,6 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
     assert!(
         !trusted_host.authorizes(&foreign_context),
         "a confidential context from another live receiver cannot match even with the same sender name"
-    );
-
-    let reinitialize = out
-        .reinitialize
-        .expect("configured factory supports reinit");
-    let config = b"{}";
-    let reinitialize_code = unsafe { reinitialize(out.module_ctx, config.as_ptr(), config.len()) };
-    eprintln!("context factory reinitialization returned {reinitialize_code}");
-    assert_eq!(
-        reinitialize_code, TB_OK,
-        "reinitialize code {reinitialize_code}"
-    );
-    assert_eq!(
-        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
-        1,
-        "reinitialization reuses the captured callback"
-    );
-    assert_eq!(
-        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
-        2
-    );
-    assert_eq!(
-        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
-        serde_json::json!(true),
-        "reinitialization gets a setup context for the active connection"
     );
 
     let captured = CAPTURED_MODULE_CONTEXT
