@@ -1,4 +1,5 @@
 use super::*;
+use crate::CallContext;
 use crate::broker::Broker;
 use crate::transport::memory::{MemoryBus, MemoryTransport};
 use async_trait::async_trait;
@@ -114,7 +115,7 @@ struct CapturedContext {
     context: CallContext,
     receiver: Connection,
     caller: Connection,
-    _broker_task: tokio::task::JoinHandle<()>,
+    _broker_task: tokio::task::JoinHandle<Result<()>>,
 }
 
 async fn capture_context_from_fresh_broker() -> CapturedContext {

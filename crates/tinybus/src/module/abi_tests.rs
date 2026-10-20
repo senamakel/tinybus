@@ -221,8 +221,6 @@ fn terminal_tail_requires_its_complete_field() {
 
 #[test]
 fn trusted_host_tail_requires_its_complete_field_and_preserves_older_tails() {
-    let routing_end = std::mem::offset_of!(TbHostVtable, broker_routing)
-        + size_of::<Option<unsafe extern "C" fn(*mut c_void) -> u32>>();
     let terminal_end = std::mem::offset_of!(TbHostVtable, native_terminal_state)
         + size_of::<Option<unsafe extern "C" fn(*mut c_void) -> u32>>();
     let trusted_host_end = std::mem::offset_of!(TbHostVtable, trusted_host_binding)
