@@ -20,9 +20,9 @@ use async_trait::async_trait;
 use tinybus::message::Message;
 use tinybus::message::codec::MAX_FRAME_LEN;
 use tinybus::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED,
-    TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable,
-    TbModuleVtable, TbModuleVtableV1Prefix,
+    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE,
+    TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable, TbModuleVtable,
+    TbModuleVtableV1Prefix,
 };
 use tinybus::{BusName, CallContext, Connection, Error, Result, Transport, WeakConnection};
 use tokio::sync::{Mutex, mpsc, watch};
@@ -206,14 +206,7 @@ impl HostCalls {
         let query = self.0.trusted_host_binding?;
         let mut bytes = [0_u8; tinybus::name::MAX_NAME_LEN];
         let mut len = 0;
-        let code = unsafe {
-            query(
-                self.0.host_ctx,
-                bytes.as_mut_ptr(),
-                bytes.len(),
-                &mut len,
-            )
-        };
+        let code = unsafe { query(self.0.host_ctx, bytes.as_mut_ptr(), bytes.len(), &mut len) };
         if code != TB_OK || len > bytes.len() {
             return None;
         }

@@ -212,9 +212,8 @@ pub struct TbHostVtable {
     /// output pointer. Absence means no trusted migration host is available.
     /// The query is valid during admitted setup before `ready`, and must return
     /// `TB_CLOSED` after the module or pinned controller becomes inactive.
-    pub trusted_host_binding: Option<
-        unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32,
-    >,
+    pub trusted_host_binding:
+        Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32>,
 }
 
 /// Size required from an older host before reading its frozen prefix.
@@ -259,10 +258,9 @@ impl TbHostVtable {
         };
         let trusted_host_binding = if base.size as usize
             >= std::mem::offset_of!(Self, trusted_host_binding)
-                + size_of::<Option<
-                    unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32,
-                >>()
-        {
+                + size_of::<
+                    Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32>,
+                >() {
             unsafe { std::ptr::addr_of!((*host).trusted_host_binding).read() }
         } else {
             None

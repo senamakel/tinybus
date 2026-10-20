@@ -164,9 +164,21 @@ async fn captured_contexts_from_distinct_brokers_do_not_match_same_named_receive
         "fresh brokers deliberately assign the same sender name"
     );
     assert!(first.context.is_for_connection(&first.receiver.downgrade()));
-    assert!(second.context.is_for_connection(&second.receiver.downgrade()));
-    assert!(!first.context.is_for_connection(&second.receiver.downgrade()));
-    assert!(!second.context.is_for_connection(&first.receiver.downgrade()));
+    assert!(
+        second
+            .context
+            .is_for_connection(&second.receiver.downgrade())
+    );
+    assert!(
+        !first
+            .context
+            .is_for_connection(&second.receiver.downgrade())
+    );
+    assert!(
+        !second
+            .context
+            .is_for_connection(&first.receiver.downgrade())
+    );
 }
 
 struct MutatesObjectTree {

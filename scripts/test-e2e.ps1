@@ -21,6 +21,7 @@ Set-Acl -LiteralPath $private -AclObject $acl
 Copy-Item (Join-Path $examples module_clock.dll) $private
 Copy-Item (Join-Path $examples module_context.dll) $private
 Copy-Item (Join-Path $examples module_context_eager.dll) $private
+Copy-Item (Join-Path $examples module_trusted_migration.dll) $private
 Copy-Item (Join-Path $examples module_host_callback.dll) $private
 Copy-Item (Join-Path $examples module_controlled_init.dll) $private
 Copy-Item (Join-Path $examples module_terminal.dll) $private
@@ -50,6 +51,7 @@ $env:TEMP = $private
 $env:TMP = $private
 $env:TINYBUS_TEST_CONTEXT_MODULE = (Get-Item "$private/module_context.dll").FullName
 $env:TINYBUS_TEST_CONTEXT_EAGER_MODULE = (Get-Item "$private/module_context_eager.dll").FullName
+$env:TINYBUS_TEST_MIGRATION_MODULE = (Get-Item "$private/module_trusted_migration.dll").FullName
 $env:TINYBUS_TEST_CONTROLLED_INIT_MODULE = (Get-Item "$private/module_controlled_init.dll").FullName
 $env:TINYBUS_TEST_TERMINAL_MODULE = (Get-Item "$private/module_terminal.dll").FullName
 $env:TINYBUS_TEST_HOST_CALLBACK_MODULE = (Get-Item "$private/module_host_callback.dll").FullName

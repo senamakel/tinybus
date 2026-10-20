@@ -2469,11 +2469,10 @@ async fn an_eager_cdylib_authenticates_after_its_worker_runs_before_admission() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires TINYBUS_TEST_CONTEXT_EAGER_MODULE to point at the built cdylib"]
+#[ignore = "requires TINYBUS_TEST_MIGRATION_MODULE to point at the built cdylib"]
 async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registration() {
     let artifact = PathBuf::from(
-        std::env::var_os("TINYBUS_TEST_CONTEXT_EAGER_MODULE")
-            .expect("TINYBUS_TEST_CONTEXT_EAGER_MODULE"),
+        std::env::var_os("TINYBUS_TEST_MIGRATION_MODULE").expect("TINYBUS_TEST_MIGRATION_MODULE"),
     );
     let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
     let (_dir, artifact) = staged_module(&artifact, &hash);
@@ -2487,16 +2486,18 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
         .await
         .unwrap();
     let modules = ModuleHost::new(broker);
-    let info = modules
-        .load_file_with_config(artifact, serde_json::json!({"require_trusted_host": true}))
-        .unwrap();
+    let info = modules.load_file(artifact).unwrap();
 
     modules
         .ensure_ready(info.manifest.bus_name.as_str())
         .await
         .expect("compiled migration setup must receive the selected controller binding");
     let proxy = controller
-        .proxy("org.example.Context", "/context", "org.example.Context")
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/migration",
+            "org.example.TrustedMigration",
+        )
         .unwrap();
     let schema: serde_json::Value = proxy.call_confidential("Schema", ()).await.unwrap();
     assert_eq!(schema["required"], serde_json::json!(["id"]));

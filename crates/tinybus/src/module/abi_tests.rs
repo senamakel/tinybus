@@ -226,15 +226,16 @@ fn trusted_host_tail_requires_its_complete_field_and_preserves_older_tails() {
     let terminal_end = std::mem::offset_of!(TbHostVtable, native_terminal_state)
         + size_of::<Option<unsafe extern "C" fn(*mut c_void) -> u32>>();
     let trusted_host_end = std::mem::offset_of!(TbHostVtable, trusted_host_binding)
-        + size_of::<Option<
-            unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32,
-        >>();
+        + size_of::<Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32>>();
     for size in terminal_end..=trusted_host_end {
-        let layout =
-            std::alloc::Layout::from_size_align(size, align_of::<TbHostVtable>()).unwrap();
+        let layout = std::alloc::Layout::from_size_align(size, align_of::<TbHostVtable>()).unwrap();
         let storage = unsafe { std::alloc::alloc_zeroed(layout) };
         assert!(!storage.is_null());
-        unsafe { storage.cast::<FrozenHostPrefix>().write(frozen_prefix(size)) };
+        unsafe {
+            storage
+                .cast::<FrozenHostPrefix>()
+                .write(frozen_prefix(size))
+        };
         unsafe {
             storage
                 .add(std::mem::offset_of!(TbHostVtable, broker_routing))
@@ -267,14 +268,17 @@ fn trusted_host_tail_requires_its_complete_field_and_preserves_older_tails() {
         if let Some(query) = normalized.trusted_host_binding {
             let mut bytes = [0; 8];
             let mut len = usize::MAX;
-            assert_eq!(unsafe {
-                query(
-                    normalized.host_ctx,
-                    bytes.as_mut_ptr(),
-                    bytes.len(),
-                    &mut len,
-                )
-            }, TB_OK);
+            assert_eq!(
+                unsafe {
+                    query(
+                        normalized.host_ctx,
+                        bytes.as_mut_ptr(),
+                        bytes.len(),
+                        &mut len,
+                    )
+                },
+                TB_OK
+            );
             assert_eq!(&bytes[..len], b":1.42");
         }
     }

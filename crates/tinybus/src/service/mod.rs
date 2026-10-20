@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use crate::error::Result;
 use crate::name::{BusName, InterfaceName, MemberName};
-use crate::{connection::ConnectionOrigin, WeakConnection};
+use crate::{WeakConnection, connection::ConnectionOrigin};
 
 pub use crate::service::tree::ObjectTree;
 
@@ -90,10 +90,7 @@ impl CallContext {
             .is_some_and(|origin| connection.matches_origin(origin))
     }
 
-    pub(crate) fn brokered(
-        sender: Option<&BusName>,
-        confidential: bool,
-    ) -> Self {
+    pub(crate) fn brokered(sender: Option<&BusName>, confidential: bool) -> Self {
         Self::brokered_with_origin(sender, confidential, None)
     }
 
