@@ -2479,12 +2479,16 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
 
     let broker = Broker::new_restricted_module_control();
     let (broker_transport, controller_transport) = MemoryTransport::pair();
-    broker
+    let selected_controller = broker
         .attach_module_controller(Arc::new(broker_transport))
         .unwrap();
     let controller = Connection::connect(Box::new(controller_transport))
         .await
         .unwrap();
+    assert_eq!(
+        controller.unique_name().as_ref(),
+        Some(&selected_controller)
+    );
     let modules = ModuleHost::new(broker);
     let info = modules.load_file(artifact).unwrap();
 

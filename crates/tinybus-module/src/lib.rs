@@ -20,9 +20,8 @@ use async_trait::async_trait;
 use tinybus::message::Message;
 use tinybus::message::codec::MAX_FRAME_LEN;
 use tinybus::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE,
-    TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable, TbModuleVtable,
-    TbModuleVtableV1Prefix,
+    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
+    TB_TIMEOUT, TbHostVtable, TbModuleVtable, TbModuleVtableV1Prefix,
 };
 use tinybus::{BusName, CallContext, Connection, Error, Result, Transport, WeakConnection};
 use tokio::sync::{Mutex, mpsc, watch};
