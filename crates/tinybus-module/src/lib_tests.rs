@@ -452,8 +452,12 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         .unwrap()
         .clone()
         .expect("authorization probe retained an actual routed context");
-    let shutdown_code = unsafe { (out.shutdown)(out.module_ctx, 1000) };
-    eprintln!("contextual module shutdown returned {shutdown_code}");
+    let shutdown = out.shutdown;
+    let context = out.module_ctx as usize;
+    let shutdown_code =
+        tokio::task::spawn_blocking(move || unsafe { shutdown(context as *mut c_void, 1000) })
+            .await
+            .unwrap();
     assert_eq!(shutdown_code, TB_OK, "contextual module shutdown code");
     assert!(
         !trusted_host.authorizes(&captured),
@@ -490,7 +494,14 @@ async fn contextual_static_export_accepts_an_old_host_without_the_optional_bindi
         send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
         serde_json::json!(false)
     );
-    assert_eq!(unsafe { (out.shutdown)(out.module_ctx, 1000) }, TB_OK);
+    let shutdown = out.shutdown;
+    let context = out.module_ctx as usize;
+    assert_eq!(
+        tokio::task::spawn_blocking(move || unsafe { shutdown(context as *mut c_void, 1000) })
+            .await
+            .unwrap(),
+        TB_OK
+    );
 }
 
 async fn capture_foreign_confidential_context() -> (
