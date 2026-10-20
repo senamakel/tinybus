@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.8
+
+### Fixed
+
+- Keep the TinyBus host crate compatible with its declared Rust 1.85 MSRV by
+  using stable control-flow and remainder operations.
+
 ## 0.3.7
 
 ### Added
