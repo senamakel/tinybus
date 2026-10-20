@@ -382,6 +382,7 @@ async fn trusted_host_binding_parser_fails_closed_for_missing_or_malformed_callb
     }
 }
 
+#[cfg(feature = "static-link")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() {
     let _host_state = host_state_guard().await;
@@ -511,6 +512,7 @@ async fn contextual_static_export_accepts_an_old_host_without_the_optional_bindi
     );
 }
 
+#[cfg(feature = "static-link")]
 async fn capture_foreign_confidential_context() -> (
     CallContext,
     Connection,
