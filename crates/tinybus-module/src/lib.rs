@@ -1030,12 +1030,9 @@ where
             host: HostCalls(compatible_host),
             peer,
         });
-    let setup = move |connection, config| {
-        setup(ModuleSetupContext::new(connection, grant.clone()), config)
-    };
-    unsafe {
-        start_reconfigurable_module(host, out, worker_threads, detach_on_panic, setup)
-    }
+    let setup =
+        move |connection, config| setup(ModuleSetupContext::new(connection, grant.clone()), config);
+    unsafe { start_reconfigurable_module(host, out, worker_threads, detach_on_panic, setup) }
 }
 
 /// Linked counterpart to [`start_reconfigurable_module_with_context`].
@@ -1067,12 +1064,9 @@ where
             host: HostCalls(compatible_host),
             peer,
         });
-    let setup = move |connection, config| {
-        setup(ModuleSetupContext::new(connection, grant.clone()), config)
-    };
-    unsafe {
-        start_linked_reconfigurable_module(host, out, worker_threads, detach_on_panic, setup)
-    }
+    let setup =
+        move |connection, config| setup(ModuleSetupContext::new(connection, grant.clone()), config);
+    unsafe { start_linked_reconfigurable_module(host, out, worker_threads, detach_on_panic, setup) }
 }
 
 unsafe fn start_reconfigurable_module_mode<C, F, Fut>(

@@ -2477,7 +2477,10 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
     let controller = Connection::connect(Box::new(controller_transport))
         .await
         .unwrap();
-    assert_eq!(controller.unique_name().as_ref(), Some(&selected_controller));
+    assert_eq!(
+        controller.unique_name().as_ref(),
+        Some(&selected_controller)
+    );
 
     let modules = ModuleHost::new(broker.clone());
     let info = modules.load_file(artifact).unwrap();
@@ -2497,10 +2500,7 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
         proxy.call::<String>("Configuration", ()).await.unwrap(),
         "initial"
     );
-    let initial: serde_json::Value = proxy
-        .call_confidential("TrustedContext", ())
-        .await
-        .unwrap();
+    let initial: serde_json::Value = proxy.call_confidential("TrustedContext", ()).await.unwrap();
     assert_eq!(initial["authorized"], true);
     assert_eq!(initial["previousAuthorized"], false);
 
@@ -2515,16 +2515,16 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
         proxy.call::<String>("Configuration", ()).await.unwrap(),
         "reconfigured"
     );
-    let after_reinitialize: serde_json::Value = proxy
-        .call_confidential("TrustedContext", ())
-        .await
-        .unwrap();
+    let after_reinitialize: serde_json::Value =
+        proxy.call_confidential("TrustedContext", ()).await.unwrap();
     assert_eq!(after_reinitialize["authorized"], true);
 
     controller.close().await.unwrap();
     let (other_server, other_transport) = MemoryTransport::pair();
     broker.attach(Arc::new(other_server));
-    let other = Connection::connect(Box::new(other_transport)).await.unwrap();
+    let other = Connection::connect(Box::new(other_transport))
+        .await
+        .unwrap();
     let other_proxy = other
         .proxy(
             info.manifest.bus_name.as_str(),
