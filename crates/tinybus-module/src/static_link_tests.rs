@@ -56,26 +56,29 @@ mod configured {
 }
 
 mod optional {
+    #![deny(missing_docs)]
+
     #[derive(serde::Deserialize)]
     struct Config {}
 
-    async fn setup(_: tinybus::Connection, _: Config) -> tinybus::Result<()> {
-        Ok(())
-    }
-
     fn setup_factory() -> impl Fn(
-        tinybus::Connection,
+        crate::ModuleSetupContext,
         Config,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = tinybus::Result<()>> + Send>,
-    > + Clone
-    + Send
+    > + Send
     + Sync {
-        |connection, config| Box::pin(setup(connection, config))
+        |context, _config| {
+            Box::pin(async move {
+                let _connection = context.connection();
+                let _trusted_host = context.trusted_host();
+                Ok(())
+            })
+        }
     }
 
     crate::module_export_optional_static! {
-        setup_factory = setup_factory,
+        setup_factory_with_context = setup_factory,
         config = Config,
         worker_threads = 1,
         provides = ["ai.tinyhumans.tinybus.OptionalStatic"],
