@@ -515,6 +515,7 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         .expect("configured factory supports reinit");
     let config = b"{}";
     let reinitialize_code = unsafe { reinitialize(out.module_ctx, config.as_ptr(), config.len()) };
+    eprintln!("context factory reinitialization returned {reinitialize_code}");
     assert_eq!(
         reinitialize_code, TB_OK,
         "reinitialize code {reinitialize_code}"
