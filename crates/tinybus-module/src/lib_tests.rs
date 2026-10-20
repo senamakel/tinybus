@@ -1,4 +1,6 @@
 use super::*;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize};
 use std::sync::{OnceLock, mpsc::SyncSender};
 
@@ -245,6 +247,49 @@ mod dynamic_context_export {
     }
 }
 
+#[cfg(feature = "static-link")]
+static CONTEXT_FACTORY_CREATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "static-link")]
+static CONTEXT_FACTORY_SETUPS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "static-link")]
+#[derive(serde::Deserialize)]
+struct ContextFactoryConfig {}
+
+#[cfg(feature = "static-link")]
+type ContextFactorySetupFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+#[cfg(feature = "static-link")]
+fn setup_context_factory()
+-> impl Fn(ModuleSetupContext, ContextFactoryConfig) -> ContextFactorySetupFuture + Send + Sync + 'static
+{
+    CONTEXT_FACTORY_CREATIONS.fetch_add(1, Ordering::SeqCst);
+    let setups = Arc::new(AtomicUsize::new(0));
+    move |context, _config| {
+        let setups = Arc::clone(&setups);
+        Box::pin(async move {
+            setups.fetch_add(1, Ordering::SeqCst);
+            CONTEXT_FACTORY_SETUPS.fetch_add(1, Ordering::SeqCst);
+            setup_with_context(context).await
+        })
+    }
+}
+
+#[cfg(feature = "static-link")]
+mod dynamic_context_factory_export {
+    crate::module_export! {
+        setup_factory_with_context = super::setup_context_factory,
+        config = super::ContextFactoryConfig,
+        worker_threads = 1,
+        provides = ["org.example.DynamicContextFactory"],
+        methods = ["Authorize"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
 #[allow(dead_code)]
 mod static_context_export {
     crate::module_export_static! {
@@ -471,6 +516,63 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         !trusted_host.authorizes(&captured),
         "the cloned capability cannot outlive its module connection"
     );
+}
+
+#[cfg(feature = "static-link")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contextual_factory_dynamic_export_keeps_state_and_refreshes_setup_context() {
+    let _host_state = host_state_guard().await;
+    let before_factory = CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst);
+    let before_setups = CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst);
+    let (out, outgoing) = start_context_export(
+        dynamic_context_factory_export::tinybus_module_init_v1,
+        true,
+        true,
+    );
+    let receiver = CAPTURED_MODULE_NAME
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("factory setup receives its attachment connection");
+    assert_eq!(
+        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
+        1,
+        "the context factory runs once for this ABI instance"
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
+        1
+    );
+    assert_eq!(
+        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
+        serde_json::json!(true)
+    );
+
+    let reinitialize = out
+        .reinitialize
+        .expect("configured factory supports reinit");
+    let config = b"{}";
+    assert_eq!(
+        unsafe { reinitialize(out.module_ctx, config.as_ptr(), config.len()) },
+        TB_OK
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
+        1,
+        "reinitialization reuses the same stateful factory callback"
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
+        2
+    );
+    assert_eq!(
+        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
+        serde_json::json!(true),
+        "reinitialization receives a fresh context for the active connection"
+    );
+
+    assert_eq!(unsafe { (out.shutdown)(out.module_ctx, 1000) }, TB_OK);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
