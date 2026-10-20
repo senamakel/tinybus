@@ -137,12 +137,11 @@ async fn setup_with_context(context: ModuleSetupContext) -> Result<()> {
         .get_or_init(|| StdMutex::new(None))
         .lock()
         .expect("captured module name lock") = context.connection().unique_name();
+    let path: tinybus::ObjectPath = "/authorization".parse().unwrap();
+    context.connection().unserve(&path).await;
     context
         .connection()
-        .serve_at(
-            "/authorization".parse().unwrap(),
-            ContextAuthorizationProbe { trusted_host },
-        )
+        .serve_at(path, ContextAuthorizationProbe { trusted_host })
         .await?;
     Ok(())
 }
