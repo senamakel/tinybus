@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7
+
+### Added
+
+- Support configured module setup callbacks that receive an SDK-issued
+  `ModuleSetupContext` on initial setup and reinitialization.
+
 ## 0.3.6
 
 ### Added
