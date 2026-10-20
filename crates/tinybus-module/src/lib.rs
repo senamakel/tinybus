@@ -1276,7 +1276,10 @@ where
 /// partial-failure cleanup until it returns and must launch independent workers
 /// only from setup after hook registration. See [`RuntimeHooks`] for controller
 /// obligations. Hooks are registered once and never replaced by reinitialization.
-/// Existing `setup = function` and `setup_factory` callbacks retain their behavior.
+/// `setup_with_context = function, config = Config` opts into configured setup
+/// with an SDK-issued [`ModuleSetupContext`] on initial setup and reinitialization.
+/// Existing plain `setup_with_context = function`, `setup = function`, and
+/// `setup_factory` callbacks retain their behavior.
 #[macro_export]
 macro_rules! module_export {
     (@linked $($declaration:tt)*) => {
