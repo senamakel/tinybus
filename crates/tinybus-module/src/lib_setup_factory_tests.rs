@@ -360,7 +360,7 @@ mod context_factory_export {
                 context
                     .connection()
                     .serve_at(
-                        "/context-factory".parse()?,
+                        "/context_factory".parse()?,
                         Service {
                             mode: config.restricted,
                             generation,
@@ -445,7 +445,7 @@ async fn contextual_factory_instance(
     let proxy = controller
         .proxy(
             "org.example.ContextFactory",
-            "/context-factory",
+            "/context_factory",
             "org.example.ContextFactory",
         )
         .unwrap();
@@ -496,7 +496,7 @@ async fn contextual_factory_is_per_instance_authorized_confidential_and_reinit_s
     let outsider_proxy = outsider
         .proxy(
             "org.example.ContextFactory",
-            "/context-factory",
+            "/context_factory",
             "org.example.ContextFactory",
         )
         .unwrap();
