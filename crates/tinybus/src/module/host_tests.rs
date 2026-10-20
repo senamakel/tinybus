@@ -2463,9 +2463,9 @@ async fn a_real_cdylib_authenticates_incoming_calls_and_its_host_callback() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires TINYBUS_TEST_CONTEXT_MODULE to point at the built cdylib"]
+#[ignore = "requires TINYBUS_TEST_CONFIGURED_CONTEXT_MODULE to point at the built cdylib"]
 async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
-    let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_CONTEXT_MODULE").unwrap());
+    let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_CONFIGURED_CONTEXT_MODULE").unwrap());
     let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
     let (_dir, artifact) = staged_module(&artifact, &hash);
 
