@@ -998,6 +998,83 @@ where
     }
 }
 
+/// Initialize a configured module whose setup receives the host-bound context.
+///
+/// Reinitialization reuses the original host grant while constructing a fresh
+/// context for the active connection and each new configuration.
+///
+/// # Safety
+/// The caller must uphold the host, output, configuration, and routing contracts
+/// of [`start_module`].
+#[doc(hidden)]
+pub unsafe fn start_reconfigurable_module_with_context<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(ModuleSetupContext, C) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let Some((_, compatible_host)) =
+        (unsafe { validate_start_arguments(host, out, worker_threads) })
+    else {
+        return TB_BAD_ARGUMENT;
+    };
+    let grant = HostCalls(compatible_host)
+        .trusted_host_peer()
+        .map(|peer| TrustedHostGrant {
+            host: HostCalls(compatible_host),
+            peer,
+        });
+    let setup = move |connection, config| {
+        setup(ModuleSetupContext::new(connection, grant.clone()), config)
+    };
+    unsafe {
+        start_reconfigurable_module(host, out, worker_threads, detach_on_panic, setup)
+    }
+}
+
+/// Linked counterpart to [`start_reconfigurable_module_with_context`].
+///
+/// # Safety
+/// The caller must uphold the host, output, configuration, and routing contracts
+/// of [`start_module`].
+#[doc(hidden)]
+pub unsafe fn start_linked_reconfigurable_module_with_context<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    setup: F,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(ModuleSetupContext, C) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let Some((_, compatible_host)) =
+        (unsafe { validate_start_arguments(host, out, worker_threads) })
+    else {
+        return TB_BAD_ARGUMENT;
+    };
+    let grant = HostCalls(compatible_host)
+        .trusted_host_peer()
+        .map(|peer| TrustedHostGrant {
+            host: HostCalls(compatible_host),
+            peer,
+        });
+    let setup = move |connection, config| {
+        setup(ModuleSetupContext::new(connection, grant.clone()), config)
+    };
+    unsafe {
+        start_linked_reconfigurable_module(host, out, worker_threads, detach_on_panic, setup)
+    }
+}
+
 unsafe fn start_reconfigurable_module_mode<C, F, Fut>(
     host: *const TbHostVtable,
     out: *mut TbModuleVtable,
@@ -1404,6 +1481,19 @@ macro_rules! module_export {
             $($rest)*
         }
     };
+    (
+        setup_with_context = $setup:path,
+        config = $config:ty,
+        $($rest:tt)*
+    ) => {
+        $crate::module_export! {
+            @configured export = {#[unsafe(no_mangle)]},
+            start = $crate::start_reconfigurable_module_with_context,
+            setup = $setup,
+            config = $config,
+            $($rest)*
+        }
+    };
     (setup_with_context = $setup:path, $($rest:tt)*) => {
         $crate::module_export! {
             @plain export = {#[unsafe(no_mangle)]},
@@ -1451,6 +1541,16 @@ macro_rules! module_export_static {
         $crate::module_export! {
             @configured export = {},
             start = $crate::start_linked_reconfigurable_module,
+            setup = $setup,
+            config = $config,
+            $($rest)*
+        }
+        $crate::module_export! { @linked $($rest)* }
+    };
+    (setup_with_context = $setup:path, config = $config:ty, $($rest:tt)*) => {
+        $crate::module_export! {
+            @configured export = {},
+            start = $crate::start_linked_reconfigurable_module_with_context,
             setup = $setup,
             config = $config,
             $($rest)*
