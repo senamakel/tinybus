@@ -149,6 +149,11 @@ crate-type = ["cdylib"]
 required-features = ["modules"]
 
 [[example]]
+name = "module_context_factory"
+crate-type = ["cdylib"]
+required-features = ["modules"]
+
+[[example]]
 name = "module_context_eager"
 crate-type = ["cdylib"]
 required-features = ["modules"]

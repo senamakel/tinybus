@@ -3,5 +3,6 @@
 /proof-workspaces/msrv-185-client/target/
 /crates/tinybus/.tmp*/
 /worktrees
+__pycache__/
 **/*.rs.bk
 .env

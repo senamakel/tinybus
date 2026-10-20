@@ -1,4 +1,8 @@
 use super::*;
+#[cfg(feature = "static-link")]
+use std::future::Future;
+#[cfg(feature = "static-link")]
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize};
 use std::sync::{OnceLock, mpsc::SyncSender};
 
@@ -234,7 +238,8 @@ impl tinybus::service::Interface for ForeignContextCapture {
 #[cfg(feature = "static-link")]
 mod dynamic_context_export {
     crate::module_export! {
-        setup_with_context = super::setup_with_context,
+        setup_factory_with_context = super::setup_context_factory,
+        config = super::ContextFactoryConfig,
         worker_threads = 1,
         provides = ["org.example.DynamicContext"],
         methods = ["Authorize"],
@@ -242,6 +247,42 @@ mod dynamic_context_export {
         requires = [],
         optional = [],
         lazy = false,
+    }
+}
+
+#[cfg(feature = "static-link")]
+unsafe extern "C" fn plain_context_setup_entry(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+) -> i32 {
+    unsafe { start_module_with_context(host, out, 1, true, setup_with_context) }
+}
+
+#[cfg(feature = "static-link")]
+static CONTEXT_FACTORY_CREATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "static-link")]
+static CONTEXT_FACTORY_SETUPS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "static-link")]
+#[derive(serde::Deserialize)]
+struct ContextFactoryConfig {}
+
+#[cfg(feature = "static-link")]
+type ContextFactorySetupFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+#[cfg(feature = "static-link")]
+fn setup_context_factory()
+-> impl Fn(ModuleSetupContext, ContextFactoryConfig) -> ContextFactorySetupFuture + Send + Sync + 'static
+{
+    CONTEXT_FACTORY_CREATIONS.fetch_add(1, Ordering::SeqCst);
+    let setups = Arc::new(AtomicUsize::new(0));
+    move |context, _config| {
+        let setups = Arc::clone(&setups);
+        Box::pin(async move {
+            setups.fetch_add(1, Ordering::SeqCst);
+            CONTEXT_FACTORY_SETUPS.fetch_add(1, Ordering::SeqCst);
+            setup_with_context(context).await
+        })
     }
 }
 
@@ -386,6 +427,8 @@ async fn trusted_host_binding_parser_fails_closed_for_missing_or_malformed_callb
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() {
     let _host_state = host_state_guard().await;
+    let before_factory = CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst);
+    let before_setups = CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst);
     TRUSTED_HOST_REPLY.store(0, Ordering::Release);
     *CAPTURED_TRUSTED_HOST
         .get_or_init(|| StdMutex::new(None))
@@ -399,6 +442,15 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
     let init: unsafe extern "C" fn(*const TbHostVtable, *mut TbModuleVtable) -> i32 =
         dynamic_context_export::tinybus_module_init_v1;
     let (out, outgoing) = start_context_export(init, true, true);
+    assert_eq!(
+        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
+        1,
+        "the context factory runs once for this ABI instance"
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
+        1
+    );
     let receiver = CAPTURED_MODULE_NAME
         .get_or_init(|| StdMutex::new(None))
         .lock()
@@ -470,6 +522,32 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
     assert!(
         !trusted_host.authorizes(&captured),
         "the cloned capability cannot outlive its module connection"
+    );
+}
+
+#[cfg(feature = "static-link")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_context_setup_entry_receives_the_selected_controller_binding() {
+    let _host_state = host_state_guard().await;
+    TRUSTED_HOST_REPLY.store(0, Ordering::Release);
+    let (out, outgoing) = start_context_export(plain_context_setup_entry, true, true);
+    let receiver = CAPTURED_MODULE_NAME
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("plain context setup receives its attachment connection");
+    assert_eq!(
+        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
+        serde_json::json!(true)
+    );
+    let shutdown = out.shutdown;
+    let context = out.module_ctx as usize;
+    assert_eq!(
+        tokio::task::spawn_blocking(move || unsafe { shutdown(context as *mut c_void, 1000) })
+            .await
+            .unwrap(),
+        TB_OK
     );
 }
 

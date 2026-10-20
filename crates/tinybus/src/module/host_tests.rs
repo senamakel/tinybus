@@ -2550,6 +2550,143 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
     .expect("the previously selected controller's binding is revoked on disconnect");
 }
 
+async fn contextual_factory_cdylib_instance(
+    artifact: &Path,
+    restricted: bool,
+) -> (ModuleHost, Broker, Connection, crate::Proxy, String) {
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    let selected_controller = broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert_eq!(
+        controller.unique_name().as_ref(),
+        Some(&selected_controller)
+    );
+
+    let modules = ModuleHost::new(broker.clone());
+    let info = modules
+        .load_file_with_config(artifact, serde_json::json!({"restricted":restricted}))
+        .unwrap();
+    modules
+        .ensure_ready(info.manifest.bus_name.as_str())
+        .await
+        .expect("compiled context factory must receive the selected controller binding");
+    let proxy = controller
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/context_factory",
+            "org.example.ContextFactory",
+        )
+        .unwrap();
+    (
+        modules,
+        broker,
+        controller,
+        proxy,
+        info.manifest.module.name,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBUS_TEST_CONTEXT_FACTORY_MODULE to point at the built cdylib"]
+async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_context() {
+    let artifact = PathBuf::from(
+        std::env::var_os("TINYBUS_TEST_CONTEXT_FACTORY_MODULE")
+            .expect("TINYBUS_TEST_CONTEXT_FACTORY_MODULE"),
+    );
+    let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+    let (_staging, staged) = staged_module(&artifact, &hash);
+
+    let (
+        (first, broker, controller, first_proxy, module_name),
+        (_second, _, _, second_proxy, second_module_name),
+    ) = tokio::join!(
+        contextual_factory_cdylib_instance(&staged, true),
+        contextual_factory_cdylib_instance(&staged, false),
+    );
+    assert_eq!(module_name, second_module_name);
+    assert!(first_proxy.attestation().await.unwrap().is_some());
+    assert!(
+        first_proxy
+            .call::<serde_json::Value>("Inspect", ())
+            .await
+            .is_err()
+    );
+    let first_initial: serde_json::Value =
+        first_proxy.call_confidential("Inspect", ()).await.unwrap();
+    assert_eq!(first_initial["restricted"], true);
+    assert_eq!(first_initial["generation"], 1);
+    assert!(first_initial["factory_id"].as_u64().is_some());
+
+    let second_initial: serde_json::Value =
+        second_proxy.call_confidential("Inspect", ()).await.unwrap();
+    assert_eq!(second_initial["restricted"], false);
+    assert_eq!(second_initial["generation"], 1);
+
+    let (outsider_server, outsider_client) = MemoryTransport::pair();
+    broker.attach(Arc::new(outsider_server));
+    let outsider = Connection::connect(Box::new(outsider_client))
+        .await
+        .unwrap();
+    let outsider_proxy = outsider
+        .proxy(
+            first_proxy.destination().as_str(),
+            "/context_factory",
+            "org.example.ContextFactory",
+        )
+        .unwrap();
+    let denied = outsider_proxy
+        .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
+        .await
+        .unwrap_err();
+    assert!(
+        denied
+            .to_string()
+            .contains("factory context authority unavailable")
+    );
+    let selected_malformed = first_proxy
+        .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
+        .await
+        .unwrap_err();
+    assert!(
+        selected_malformed
+            .to_string()
+            .contains("expected no arguments")
+    );
+
+    first
+        .reinitialize(&module_name, serde_json::json!({"restricted":true}))
+        .await
+        .expect("same-mode reinitialization should use a fresh trusted context");
+    let after_reinitialize: serde_json::Value =
+        first_proxy.call_confidential("Inspect", ()).await.unwrap();
+    assert_eq!(after_reinitialize["restricted"], true);
+    assert_eq!(after_reinitialize["generation"], 2);
+    assert_eq!(
+        after_reinitialize["factory_id"],
+        first_initial["factory_id"]
+    );
+
+    assert!(
+        first
+            .reinitialize(&module_name, serde_json::json!({"restricted":false}))
+            .await
+            .is_err()
+    );
+    let after_refusal: serde_json::Value =
+        first_proxy.call_confidential("Inspect", ()).await.unwrap();
+    assert_eq!(after_refusal, after_reinitialize);
+    let second_still_isolated: serde_json::Value =
+        second_proxy.call_confidential("Inspect", ()).await.unwrap();
+    assert_eq!(second_still_isolated["restricted"], false);
+    assert_eq!(second_still_isolated["generation"], 1);
+    controller.close().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires TINYBUS_TEST_CONTEXT_EAGER_MODULE to point at the built cdylib"]
 async fn an_eager_cdylib_authenticates_after_its_worker_runs_before_admission() {

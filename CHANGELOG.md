@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.9
+
+### Added
+
+- Add configured `setup_factory_with_context` exports that retain per-instance
+  state and receive a fresh loader-issued setup context for each initialization.
+
 ## 0.3.8
 
 ### Fixed
