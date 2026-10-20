@@ -56,6 +56,38 @@ mod configured {
 }
 
 mod optional {
+    #[derive(serde::Deserialize)]
+    struct Config {}
+
+    async fn setup(_: tinybus::Connection, _: Config) -> tinybus::Result<()> {
+        Ok(())
+    }
+
+    fn setup_factory() -> impl Fn(
+        tinybus::Connection,
+        Config,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = tinybus::Result<()>> + Send>,
+    > + Clone
+    + Send
+    + Sync {
+        |connection, config| Box::pin(setup(connection, config))
+    }
+
+    crate::module_export_optional_static! {
+        setup_factory = setup_factory,
+        config = Config,
+        worker_threads = 1,
+        provides = ["ai.tinyhumans.tinybus.OptionalStatic"],
+        methods = [],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
+mod configured_context {
     use crate::ModuleSetupContext;
 
     #[derive(serde::Deserialize)]
@@ -65,11 +97,11 @@ mod optional {
         Ok(())
     }
 
-    crate::module_export_optional_static! {
+    crate::module_export_static! {
         setup_with_context = setup,
         config = Config,
         worker_threads = 1,
-        provides = ["ai.tinyhumans.tinybus.OptionalStatic"],
+        provides = ["ai.tinyhumans.tinybus.StaticConfiguredContext"],
         methods = [],
         signals = [],
         requires = [],
