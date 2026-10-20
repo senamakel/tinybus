@@ -248,14 +248,19 @@ mod dynamic_context_export {
     }
 }
 
+#[cfg(feature = "static-link")]
 static CONTEXT_FACTORY_CREATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "static-link")]
 static CONTEXT_FACTORY_SETUPS: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(feature = "static-link")]
 #[derive(serde::Deserialize)]
 struct ContextFactoryConfig {}
 
+#[cfg(feature = "static-link")]
 type ContextFactorySetupFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
+#[cfg(feature = "static-link")]
 fn setup_context_factory()
 -> impl Fn(ModuleSetupContext, ContextFactoryConfig) -> ContextFactorySetupFuture + Send + Sync + 'static
 {
