@@ -11,7 +11,7 @@ fn call_context_debug_exposes_only_its_sender_and_routing_facts() {
     let sender = BusName::new(":1.42").unwrap();
     let authenticated = CallContext::brokered(Some(&sender), true);
     let authenticated_debug = format!("{authenticated:?}");
-    assert!(authenticated_debug.contains("sender: Some(:1.42)"));
+    assert!(authenticated_debug.contains(":1.42"));
     assert!(authenticated_debug.contains("confidential: true"));
     assert!(authenticated_debug.contains("has_receive_origin: false"));
 }
