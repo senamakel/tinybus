@@ -71,10 +71,10 @@ impl<K, S, E> ModuleServiceSlot<K, S, E> {
             + Send,
     {
         let mut entry = self.entry.lock().await;
-        if entry.as_ref().is_some_and(|current| current.key != key)
-            && let Some(old) = entry.take()
-        {
-            let _ = (old.close)(old.service).await;
+        if entry.as_ref().is_some_and(|current| current.key != key) {
+            if let Some(old) = entry.take() {
+                let _ = (old.close)(old.service).await;
+            }
         }
 
         if entry.is_none() {
