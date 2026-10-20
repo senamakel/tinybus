@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10
+
+### Fixed
+
+- Update the locked WebPKI verifier and root store to patched versions that
+  reject certificate paths through the distrusted emSign intermediates.
+
 ## 0.3.9
 
 ### Added
