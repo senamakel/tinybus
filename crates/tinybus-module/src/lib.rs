@@ -1488,7 +1488,7 @@ macro_rules! module_export {
         /// The loader supplies the host ABI table and output storage used to
         /// start the module runtime. Applications should initialize modules
         /// through `ModuleHost`, which validates and retains the artifact.
-        pub unsafe extern "C" fn tinybus_module_init_v1(
+        pub extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
@@ -1546,7 +1546,7 @@ macro_rules! module_export {
         /// The loader supplies the host ABI table and output storage used to
         /// start the module runtime. Applications should initialize modules
         /// through `ModuleHost`, which validates and retains the artifact.
-        pub unsafe extern "C" fn tinybus_module_init_v1(
+        pub extern "C" fn tinybus_module_init_v1(
             host: *const ::tinybus::module::abi::TbHostVtable,
             out: *mut ::tinybus::module::abi::TbModuleVtable,
         ) -> i32 {
