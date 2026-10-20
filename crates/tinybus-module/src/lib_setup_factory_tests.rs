@@ -379,7 +379,7 @@ mod context_factory_export {
         }
     }
 
-    crate::module_export_optional_static! {
+    crate::module_export_static! {
         setup_factory_with_context = factory,
         config = Config,
         worker_threads = 1,

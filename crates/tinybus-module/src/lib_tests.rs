@@ -235,7 +235,7 @@ impl tinybus::service::Interface for ForeignContextCapture {
 
 #[cfg(feature = "static-link")]
 mod dynamic_context_export {
-    crate::module_export! {
+    crate::module_export_optional_static! {
         setup_factory_with_context = super::setup_context_factory,
         config = super::ContextFactoryConfig,
         worker_threads = 1,
@@ -248,19 +248,14 @@ mod dynamic_context_export {
     }
 }
 
-#[cfg(feature = "static-link")]
 static CONTEXT_FACTORY_CREATIONS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "static-link")]
 static CONTEXT_FACTORY_SETUPS: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(feature = "static-link")]
 #[derive(serde::Deserialize)]
 struct ContextFactoryConfig {}
 
-#[cfg(feature = "static-link")]
 type ContextFactorySetupFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
-#[cfg(feature = "static-link")]
 fn setup_context_factory()
 -> impl Fn(ModuleSetupContext, ContextFactoryConfig) -> ContextFactorySetupFuture + Send + Sync + 'static
 {
@@ -273,6 +268,23 @@ fn setup_context_factory()
             CONTEXT_FACTORY_SETUPS.fetch_add(1, Ordering::SeqCst);
             setup_with_context(context).await
         })
+    }
+}
+
+#[cfg(not(feature = "static-link"))]
+mod dynamic_context_factory_export {
+    #![deny(missing_docs)]
+
+    crate::module_export_optional_static! {
+        setup_factory_with_context = super::setup_context_factory,
+        config = super::ContextFactoryConfig,
+        worker_threads = 1,
+        provides = ["org.example.DynamicContextFactory"],
+        methods = ["Authorize"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
     }
 }
 
@@ -513,6 +525,38 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         !trusted_host.authorizes(&captured),
         "the cloned capability cannot outlive its module connection"
     );
+}
+
+#[cfg(not(feature = "static-link"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contextual_factory_optional_export_uses_the_dynamic_setup_path() {
+    let _host_state = host_state_guard().await;
+    let before_factory = CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst);
+    let before_setups = CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst);
+    let (out, outgoing) = start_context_export(
+        dynamic_context_factory_export::tinybus_module_init_v1,
+        true,
+        true,
+    );
+    let receiver = CAPTURED_MODULE_NAME
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("factory setup receives its attachment connection");
+    assert_eq!(
+        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
+        1
+    );
+    assert_eq!(
+        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
+        1
+    );
+    assert_eq!(
+        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
+        serde_json::json!(true)
+    );
+    assert_eq!(unsafe { (out.shutdown)(out.module_ctx, 1000) }, TB_OK);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
