@@ -189,6 +189,8 @@ class CoverageScriptPlatformTests(unittest.TestCase):
                 "--example",
                 "module_context_configured",
                 "--example",
+                "module_context_factory",
+                "--example",
                 "module_context_eager",
                 "--example",
                 "module_trusted_migration",
