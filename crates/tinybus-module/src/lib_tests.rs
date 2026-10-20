@@ -453,6 +453,7 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         .clone()
         .expect("authorization probe retained an actual routed context");
     let shutdown_code = unsafe { (out.shutdown)(out.module_ctx, 1000) };
+    eprintln!("contextual module shutdown returned {shutdown_code}");
     assert_eq!(shutdown_code, TB_OK, "contextual module shutdown code");
     assert!(
         !trusted_host.authorizes(&captured),
