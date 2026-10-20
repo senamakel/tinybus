@@ -1088,7 +1088,7 @@ where
             out,
             worker_threads,
             detach_on_panic,
-            || setup,
+            |_| setup,
             linked,
         )
     }
@@ -1120,7 +1120,7 @@ where
             out,
             worker_threads,
             detach_on_panic,
-            || shared_factory_setup(factory),
+            |_| shared_factory_setup(factory),
             false,
         )
     }
@@ -1152,7 +1152,76 @@ where
             out,
             worker_threads,
             detach_on_panic,
-            || shared_factory_setup(factory),
+            |_| shared_factory_setup(factory),
+            true,
+        )
+    }
+}
+
+/// Initialize one configured instance with per-instance state and a fresh
+/// loader-bound setup context for initial setup and every reinitialization.
+///
+/// The host ABI is validated and the initial configuration is parsed before
+/// `factory` runs. The returned callback is shared across reinitialization;
+/// its own `Clone` behavior cannot reset captured state. Each invocation gets
+/// a new [`ModuleSetupContext`] for the active connection and the immutable
+/// trusted-host grant selected for this module instance.
+///
+/// # Safety
+/// Non-null pointers must address readable host ABI prefixes and writable
+/// output storage matching their declared sizes. Host callbacks and context
+/// must remain valid until runtime shutdown. Null pointers and invalid sizes
+/// or worker counts are rejected before configuration or factory evaluation.
+#[doc(hidden)]
+pub unsafe fn start_reconfigurable_module_with_context_factory<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    factory: impl FnOnce() -> F,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(ModuleSetupContext, C) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    unsafe {
+        start_reconfigurable_module_factory_mode(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            |host_calls| shared_context_factory_setup(factory, host_calls),
+            false,
+        )
+    }
+}
+
+/// Linked counterpart to [`start_reconfigurable_module_with_context_factory`].
+///
+/// # Safety
+/// The caller must uphold the host, output, configuration, and routing
+/// contracts of [`start_module`].
+#[doc(hidden)]
+pub unsafe fn start_linked_reconfigurable_module_with_context_factory<C, F, Fut>(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+    worker_threads: usize,
+    detach_on_panic: bool,
+    factory: impl FnOnce() -> F,
+) -> i32
+where
+    C: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(ModuleSetupContext, C) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    unsafe {
+        start_reconfigurable_module_factory_mode(
+            host,
+            out,
+            worker_threads,
+            detach_on_panic,
+            |host_calls| shared_context_factory_setup(factory, host_calls),
             true,
         )
     }
@@ -1170,12 +1239,31 @@ where
     move |connection, config| setup(connection, config)
 }
 
+fn shared_context_factory_setup<C, F, Fut>(
+    factory: impl FnOnce() -> F,
+    host: HostCalls,
+) -> impl Fn(Connection, C) -> Fut + Clone + Send + Sync + 'static
+where
+    F: Fn(ModuleSetupContext, C) -> Fut + Send + Sync + 'static,
+{
+    let trusted_host = host
+        .trusted_host_peer()
+        .map(|peer| TrustedHostGrant { host, peer });
+    let setup = Arc::new(factory());
+    move |connection, config| {
+        setup(
+            ModuleSetupContext::new(connection, trusted_host.clone()),
+            config,
+        )
+    }
+}
+
 unsafe fn start_reconfigurable_module_factory_mode<C, F, Fut>(
     host: *const TbHostVtable,
     out: *mut TbModuleVtable,
     worker_threads: usize,
     detach_on_panic: bool,
-    factory: impl FnOnce() -> F,
+    factory: impl FnOnce(HostCalls) -> F,
     linked: bool,
 ) -> i32
 where
@@ -1188,7 +1276,8 @@ where
     else {
         return TB_BAD_ARGUMENT;
     };
-    let caller_owner = (!linked).then(|| ExecutionOwner::new(HostCalls(compatible_host)));
+    let host_calls = HostCalls(compatible_host);
+    let caller_owner = (!linked).then(|| ExecutionOwner::new(host_calls));
     if caller_owner.is_some() {
         ExecutionOwner::install_panic_hook();
     }
@@ -1199,7 +1288,7 @@ where
         Ok(Err(code)) => return code,
         Err(_) => return TB_PANICKED,
     };
-    let setup = match catch_unwind(AssertUnwindSafe(factory)) {
+    let setup = match catch_unwind(AssertUnwindSafe(|| factory(host_calls))) {
         Ok(setup) => setup,
         Err(_) => return TB_PANICKED,
     };
@@ -1268,6 +1357,11 @@ where
 /// state is reused for that instance's reinitializations, allowing admission to
 /// remain bound without process-global state. Separate instances receive fresh
 /// state. A factory panic returns `TB_PANICKED` without unwinding into the host.
+/// `setup_factory_with_context = factory, config = Config` combines that
+/// per-instance state with a fresh SDK-issued [`ModuleSetupContext`] for every
+/// setup call. Its factory runs only after host validation and initial config
+/// parsing; the selected-host grant is retained for that instance while the
+/// context's connection is refreshed on reinitialization.
 /// Configured modules may instead use `terminal_setup_factory = factory`. Its
 /// factory receives [`NativeInstanceLiveness`] and returns `Result<(F,
 /// RuntimeHooks)>`, with the same setup callback bounds. A supported, exactly
@@ -1466,6 +1560,19 @@ macro_rules! module_export {
         }
     };
     (
+        setup_factory_with_context = $factory:path,
+        config = $config:ty,
+        $($rest:tt)*
+    ) => {
+        $crate::module_export! {
+            @configured export = {#[unsafe(no_mangle)]},
+            start = $crate::start_reconfigurable_module_with_context_factory,
+            setup = $factory,
+            config = $config,
+            $($rest)*
+        }
+    };
+    (
         setup = $setup:path,
         config = $config:ty,
         $($rest:tt)*
@@ -1511,8 +1618,9 @@ macro_rules! module_export {
 
 /// Generate Rust-addressable entry points for linking several modules into a
 /// single executable. The entry points have no shared C linker symbol names.
-/// Configured `setup`, per-instance `setup_factory`, and opted-in
-/// `terminal_setup_factory` forms are supported; see [`module_export`].
+/// Configured `setup`, per-instance `setup_factory`, context-bearing
+/// `setup_factory_with_context`, and opted-in `terminal_setup_factory` forms
+/// are supported; see [`module_export`].
 /// Terminal factories require the supplied host's native query even when linked.
 #[macro_export]
 macro_rules! module_export_static {
@@ -1528,6 +1636,16 @@ macro_rules! module_export_static {
         $crate::module_export! {
             @configured export = {},
             start = $crate::start_linked_reconfigurable_module_with_factory,
+            setup = $factory,
+            config = $config,
+            $($rest)*
+        }
+        $crate::module_export! { @linked $($rest)* }
+    };
+    (setup_factory_with_context = $factory:path, config = $config:ty, $($rest:tt)*) => {
+        $crate::module_export! {
+            @configured export = {},
+            start = $crate::start_linked_reconfigurable_module_with_context_factory,
             setup = $factory,
             config = $config,
             $($rest)*

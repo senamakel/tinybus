@@ -389,7 +389,9 @@ mod context_factory_export {
     }
 }
 
-async fn contextual_factory_instance(restricted: bool) -> (ModuleHost, Broker, Connection, tinybus::Proxy) {
+async fn contextual_factory_instance(
+    restricted: bool,
+) -> (ModuleHost, Broker, Connection, tinybus::Proxy) {
     use tinybus::transport::memory::MemoryTransport;
 
     let broker = Broker::new_restricted_module_control();
@@ -400,7 +402,10 @@ async fn contextual_factory_instance(restricted: bool) -> (ModuleHost, Broker, C
     let controller = Connection::connect(Box::new(controller_transport))
         .await
         .unwrap();
-    assert_eq!(controller.unique_name().as_ref(), Some(&selected_controller));
+    assert_eq!(
+        controller.unique_name().as_ref(),
+        Some(&selected_controller)
+    );
     let host = ModuleHost::new(broker.clone());
     host.attach_linked_with_config(
         context_factory_export::linked_module().unwrap(),
@@ -422,15 +427,22 @@ async fn contextual_factory_is_per_instance_authorized_confidential_and_reinit_s
     use tinybus::transport::memory::MemoryTransport;
 
     let before = context_factory_export::FACTORIES.load(Ordering::SeqCst);
-    let ((first, broker, controller, first_proxy), (second, _, _, second_proxy)) =
-        tokio::join!(contextual_factory_instance(true), contextual_factory_instance(false));
+    let ((first, broker, controller, first_proxy), (second, _, _, second_proxy)) = tokio::join!(
+        contextual_factory_instance(true),
+        contextual_factory_instance(false)
+    );
     assert_eq!(
         context_factory_export::FACTORIES.load(Ordering::SeqCst) - before,
         2,
         "the context factory must run once for each ABI instance"
     );
     assert!(first_proxy.attestation().await.unwrap().is_some());
-    assert!(first_proxy.call::<serde_json::Value>("Inspect", ()).await.is_err());
+    assert!(
+        first_proxy
+            .call::<serde_json::Value>("Inspect", ())
+            .await
+            .is_err()
+    );
     assert_eq!(
         first_proxy
             .call_confidential::<serde_json::Value>("Inspect", ())
@@ -448,7 +460,9 @@ async fn contextual_factory_is_per_instance_authorized_confidential_and_reinit_s
 
     let (outsider_server, outsider_client) = MemoryTransport::pair();
     broker.attach(Arc::new(outsider_server));
-    let outsider = Connection::connect(Box::new(outsider_client)).await.unwrap();
+    let outsider = Connection::connect(Box::new(outsider_client))
+        .await
+        .unwrap();
     let outsider_proxy = outsider
         .proxy(
             "org.example.ContextFactory",
@@ -460,7 +474,11 @@ async fn contextual_factory_is_per_instance_authorized_confidential_and_reinit_s
         .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
         .await
         .unwrap_err();
-    assert!(denied.to_string().contains("factory context authority unavailable"));
+    assert!(
+        denied
+            .to_string()
+            .contains("factory context authority unavailable")
+    );
     let malformed = first_proxy
         .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
         .await
@@ -478,10 +496,12 @@ async fn contextual_factory_is_per_instance_authorized_confidential_and_reinit_s
             .unwrap(),
         serde_json::json!({"restricted":true,"generation":2})
     );
-    assert!(first
-        .reinitialize("tinybus-module", serde_json::json!({"restricted":false}))
-        .await
-        .is_err());
+    assert!(
+        first
+            .reinitialize("tinybus-module", serde_json::json!({"restricted":false}))
+            .await
+            .is_err()
+    );
     assert_eq!(
         first_proxy
             .call_confidential::<serde_json::Value>("Inspect", ())
