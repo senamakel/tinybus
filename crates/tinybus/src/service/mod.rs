@@ -93,6 +93,13 @@ impl CallContext {
     pub(crate) fn brokered(
         sender: Option<&BusName>,
         confidential: bool,
+    ) -> Self {
+        Self::brokered_with_origin(sender, confidential, None)
+    }
+
+    pub(crate) fn brokered_with_origin(
+        sender: Option<&BusName>,
+        confidential: bool,
         receive_origin: Option<&std::sync::Arc<ConnectionOrigin>>,
     ) -> Self {
         Self {
