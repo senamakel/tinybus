@@ -12,6 +12,7 @@ static TRUSTED_HOST_REPLY: AtomicUsize = AtomicUsize::new(0);
 static CAPTURED_TRUSTED_HOST: OnceLock<StdMutex<Option<TrustedHost>>> = OnceLock::new();
 static CAPTURED_MODULE_NAME: OnceLock<StdMutex<Option<BusName>>> = OnceLock::new();
 static CAPTURED_MODULE_CONTEXT: OnceLock<StdMutex<Option<CallContext>>> = OnceLock::new();
+#[cfg(feature = "static-link")]
 static FOREIGN_CONTEXT_SENDER: OnceLock<
     StdMutex<Option<tokio::sync::oneshot::Sender<CallContext>>>,
 > = OnceLock::new();
@@ -182,6 +183,7 @@ impl tinybus::service::Interface for ContextAuthorizationProbe {
     }
 }
 
+#[cfg(feature = "static-link")]
 async fn setup_foreign_context_capture(connection: Connection) -> Result<()> {
     connection
         .serve_at("/capture".parse().unwrap(), ForeignContextCapture)
@@ -189,8 +191,10 @@ async fn setup_foreign_context_capture(connection: Connection) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "static-link")]
 struct ForeignContextCapture;
 
+#[cfg(feature = "static-link")]
 #[async_trait::async_trait]
 impl tinybus::service::Interface for ForeignContextCapture {
     fn name(&self) -> tinybus::InterfaceName {
@@ -227,6 +231,7 @@ impl tinybus::service::Interface for ForeignContextCapture {
     }
 }
 
+#[cfg(feature = "static-link")]
 mod dynamic_context_export {
     crate::module_export! {
         setup_with_context = super::setup_with_context,
@@ -254,6 +259,7 @@ mod static_context_export {
     }
 }
 
+#[cfg(feature = "static-link")]
 mod foreign_context_export {
     crate::module_export_static! {
         setup = super::setup_foreign_context_capture,
