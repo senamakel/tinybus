@@ -398,6 +398,35 @@ Factory panics return the native initialization panic code. The factory form
 is available in module_export, module_export_static and
 module_export_optional_static; legacy setup callbacks remain supported.
 
+When setup also needs the loader-issued host binding, use
+`setup_factory_with_context = factory, config = Config` in either export macro.
+Its factory returns `Fn(ModuleSetupContext, Config) -> Future<Result<()>>` and
+runs once per ABI instance after host validation and initial config parsing.
+The retained callback receives a new context for each initial setup or
+reinitialization, so its connection matches the active module attachment while
+its captured per-instance mode remains stable. A generic module can see
+`context.trusted_host() == None`; a migration service must require the binding
+before registering itself or starting ordinary storage access.
+
+```rust,ignore
+fn setup_factory() -> impl Fn(ModuleSetupContext, Config) -> SetupFuture {
+    let admitted_mode = Arc::new(Mutex::new(None));
+    move |context, config| {
+        // Validate the mode against this factory's retained state, then use
+        // context.connection() and context.trusted_host() for this attachment.
+        Box::pin(setup_with_context(context, config, Arc::clone(&admitted_mode)))
+    }
+}
+
+tinybus_module::module_export! {
+    setup_factory_with_context = setup_factory,
+    config = Config,
+    worker_threads = 1,
+    provides = ["org.example.Service"],
+    methods = [], signals = [], requires = [], optional = [], lazy = false,
+}
+```
+
 ## Controller admission
 
 `ModuleHost::new` uses its supplied broker's immutable module-control policy.

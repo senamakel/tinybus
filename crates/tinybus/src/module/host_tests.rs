@@ -2610,10 +2610,12 @@ async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_con
     );
     assert_eq!(module_name, second_module_name);
     assert!(first_proxy.attestation().await.unwrap().is_some());
-    assert!(first_proxy
-        .call::<serde_json::Value>("Inspect", ())
-        .await
-        .is_err());
+    assert!(
+        first_proxy
+            .call::<serde_json::Value>("Inspect", ())
+            .await
+            .is_err()
+    );
     let first_initial: serde_json::Value =
         first_proxy.call_confidential("Inspect", ()).await.unwrap();
     assert_eq!(first_initial["restricted"], true);
@@ -2627,7 +2629,9 @@ async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_con
 
     let (outsider_server, outsider_client) = MemoryTransport::pair();
     broker.attach(Arc::new(outsider_server));
-    let outsider = Connection::connect(Box::new(outsider_client)).await.unwrap();
+    let outsider = Connection::connect(Box::new(outsider_client))
+        .await
+        .unwrap();
     let outsider_proxy = outsider
         .proxy(
             first_proxy.destination().as_str(),
@@ -2639,12 +2643,20 @@ async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_con
         .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
         .await
         .unwrap_err();
-    assert!(denied.to_string().contains("factory context authority unavailable"));
+    assert!(
+        denied
+            .to_string()
+            .contains("factory context authority unavailable")
+    );
     let selected_malformed = first_proxy
         .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
         .await
         .unwrap_err();
-    assert!(selected_malformed.to_string().contains("expected no arguments"));
+    assert!(
+        selected_malformed
+            .to_string()
+            .contains("expected no arguments")
+    );
 
     first
         .reinitialize(&module_name, serde_json::json!({"restricted":true}))
@@ -2654,12 +2666,17 @@ async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_con
         first_proxy.call_confidential("Inspect", ()).await.unwrap();
     assert_eq!(after_reinitialize["restricted"], true);
     assert_eq!(after_reinitialize["generation"], 2);
-    assert_eq!(after_reinitialize["factory_id"], first_initial["factory_id"]);
+    assert_eq!(
+        after_reinitialize["factory_id"],
+        first_initial["factory_id"]
+    );
 
-    assert!(first
-        .reinitialize(&module_name, serde_json::json!({"restricted":false}))
-        .await
-        .is_err());
+    assert!(
+        first
+            .reinitialize(&module_name, serde_json::json!({"restricted":false}))
+            .await
+            .is_err()
+    );
     let after_refusal: serde_json::Value =
         first_proxy.call_confidential("Inspect", ()).await.unwrap();
     assert_eq!(after_refusal, after_reinitialize);
