@@ -2669,3 +2669,186 @@ async fn completed_shutdown_has_already_released_its_native_lifecycle_marker() {
         "completed cleanup still reports native work"
     );
 }
+
+#[tokio::test]
+async fn selected_controller_binding_is_available_before_ready_and_revoked_on_disconnect() {
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    let selected = broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert_eq!(controller.unique_name().as_ref(), Some(&selected));
+    let binding = broker
+        .restricted_module_controller_binding()
+        .expect("selected live peer is a loader capability");
+    let (transport, host) = ModuleTransport::new_with_controller_binding(
+        "trusted-migration".into(),
+        vec![],
+        Some(binding.clone()),
+    );
+    let query = host
+        .trusted_host_binding
+        .expect("selected controller installs the optional ABI callback");
+    transport.context.init_started.store(true, Ordering::Release);
+    assert!(!transport.is_ready(), "binding is queried during setup");
+
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = usize::MAX;
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_OK
+    );
+    assert_eq!(&output[..output_len], selected.as_str().as_bytes());
+    assert!(!transport.is_ready());
+
+    let mut short = [0xa5_u8; 1];
+    output_len = usize::MAX;
+    assert_eq!(
+        unsafe { query(host.host_ctx, short.as_mut_ptr(), short.len(), &mut output_len) },
+        TB_BUFFER_TOO_SMALL
+    );
+    assert_eq!(output_len, selected.as_str().len());
+    assert_eq!(short, [0xa5]);
+
+    output_len = usize::MAX;
+    assert_eq!(
+        unsafe { query(host.host_ctx, std::ptr::null_mut(), 1, &mut output_len) },
+        TB_BAD_ARGUMENT
+    );
+    assert_eq!(output_len, 0);
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                crate::name::MAX_NAME_LEN + 1,
+                &mut output_len,
+            )
+        },
+        TB_BAD_ARGUMENT
+    );
+    assert_eq!(output_len, 0);
+
+    controller.close().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while binding.is_live() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("controller disconnect revokes subsequent queries");
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED
+    );
+}
+
+#[tokio::test]
+async fn a_binding_absent_at_transport_creation_is_never_added_later() {
+    let broker = Broker::new_restricted_module_control();
+    let (old_transport, old_host) =
+        ModuleTransport::new_with_controller_binding("before-selection".into(), vec![], None);
+    assert!(old_host.trusted_host_binding.is_none());
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = 1;
+    assert_eq!(
+        unsafe {
+            host_trusted_host_binding(
+                old_host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_UNSUPPORTED
+    );
+    assert_eq!(output_len, 0);
+
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let _controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert!(old_host.trusted_host_binding.is_none());
+    let (new_transport, new_host) = ModuleTransport::new_with_controller_binding(
+        "after-selection".into(),
+        vec![],
+        broker.restricted_module_controller_binding(),
+    );
+    assert!(new_host.trusted_host_binding.is_some());
+    drop(old_transport);
+    drop(new_transport);
+
+    let (unrestricted_transport, unrestricted_host) =
+        ModuleTransport::new_with_controller_binding("unrestricted".into(), vec![], None);
+    assert!(unrestricted_host.trusted_host_binding.is_none());
+    drop(unrestricted_transport);
+}
+
+#[tokio::test]
+async fn a_retained_binding_denies_after_its_module_owner_is_terminal_or_gone() {
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let _controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    let binding = broker
+        .restricted_module_controller_binding()
+        .expect("selected controller");
+    let (transport, host) = ModuleTransport::new_with_controller_binding(
+        "terminal-binding".into(),
+        vec![],
+        Some(binding),
+    );
+    transport.context.init_started.store(true, Ordering::Release);
+    let query = host.trusted_host_binding.unwrap();
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = 0;
+    transport.commit_terminal(true);
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED
+    );
+    drop(transport);
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED,
+        "the process-lifetime HostContext callback is a closed tombstone"
+    );
+}
