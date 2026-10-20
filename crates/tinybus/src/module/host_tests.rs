@@ -3,6 +3,7 @@
 use super::*;
 use crate::Connection;
 use crate::module::abi::TbAbiDescriptor;
+use crate::module::runtime::{ModuleRuntime, RuntimeNames};
 use crate::transport::memory::{MemoryBus, MemoryTransport};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
@@ -2484,7 +2485,7 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
     );
 
     let modules = ModuleHost::new(broker.clone());
-    let info = modules.load_file(artifact).unwrap();
+    let info = modules.load_file(&artifact).unwrap();
     modules
         .ensure_ready(info.manifest.bus_name.as_str())
         .await
@@ -2548,6 +2549,74 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
     })
     .await
     .expect("the previously selected controller's binding is revoked on disconnect");
+
+    // Exercise the same context-bearing artifact through TinyBus's public
+    // process-lifetime runtime, not only through a hand-built ModuleHost.
+    let runtime = ModuleRuntime::start(&RuntimeNames::default(), None).unwrap();
+    let (_runtime_dir, runtime_artifact) = staged_module(&artifact, &hash);
+    let runtime_info = runtime.host().load_file(&runtime_artifact).unwrap();
+    runtime
+        .host()
+        .ensure_ready(runtime_info.manifest.bus_name.as_str())
+        .await
+        .expect("public ModuleRuntime provides the selected trusted controller");
+    let runtime_proxy = runtime
+        .connection()
+        .proxy(
+            runtime_info.manifest.bus_name.as_str(),
+            "/context",
+            "org.example.Context",
+        )
+        .unwrap();
+    assert!(runtime_proxy.attestation().await.unwrap().is_some());
+    let initial: serde_json::Value = runtime_proxy
+        .call_confidential("TrustedContext", ())
+        .await
+        .unwrap();
+    assert_eq!(initial["authorized"], true);
+    assert_eq!(initial["previousAuthorized"], false);
+    runtime
+        .host()
+        .reinitialize(
+            runtime_info.manifest.module.name.as_str(),
+            serde_json::json!({"marker": "runtime-reconfigured"}),
+        )
+        .await
+        .expect("public runtime reinitialization retains the selected host binding");
+    let after_reinitialize: serde_json::Value = runtime_proxy
+        .call_confidential("TrustedContext", ())
+        .await
+        .unwrap();
+    assert_eq!(after_reinitialize["authorized"], true);
+    assert_eq!(after_reinitialize["previousAuthorized"], false);
+
+    // A plain configured module still starts through the same public runtime.
+    let ordinary = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
+    let ordinary_hash =
+        crate::module::hash::file_hex(std::fs::File::open(&ordinary).unwrap()).unwrap();
+    let (_ordinary_dir, ordinary_artifact) = staged_module(&ordinary, &ordinary_hash);
+    let ordinary_info = runtime
+        .host()
+        .load_file_with_config(
+            ordinary_artifact,
+            serde_json::json!({"prefix": "runtime-ordinary:"}),
+        )
+        .unwrap();
+    runtime
+        .host()
+        .ensure_ready(ordinary_info.manifest.bus_name.as_str())
+        .await
+        .expect("ordinary setup remains compatible with a selected runtime host");
+    let ordinary_proxy = runtime
+        .connection()
+        .proxy(
+            ordinary_info.manifest.bus_name.as_str(),
+            ordinary_info.manifest.object_path.as_str(),
+            ordinary_info.manifest.bus_name.as_str(),
+        )
+        .unwrap();
+    let now: String = ordinary_proxy.call("Now", ()).await.unwrap();
+    assert!(now.starts_with("runtime-ordinary:"));
 }
 
 async fn contextual_factory_cdylib_instance(
