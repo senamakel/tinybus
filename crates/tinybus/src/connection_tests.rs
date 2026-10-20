@@ -131,6 +131,10 @@ async fn capture_context_from_fresh_broker() -> CapturedContext {
         )
         .await
         .unwrap();
+    receiver
+        .request_name("org.example.ContextCapture")
+        .await
+        .unwrap();
     let caller = Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
