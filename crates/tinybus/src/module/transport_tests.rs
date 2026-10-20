@@ -2724,7 +2724,7 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
     let mut output_len = usize::MAX;
     assert!(!transport.is_ready());
 
-    let mut short = [0xa5_u8; 1];
+    let mut short = [0xa5_u8; crate::name::MAX_NAME_LEN];
     output_len = usize::MAX;
     assert_eq!(
         unsafe {
@@ -2738,7 +2738,7 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
         TB_BUFFER_TOO_SMALL
     );
     assert_eq!(output_len, peer_len);
-    assert_eq!(short, [0xa5]);
+    assert!(short.iter().all(|byte| *byte == 0xa5));
 
     output_len = usize::MAX;
     assert_eq!(
