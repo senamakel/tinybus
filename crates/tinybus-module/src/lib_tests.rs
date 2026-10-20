@@ -356,8 +356,9 @@ fn send_context_probe_call(
     reply.body
 }
 
-#[test]
-fn trusted_host_binding_parser_fails_closed_for_missing_or_malformed_callbacks() {
+#[tokio::test]
+async fn trusted_host_binding_parser_fails_closed_for_missing_or_malformed_callbacks() {
+    let _host_state = host_state_guard().await;
     let missing = HostCalls(host(b"{}"));
     assert!(missing.trusted_host_peer().is_none());
 
