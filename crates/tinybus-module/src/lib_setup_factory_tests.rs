@@ -390,6 +390,7 @@ mod context_factory_export {
 
     #[test]
     fn invalid_initial_configuration_does_not_construct_context_factory_state() {
+        let _guard = TEST_LOCK.blocking_lock();
         let before = FACTORIES.load(Ordering::SeqCst);
         let host = ModuleHost::new(Broker::new());
         assert!(
@@ -404,6 +405,7 @@ mod context_factory_export {
 
     #[test]
     fn invalid_host_is_rejected_before_context_factory_construction() {
+        let _guard = TEST_LOCK.blocking_lock();
         let before = FACTORIES.load(Ordering::SeqCst);
         let result = unsafe {
             start_linked_reconfigurable_module_with_context_factory::<Config, _, _>(
@@ -454,6 +456,7 @@ async fn contextual_factory_instance(
 
 #[tokio::test(flavor = "current_thread")]
 async fn contextual_factory_is_per_instance_authorized_confidential_and_reinit_stable() {
+    let _guard = TEST_LOCK.lock().await;
     use tinybus::transport::memory::MemoryTransport;
 
     let before = context_factory_export::FACTORIES.load(Ordering::SeqCst);
