@@ -29,11 +29,12 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::broker::Broker;
 use crate::connection::ObjectRegistration;
 use crate::module::ModuleHost;
-use crate::transport::memory::MemoryBus;
+use crate::transport::memory::{MemoryBus, MemoryTransport};
 use crate::{Connection, Interface, Proxy};
 
 /// A per-attachment setup callback for a statically linked module.
@@ -408,14 +409,20 @@ pub(super) async fn serve_host_object_transaction(
 
 async fn build(setup: Option<RuntimeSetup>) -> crate::Result<ModuleRuntime> {
     let transport = MemoryBus::new();
-    let broker = Broker::new();
+    let broker = Broker::new_restricted_module_control();
     // The broker task is deliberately not retained: it lives as long as the
     // process, and an abort handle must never be called, because a module whose
     // transport disappears faults and cannot be reloaded without a restart.
     broker.spawn(transport.clone());
 
+    // This runtime is the private host for the modules it admits. Select its
+    // own controller before constructing the loader so context-bearing module
+    // setup receives an attachment-scoped trusted-host capability.
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker.attach_module_controller(Arc::new(broker_transport))?;
+    let connection = Connection::connect(Box::new(controller_transport)).await?;
+
     let host = ModuleHost::new(broker.clone());
-    let connection = Connection::connect(transport.connect().await?).await?;
     let host_objects = std::sync::Arc::new(tokio::sync::Mutex::new(HostObjectRegistry {
         broker,
         connection: connection.clone(),

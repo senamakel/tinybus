@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.11
+
+### Fixed
+
+- Give the process-lifetime module runtime its own selected controller so
+  context-bearing modules receive trusted setup capabilities.
+
 ## 0.3.10
 
 ### Fixed
