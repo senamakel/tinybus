@@ -251,6 +251,14 @@ mod dynamic_context_export {
 }
 
 #[cfg(feature = "static-link")]
+unsafe extern "C" fn plain_context_setup_entry(
+    host: *const TbHostVtable,
+    out: *mut TbModuleVtable,
+) -> i32 {
+    unsafe { start_module_with_context(host, out, 1, true, setup_with_context) }
+}
+
+#[cfg(feature = "static-link")]
 static CONTEXT_FACTORY_CREATIONS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "static-link")]
 static CONTEXT_FACTORY_SETUPS: AtomicUsize = AtomicUsize::new(0);
@@ -515,6 +523,25 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         !trusted_host.authorizes(&captured),
         "the cloned capability cannot outlive its module connection"
     );
+}
+
+#[cfg(feature = "static-link")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_context_setup_entry_receives_the_selected_controller_binding() {
+    let _host_state = host_state_guard().await;
+    TRUSTED_HOST_REPLY.store(0, Ordering::Release);
+    let (out, outgoing) = start_context_export(plain_context_setup_entry, true, true);
+    let receiver = CAPTURED_MODULE_NAME
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("plain context setup receives its attachment connection");
+    assert_eq!(
+        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
+        serde_json::json!(true)
+    );
+    assert_eq!(unsafe { (out.shutdown)(out.module_ctx, 1000) }, TB_OK);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
