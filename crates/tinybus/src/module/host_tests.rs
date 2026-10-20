@@ -2518,11 +2518,22 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
     assert!(other_proxy.attestation().await.unwrap().is_some());
     assert!(proxy.call("Schema", ()).await.is_err());
     assert!(
+        other_proxy.call_confidential("Schema", ()).await.is_err(),
+        "recipient attestation alone must not authorize a different sender"
+    );
+    assert!(
         other_proxy
-            .call_confidential("Schema", ())
+            .call_confidential("Transform", ("attacker-id",))
             .await
             .is_err(),
-        "recipient attestation alone must not authorize a different sender"
+        "a denied caller cannot alter the migration transcript state"
+    );
+    assert!(
+        other_proxy
+            .call_confidential("RegisterOrdinaryLease", ())
+            .await
+            .is_err(),
+        "a denied caller cannot register the ordinary lease"
     );
     let forged_identity = serde_json::json!({
         "authenticated_sender": controller.unique_name(),

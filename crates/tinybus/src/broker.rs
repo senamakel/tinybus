@@ -144,7 +144,9 @@ impl RestrictedModuleControllerBinding {
             return false;
         };
         let selected = match controller.lock() {
-            Ok(binding) => matches!(&*binding, ModuleControllerBinding::Selected(peer) if peer == &self.peer),
+            Ok(binding) => {
+                matches!(&*binding, ModuleControllerBinding::Selected(peer) if peer == &self.peer)
+            }
             Err(_) => false,
         };
         if !selected {
@@ -244,12 +246,7 @@ impl Broker {
                 }
             }
         };
-        if !self
-            .router
-            .lock()
-            .ok()?
-            .has_unique_peer(&selected_peer)
-        {
+        if !self.router.lock().ok()?.has_unique_peer(&selected_peer) {
             return None;
         }
         Some(RestrictedModuleControllerBinding {

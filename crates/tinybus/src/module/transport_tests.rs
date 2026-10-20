@@ -1,9 +1,9 @@
 use super::*;
 use std::sync::atomic::AtomicI32;
 
+use crate::Connection;
 use crate::broker::Broker;
 use crate::transport::memory::MemoryTransport;
-use crate::Connection;
 use crate::{BusName, InterfaceName, MemberName, ObjectPath};
 
 static DELIVERY_CODE: AtomicI32 = AtomicI32::new(TB_OK);
@@ -2692,33 +2692,64 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
     let query = host
         .trusted_host_binding
         .expect("selected controller installs the optional ABI callback");
-    transport.context.init_started.store(true, Ordering::Release);
+    transport
+        .context
+        .init_started
+        .store(true, Ordering::Release);
     assert!(!transport.is_ready(), "binding is queried during setup");
 
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = usize::MAX;
+    let peer_len = selected.as_str().len();
     assert_eq!(
         unsafe {
             query(
                 host.host_ctx,
                 output.as_mut_ptr(),
-                output.len(),
+                peer_len,
                 &mut output_len,
             )
         },
         TB_OK
     );
     assert_eq!(&output[..output_len], selected.as_str().as_bytes());
+    assert_eq!(output_len, peer_len);
     assert!(!transport.is_ready());
 
     let mut short = [0xa5_u8; 1];
     output_len = usize::MAX;
     assert_eq!(
-        unsafe { query(host.host_ctx, short.as_mut_ptr(), short.len(), &mut output_len) },
+        unsafe {
+            query(
+                host.host_ctx,
+                short.as_mut_ptr(),
+                peer_len - 1,
+                &mut output_len,
+            )
+        },
         TB_BUFFER_TOO_SMALL
     );
-    assert_eq!(output_len, selected.as_str().len());
+    assert_eq!(output_len, peer_len);
     assert_eq!(short, [0xa5]);
+
+    output_len = usize::MAX;
+    assert_eq!(
+        unsafe { query(host.host_ctx, std::ptr::null_mut(), 0, &mut output_len,) },
+        TB_BUFFER_TOO_SMALL
+    );
+    assert_eq!(output_len, peer_len);
+
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                std::ptr::null_mut(),
+            )
+        },
+        TB_BAD_ARGUMENT
+    );
 
     output_len = usize::MAX;
     assert_eq!(
@@ -2767,13 +2798,15 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
     let _replacement = Connection::connect(Box::new(replacement_client))
         .await
         .unwrap();
-    assert_eq!(replacement_peer, selected, "separate brokers reuse unique names");
-    let (replacement_transport, replacement_host) =
-        ModuleTransport::new_with_controller_binding(
-            "replacement-migration".into(),
-            vec![],
-            replacement_broker.restricted_module_controller_binding(),
-        );
+    assert_eq!(
+        replacement_peer, selected,
+        "separate brokers reuse unique names"
+    );
+    let (replacement_transport, replacement_host) = ModuleTransport::new_with_controller_binding(
+        "replacement-migration".into(),
+        vec![],
+        replacement_broker.restricted_module_controller_binding(),
+    );
     replacement_transport
         .context
         .init_started
@@ -2849,7 +2882,11 @@ async fn a_binding_absent_at_transport_creation_is_never_added_later() {
     drop(new_transport);
 
     let unrestricted = Broker::new();
-    assert!(unrestricted.restricted_module_controller_binding().is_none());
+    assert!(
+        unrestricted
+            .restricted_module_controller_binding()
+            .is_none()
+    );
     let (unrestricted_transport, unrestricted_host) = ModuleTransport::new_with_controller_binding(
         "unrestricted".into(),
         vec![],
@@ -2877,7 +2914,10 @@ async fn a_retained_binding_denies_after_its_module_owner_is_terminal_or_gone() 
         vec![],
         Some(binding),
     );
-    transport.context.init_started.store(true, Ordering::Release);
+    transport
+        .context
+        .init_started
+        .store(true, Ordering::Release);
     let query = host.trusted_host_binding.unwrap();
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = 0;
@@ -2923,7 +2963,10 @@ async fn trusted_host_callback_denies_a_poisoned_owner_without_unwinding_through
         vec![],
         broker.restricted_module_controller_binding(),
     );
-    transport.context.init_started.store(true, Ordering::Release);
+    transport
+        .context
+        .init_started
+        .store(true, Ordering::Release);
     let query = host.trusted_host_binding.unwrap();
     let context = transport.context;
     assert!(

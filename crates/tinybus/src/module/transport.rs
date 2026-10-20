@@ -9,14 +9,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify, mpsc};
 
+use crate::broker::RestrictedModuleControllerBinding;
 use crate::error::{Error, Result};
 use crate::message::codec::MAX_FRAME_LEN;
 use crate::message::{Message, MessageKind};
-use crate::broker::RestrictedModuleControllerBinding;
 use crate::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED,
-    TB_MODULE_VTABLE_BASE_SIZE, TB_NATIVE_TERMINAL_LIVE, TB_OK, TB_PANICKED, TB_TIMEOUT,
-    TB_UNSUPPORTED, TbHostVtable, TbModuleVtable, TbSlice,
+    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE,
+    TB_NATIVE_TERMINAL_LIVE, TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable,
+    TbModuleVtable, TbSlice,
 };
 use crate::ports::Transport;
 
@@ -1550,11 +1550,7 @@ unsafe extern "C" fn host_trusted_host_binding(
         let Some(binding) = context.trusted_host_binding.as_ref() else {
             return TB_UNSUPPORTED;
         };
-        let owner = context
-            .owner
-            .lock()
-            .ok()
-            .and_then(|owner| owner.upgrade());
+        let owner = context.owner.lock().ok().and_then(|owner| owner.upgrade());
         let Some(owner) = owner else {
             return TB_CLOSED;
         };

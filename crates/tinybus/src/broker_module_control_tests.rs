@@ -373,9 +373,7 @@ async fn a_module_binding_snapshot_is_fixed_to_a_live_selected_controller() {
     let broker = Broker::new_restricted_module_control();
     assert!(broker.restricted_module_controller_binding().is_none());
     let (server, client) = MemoryTransport::pair();
-    let selected = broker
-        .attach_module_controller(Arc::new(server))
-        .unwrap();
+    let selected = broker.attach_module_controller(Arc::new(server)).unwrap();
     let controller = Connection::connect(Box::new(client)).await.unwrap();
     assert_eq!(controller.unique_name().as_ref(), Some(&selected));
 
