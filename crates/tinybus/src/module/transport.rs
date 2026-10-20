@@ -253,6 +253,7 @@ impl ModuleTransport {
         self.context.broker_routing.store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) fn new(label: String, config: Vec<u8>) -> (Arc<Self>, TbHostVtable) {
         Self::new_with_controller_binding(label, config, None)
     }
