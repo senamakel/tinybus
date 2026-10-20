@@ -232,8 +232,8 @@ impl Router {
     pub(crate) fn has_unique_peer(&self, unique: &BusName) -> bool {
         self.names
             .get(unique)
-            .and_then(|id| self.peers.get(id).map(|peer| (id, peer)))
-            .is_some_and(|(id, peer)| self.names.get(unique) == Some(id) && peer.unique == *unique)
+            .and_then(|id| self.peers.get(id))
+            .is_some_and(|peer| peer.unique == *unique)
     }
 
     /// Verify that `id` is still attached under the unique identity stamped by

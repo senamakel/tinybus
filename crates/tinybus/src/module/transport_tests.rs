@@ -2692,28 +2692,36 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
     let query = host
         .trusted_host_binding
         .expect("selected controller installs the optional ABI callback");
+    let peer_len = selected.as_str().len();
     transport
-        .context
-        .init_started
-        .store(true, Ordering::Release);
+        .eager_initialize_with(host, |initializing_host| {
+            let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+            let mut output_len = usize::MAX;
+            assert_eq!(
+                unsafe {
+                    query(
+                        initializing_host.host_ctx,
+                        output.as_mut_ptr(),
+                        peer_len,
+                        &mut output_len,
+                    )
+                },
+                TB_OK
+            );
+            assert_eq!(&output[..output_len], selected.as_str().as_bytes());
+            assert_eq!(output_len, peer_len);
+            let mut module = TbModuleVtable::default();
+            assert_eq!(
+                unsafe { initialize_ok(&initializing_host, &mut module) },
+                TB_OK
+            );
+            Ok(module)
+        })
+        .unwrap();
     assert!(!transport.is_ready(), "binding is queried during setup");
 
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = usize::MAX;
-    let peer_len = selected.as_str().len();
-    assert_eq!(
-        unsafe {
-            query(
-                host.host_ctx,
-                output.as_mut_ptr(),
-                peer_len,
-                &mut output_len,
-            )
-        },
-        TB_OK
-    );
-    assert_eq!(&output[..output_len], selected.as_str().as_bytes());
-    assert_eq!(output_len, peer_len);
     assert!(!transport.is_ready());
 
     let mut short = [0xa5_u8; 1];
@@ -2914,10 +2922,7 @@ async fn a_retained_binding_denies_after_its_module_owner_is_terminal_or_gone() 
         vec![],
         Some(binding),
     );
-    transport
-        .context
-        .init_started
-        .store(true, Ordering::Release);
+    transport.eager_initialize(initialize_ok, host).unwrap();
     let query = host.trusted_host_binding.unwrap();
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = 0;
@@ -2963,10 +2968,7 @@ async fn trusted_host_callback_denies_a_poisoned_owner_without_unwinding_through
         vec![],
         broker.restricted_module_controller_binding(),
     );
-    transport
-        .context
-        .init_started
-        .store(true, Ordering::Release);
+    transport.eager_initialize(initialize_ok, host).unwrap();
     let query = host.trusted_host_binding.unwrap();
     let context = transport.context;
     assert!(
