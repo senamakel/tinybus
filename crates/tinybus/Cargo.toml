@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 build = "build.rs"
 description = "A zbus-style message bus that keeps external integrations out of the OpenHuman kernel's dependency graph."
-readme = "README.md"
+readme = "../../README.md"
 keywords = ["bus", "ipc", "rpc", "integrations", "openhuman"]
 categories = ["network-programming", "asynchronous"]
 # Examples are declared explicitly, with the features they need, so an example
