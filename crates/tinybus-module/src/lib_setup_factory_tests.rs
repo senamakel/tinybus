@@ -279,7 +279,7 @@ mod context_factory_export {
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
-    static FACTORIES: AtomicUsize = AtomicUsize::new(0);
+    pub(super) static FACTORIES: AtomicUsize = AtomicUsize::new(0);
 
     #[derive(serde::Deserialize)]
     struct Config {
@@ -457,7 +457,7 @@ async fn contextual_factory_is_per_instance_authorized_confidential_and_reinit_s
     use tinybus::transport::memory::MemoryTransport;
 
     let before = context_factory_export::FACTORIES.load(Ordering::SeqCst);
-    let ((first, broker, controller, first_proxy), (second, _, _, second_proxy)) = tokio::join!(
+    let ((first, broker, controller, first_proxy), (_second, _, _, second_proxy)) = tokio::join!(
         contextual_factory_instance(true),
         contextual_factory_instance(false)
     );
