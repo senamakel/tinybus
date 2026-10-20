@@ -2463,6 +2463,94 @@ async fn a_real_cdylib_authenticates_incoming_calls_and_its_host_callback() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBUS_TEST_CONFIGURED_CONTEXT_MODULE to point at the built cdylib"]
+async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
+    let artifact =
+        PathBuf::from(std::env::var_os("TINYBUS_TEST_CONFIGURED_CONTEXT_MODULE").unwrap());
+    let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+    let (_dir, artifact) = staged_module(&artifact, &hash);
+
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    let selected_controller = broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert_eq!(
+        controller.unique_name().as_ref(),
+        Some(&selected_controller)
+    );
+
+    let modules = ModuleHost::new(broker.clone());
+    let info = modules.load_file(artifact).unwrap();
+    modules
+        .ensure_ready(info.manifest.bus_name.as_str())
+        .await
+        .expect("configured setup receives the selected controller context");
+    let proxy = controller
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/context",
+            "org.example.Context",
+        )
+        .unwrap();
+    assert!(proxy.attestation().await.unwrap().is_some());
+    assert_eq!(
+        proxy.call::<String>("Configuration", ()).await.unwrap(),
+        "initial"
+    );
+    let initial: serde_json::Value = proxy.call_confidential("TrustedContext", ()).await.unwrap();
+    assert_eq!(initial["authorized"], true);
+    assert_eq!(initial["previousAuthorized"], false);
+
+    modules
+        .reinitialize(
+            info.manifest.module.name.as_str(),
+            serde_json::json!({"marker": "reconfigured"}),
+        )
+        .await
+        .expect("reconfigure receives a fresh context with the same binding");
+    assert_eq!(
+        proxy.call::<String>("Configuration", ()).await.unwrap(),
+        "reconfigured"
+    );
+    let after_reinitialize: serde_json::Value =
+        proxy.call_confidential("TrustedContext", ()).await.unwrap();
+    assert_eq!(after_reinitialize["authorized"], true);
+
+    controller.close().await.unwrap();
+    let (other_server, other_transport) = MemoryTransport::pair();
+    broker.attach(Arc::new(other_server));
+    let other = Connection::connect(Box::new(other_transport))
+        .await
+        .unwrap();
+    let other_proxy = other
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/context",
+            "org.example.Context",
+        )
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let authorization: serde_json::Value = other_proxy
+                .call_confidential("TrustedContext", ())
+                .await
+                .expect("the attested module remains reachable by another peer");
+            if authorization["previousAuthorized"] == false {
+                assert_eq!(authorization["authorized"], false);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the previously selected controller's binding is revoked on disconnect");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires TINYBUS_TEST_CONTEXT_EAGER_MODULE to point at the built cdylib"]
 async fn an_eager_cdylib_authenticates_after_its_worker_runs_before_admission() {
     authenticates_native_context("TINYBUS_TEST_CONTEXT_EAGER_MODULE").await;

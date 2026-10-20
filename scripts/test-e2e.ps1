@@ -20,6 +20,7 @@ $acl.AddAccessRule($rule)
 Set-Acl -LiteralPath $private -AclObject $acl
 Copy-Item (Join-Path $examples module_clock.dll) $private
 Copy-Item (Join-Path $examples module_context.dll) $private
+Copy-Item (Join-Path $examples module_context_configured.dll) $private
 Copy-Item (Join-Path $examples module_context_eager.dll) $private
 Copy-Item (Join-Path $examples module_trusted_migration.dll) $private
 Copy-Item (Join-Path $examples module_host_callback.dll) $private
@@ -28,7 +29,7 @@ Copy-Item (Join-Path $examples module_terminal.dll) $private
 Copy-Item (Join-Path $examples module_wrong_target.dll) $private
 # Admit every intentional fixture by its actual built bytes so later
 # checks, including the wrong-target gate, can exercise their contract.
-$fixtureAllowlist = @('module_clock.dll', 'module_context.dll', 'module_context_eager.dll', 'module_host_callback.dll', 'module_controlled_init.dll', 'module_terminal.dll', 'module_wrong_target.dll') | ForEach-Object {
+$fixtureAllowlist = @('module_clock.dll', 'module_context.dll', 'module_context_configured.dll', 'module_context_eager.dll', 'module_host_callback.dll', 'module_controlled_init.dll', 'module_terminal.dll', 'module_wrong_target.dll') | ForEach-Object {
   $digest = (Get-FileHash -LiteralPath (Join-Path $private $_) -Algorithm SHA256).Hash.ToLowerInvariant()
   '"' + $_ + '" = "' + $digest + '"'
 }
@@ -50,6 +51,7 @@ $wrongTarget = (Get-ChildItem "$private/module_wrong_target.dll" | Select-Object
 $env:TEMP = $private
 $env:TMP = $private
 $env:TINYBUS_TEST_CONTEXT_MODULE = (Get-Item "$private/module_context.dll").FullName
+$env:TINYBUS_TEST_CONFIGURED_CONTEXT_MODULE = (Get-Item "$private/module_context_configured.dll").FullName
 $env:TINYBUS_TEST_CONTEXT_EAGER_MODULE = (Get-Item "$private/module_context_eager.dll").FullName
 $env:TINYBUS_TEST_MIGRATION_MODULE = (Get-Item "$private/module_trusted_migration.dll").FullName
 $env:TINYBUS_TEST_CONTROLLED_INIT_MODULE = (Get-Item "$private/module_controlled_init.dll").FullName
