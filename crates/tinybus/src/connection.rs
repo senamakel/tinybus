@@ -1632,9 +1632,10 @@ async fn dispatch_loop(inner: Arc<Inner>) {
                 if pending
                     .get(&serial)
                     .is_some_and(|waiter| waiter.accepts(&message, brokered))
-                    && let Some(waiter) = pending.remove(&serial)
                 {
-                    let _ = waiter.sender.send(message);
+                    if let Some(waiter) = pending.remove(&serial) {
+                        let _ = waiter.sender.send(message);
+                    }
                 }
             }
             MessageKind::Signal | MessageKind::DirectedSignal => {
