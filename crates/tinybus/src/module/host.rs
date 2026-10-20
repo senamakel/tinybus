@@ -1398,7 +1398,12 @@ impl ModuleHost {
             self.record_manifest_rejection(&error, manifest.clone(), RefusalClass::Rejected);
             error
         })?;
-        let (transport, host_vtable) = ModuleTransport::new(admitted.name.clone(), config);
+        let trusted_host = self.inner.broker.restricted_module_controller_binding();
+        let (transport, host_vtable) = ModuleTransport::new_with_controller_binding(
+            admitted.name.clone(),
+            config,
+            trusted_host,
+        );
         match linked_setup {
             Some((init, setup)) => {
                 admitted.state = ModuleState::Resolved;
@@ -1475,7 +1480,12 @@ impl ModuleHost {
             self.record_manifest_rejection(&error, manifest.clone(), RefusalClass::Rejected);
             error
         })?;
-        let (transport, host_vtable) = ModuleTransport::new(admitted.name.clone(), config);
+        let trusted_host = self.inner.broker.restricted_module_controller_binding();
+        let (transport, host_vtable) = ModuleTransport::new_with_controller_binding(
+            admitted.name.clone(),
+            config,
+            trusted_host,
+        );
         let expected = manifest.clone();
         let artifact_path = path.to_path_buf();
         let strict = self.inner.strict.load(Ordering::Acquire);

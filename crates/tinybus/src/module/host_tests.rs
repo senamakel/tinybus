@@ -3,7 +3,7 @@
 use super::*;
 use crate::Connection;
 use crate::module::abi::TbAbiDescriptor;
-use crate::transport::memory::MemoryBus;
+use crate::transport::memory::{MemoryBus, MemoryTransport};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
@@ -2466,6 +2466,102 @@ async fn a_real_cdylib_authenticates_incoming_calls_and_its_host_callback() {
 #[ignore = "requires TINYBUS_TEST_CONTEXT_EAGER_MODULE to point at the built cdylib"]
 async fn an_eager_cdylib_authenticates_after_its_worker_runs_before_admission() {
     authenticates_native_context("TINYBUS_TEST_CONTEXT_EAGER_MODULE").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBUS_TEST_MIGRATION_MODULE to point at the built cdylib"]
+async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registration() {
+    let artifact = PathBuf::from(
+        std::env::var_os("TINYBUS_TEST_MIGRATION_MODULE").expect("TINYBUS_TEST_MIGRATION_MODULE"),
+    );
+    let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+    let (_dir, artifact) = staged_module(&artifact, &hash);
+
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    let selected_controller = broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert_eq!(
+        controller.unique_name().as_ref(),
+        Some(&selected_controller)
+    );
+    let modules = ModuleHost::new(broker.clone());
+    let info = modules.load_file(artifact).unwrap();
+
+    modules
+        .ensure_ready(info.manifest.bus_name.as_str())
+        .await
+        .expect("compiled migration setup must receive the selected controller binding");
+    let proxy = controller
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/migration",
+            "org.example.TrustedMigration",
+        )
+        .unwrap();
+    assert!(proxy.attestation().await.unwrap().is_some());
+
+    let (other_server, other_client) = MemoryTransport::pair();
+    broker.attach(Arc::new(other_server));
+    let other = Connection::connect(Box::new(other_client)).await.unwrap();
+    let other_proxy = other
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/migration",
+            "org.example.TrustedMigration",
+        )
+        .unwrap();
+    assert!(other_proxy.attestation().await.unwrap().is_some());
+    assert!(proxy.call::<serde_json::Value>("Schema", ()).await.is_err());
+    assert!(
+        other_proxy
+            .call_confidential::<serde_json::Value>("Schema", ())
+            .await
+            .is_err(),
+        "recipient attestation alone must not authorize a different sender"
+    );
+    assert!(
+        other_proxy
+            .call_confidential::<serde_json::Value>("Transform", ("attacker-id",))
+            .await
+            .is_err(),
+        "a denied caller cannot alter the migration transcript state"
+    );
+    assert!(
+        other_proxy
+            .call_confidential::<serde_json::Value>("RegisterOrdinaryLease", ())
+            .await
+            .is_err(),
+        "a denied caller cannot register the ordinary lease"
+    );
+    let forged_identity = serde_json::json!({
+        "authenticated_sender": controller.unique_name(),
+        "is_confidential": true
+    });
+    assert!(
+        other_proxy
+            .call_confidential::<serde_json::Value>("Schema", (forged_identity,))
+            .await
+            .is_err(),
+        "JSON claims cannot replace the broker-stamped sender"
+    );
+    let schema: serde_json::Value = proxy.call_confidential("Schema", ()).await.unwrap();
+    assert_eq!(schema["required"], serde_json::json!(["id"]));
+    let transformed: serde_json::Value = proxy
+        .call_confidential("Transform", ("legacy-id",))
+        .await
+        .unwrap();
+    assert_eq!(transformed["id"], "record-legacy-id");
+    assert_eq!(transformed["ordinary_lease_registered"], false);
+    let lease_registered: bool = proxy
+        .call_confidential("RegisterOrdinaryLease", ())
+        .await
+        .unwrap();
+    assert!(lease_registered);
 }
 
 async fn authenticates_native_context(variable: &str) {

@@ -1,6 +1,9 @@
 use super::*;
 use std::sync::atomic::AtomicI32;
 
+use crate::Connection;
+use crate::broker::Broker;
+use crate::transport::memory::MemoryTransport;
 use crate::{BusName, InterfaceName, MemberName, ObjectPath};
 
 static DELIVERY_CODE: AtomicI32 = AtomicI32::new(TB_OK);
@@ -2665,4 +2668,329 @@ async fn completed_shutdown_has_already_released_its_native_lifecycle_marker() {
         !still_pending,
         "completed cleanup still reports native work"
     );
+}
+
+#[tokio::test]
+async fn selected_controller_binding_is_available_before_ready_and_revoked_on_disconnect() {
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    let selected = broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert_eq!(controller.unique_name().as_ref(), Some(&selected));
+    let binding = broker
+        .restricted_module_controller_binding()
+        .expect("selected live peer is a loader capability");
+    let (transport, host) = ModuleTransport::new_with_controller_binding(
+        "trusted-migration".into(),
+        vec![],
+        Some(binding.clone()),
+    );
+    let query = host
+        .trusted_host_binding
+        .expect("selected controller installs the optional ABI callback");
+    let peer_len = selected.as_str().len();
+    transport
+        .eager_initialize_with(host, |initializing_host| {
+            let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+            let mut output_len = usize::MAX;
+            assert_eq!(
+                unsafe {
+                    query(
+                        initializing_host.host_ctx,
+                        output.as_mut_ptr(),
+                        peer_len,
+                        &mut output_len,
+                    )
+                },
+                TB_OK
+            );
+            assert_eq!(&output[..output_len], selected.as_str().as_bytes());
+            assert_eq!(output_len, peer_len);
+            let mut module = TbModuleVtable::default();
+            assert_eq!(
+                unsafe { initialize_ok(&initializing_host, &mut module) },
+                TB_OK
+            );
+            Ok(module)
+        })
+        .unwrap();
+    assert!(!transport.is_ready(), "binding is queried during setup");
+
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    assert!(!transport.is_ready());
+
+    let mut short = [0xa5_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = usize::MAX;
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                short.as_mut_ptr(),
+                peer_len - 1,
+                &mut output_len,
+            )
+        },
+        TB_BUFFER_TOO_SMALL
+    );
+    assert_eq!(output_len, peer_len);
+    assert!(short.iter().all(|byte| *byte == 0xa5));
+
+    output_len = usize::MAX;
+    assert_eq!(
+        unsafe { query(host.host_ctx, std::ptr::null_mut(), 0, &mut output_len,) },
+        TB_BUFFER_TOO_SMALL
+    );
+    assert_eq!(output_len, peer_len);
+
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                std::ptr::null_mut(),
+            )
+        },
+        TB_BAD_ARGUMENT
+    );
+
+    output_len = usize::MAX;
+    assert_eq!(
+        unsafe { query(host.host_ctx, std::ptr::null_mut(), 1, &mut output_len) },
+        TB_BAD_ARGUMENT
+    );
+    assert_eq!(output_len, 0);
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                crate::name::MAX_NAME_LEN + 1,
+                &mut output_len,
+            )
+        },
+        TB_BAD_ARGUMENT
+    );
+    assert_eq!(output_len, 0);
+
+    controller.close().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while binding.is_live() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("controller disconnect revokes subsequent queries");
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED
+    );
+
+    let replacement_broker = Broker::new_restricted_module_control();
+    let (replacement_server, replacement_client) = MemoryTransport::pair();
+    let replacement_peer = replacement_broker
+        .attach_module_controller(Arc::new(replacement_server))
+        .unwrap();
+    let _replacement = Connection::connect(Box::new(replacement_client))
+        .await
+        .unwrap();
+    assert_eq!(
+        replacement_peer, selected,
+        "separate brokers reuse unique names"
+    );
+    let (replacement_transport, replacement_host) = ModuleTransport::new_with_controller_binding(
+        "replacement-migration".into(),
+        vec![],
+        replacement_broker.restricted_module_controller_binding(),
+    );
+    replacement_transport
+        .context
+        .init_started
+        .store(true, Ordering::Release);
+    let replacement_query = replacement_host.trusted_host_binding.unwrap();
+    let mut replacement_output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut replacement_len = 0;
+    assert_eq!(
+        unsafe {
+            replacement_query(
+                replacement_host.host_ctx,
+                replacement_output.as_mut_ptr(),
+                replacement_output.len(),
+                &mut replacement_len,
+            )
+        },
+        TB_OK
+    );
+    assert_eq!(
+        &replacement_output[..replacement_len],
+        replacement_peer.as_str().as_bytes()
+    );
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED,
+        "an old attachment never follows a replacement with the same unique name"
+    );
+}
+
+#[tokio::test]
+async fn a_binding_absent_at_transport_creation_is_never_added_later() {
+    let broker = Broker::new_restricted_module_control();
+    let (old_transport, old_host) =
+        ModuleTransport::new_with_controller_binding("before-selection".into(), vec![], None);
+    assert!(old_host.trusted_host_binding.is_none());
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = 1;
+    assert_eq!(
+        unsafe {
+            host_trusted_host_binding(
+                old_host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_UNSUPPORTED
+    );
+    assert_eq!(output_len, 0);
+
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let _controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert!(old_host.trusted_host_binding.is_none());
+    let (new_transport, new_host) = ModuleTransport::new_with_controller_binding(
+        "after-selection".into(),
+        vec![],
+        broker.restricted_module_controller_binding(),
+    );
+    assert!(new_host.trusted_host_binding.is_some());
+    drop(old_transport);
+    drop(new_transport);
+
+    let unrestricted = Broker::new();
+    assert!(
+        unrestricted
+            .restricted_module_controller_binding()
+            .is_none()
+    );
+    let (unrestricted_transport, unrestricted_host) = ModuleTransport::new_with_controller_binding(
+        "unrestricted".into(),
+        vec![],
+        unrestricted.restricted_module_controller_binding(),
+    );
+    assert!(unrestricted_host.trusted_host_binding.is_none());
+    drop(unrestricted_transport);
+}
+
+#[tokio::test]
+async fn a_retained_binding_denies_after_its_module_owner_is_terminal_or_gone() {
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let _controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    let binding = broker
+        .restricted_module_controller_binding()
+        .expect("selected controller");
+    let (transport, host) = ModuleTransport::new_with_controller_binding(
+        "terminal-binding".into(),
+        vec![],
+        Some(binding),
+    );
+    transport.eager_initialize(initialize_ok, host).unwrap();
+    let query = host.trusted_host_binding.unwrap();
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = 0;
+    transport.commit_terminal(true);
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED
+    );
+    drop(transport);
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED,
+        "the process-lifetime HostContext callback is a closed tombstone"
+    );
+}
+
+#[tokio::test]
+async fn trusted_host_callback_denies_a_poisoned_owner_without_unwinding_through_c() {
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let _controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    let (transport, host) = ModuleTransport::new_with_controller_binding(
+        "poisoned-owner".into(),
+        vec![],
+        broker.restricted_module_controller_binding(),
+    );
+    transport.eager_initialize(initialize_ok, host).unwrap();
+    let query = host.trusted_host_binding.unwrap();
+    let context = transport.context;
+    assert!(
+        std::thread::spawn(move || {
+            let _owner = context.owner.lock().unwrap();
+            panic!("poison the module owner lock for the callback test");
+        })
+        .join()
+        .is_err()
+    );
+
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = usize::MAX;
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED
+    );
+    assert_eq!(output_len, 0);
 }

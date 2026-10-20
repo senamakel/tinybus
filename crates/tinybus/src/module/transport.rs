@@ -9,12 +9,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify, mpsc};
 
+use crate::broker::RestrictedModuleControllerBinding;
 use crate::error::{Error, Result};
 use crate::message::codec::MAX_FRAME_LEN;
 use crate::message::{Message, MessageKind};
 use crate::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_OK, TB_PANICKED,
-    TB_TIMEOUT, TbHostVtable, TbModuleVtable, TbSlice,
+    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE,
+    TB_NATIVE_TERMINAL_LIVE, TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable,
+    TbModuleVtable, TbSlice,
 };
 use crate::ports::Transport;
 
@@ -45,6 +47,7 @@ struct HostContext {
     ready: AtomicBool,
     ready_gate: StdMutex<()>,
     broker_routing: AtomicBool,
+    trusted_host_binding: Option<RestrictedModuleControllerBinding>,
     ready_notify: Notify,
     inflight: AtomicUsize,
 }
@@ -250,7 +253,16 @@ impl ModuleTransport {
         self.context.broker_routing.store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) fn new(label: String, config: Vec<u8>) -> (Arc<Self>, TbHostVtable) {
+        Self::new_with_controller_binding(label, config, None)
+    }
+
+    pub(crate) fn new_with_controller_binding(
+        label: String,
+        config: Vec<u8>,
+        trusted_host_binding: Option<RestrictedModuleControllerBinding>,
+    ) -> (Arc<Self>, TbHostVtable) {
         let (inbound_tx, inbound_rx) = mpsc::channel(HOST_QUEUE_CAPACITY);
         let context = Box::leak(Box::new(HostContext {
             inbound: StdMutex::new(Some(inbound_tx)),
@@ -276,6 +288,7 @@ impl ModuleTransport {
             ready: AtomicBool::new(false),
             ready_gate: StdMutex::new(()),
             broker_routing: AtomicBool::new(false),
+            trusted_host_binding,
             ready_notify: Notify::new(),
             inflight: AtomicUsize::new(0),
         }));
@@ -325,6 +338,10 @@ impl ModuleTransport {
             ready: host_ready,
             broker_routing: Some(host_broker_routing),
             native_terminal_state: Some(host_native_terminal_state),
+            trusted_host_binding: context.trusted_host_binding.as_ref().map(|_| {
+                host_trusted_host_binding
+                    as unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32
+            }),
         };
         (transport, vtable)
     }
@@ -1511,6 +1528,61 @@ unsafe extern "C" fn host_native_terminal_state(ctx: *mut c_void) -> u32 {
             | crate::module::abi::TB_NATIVE_TERMINAL_FAULT,
         |context| context.native_terminal_state.load(Ordering::Acquire),
     )
+}
+
+unsafe extern "C" fn host_trusted_host_binding(
+    ctx: *mut c_void,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> i32 {
+    if out_len.is_null() {
+        return TB_BAD_ARGUMENT;
+    }
+    unsafe { out_len.write(0) };
+    if capacity > crate::name::MAX_NAME_LEN || (out.is_null() && capacity != 0) {
+        return TB_BAD_ARGUMENT;
+    }
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Some(context) = (unsafe { ctx.cast::<HostContext>().as_ref() }) else {
+            return TB_CLOSED;
+        };
+        let Some(binding) = context.trusted_host_binding.as_ref() else {
+            return TB_UNSUPPORTED;
+        };
+        let owner = context.owner.lock().ok().and_then(|owner| owner.upgrade());
+        let Some(owner) = owner else {
+            return TB_CLOSED;
+        };
+        if context.native_terminal_state.load(Ordering::Acquire) != TB_NATIVE_TERMINAL_LIVE
+            || !owner.init_started()
+            || owner.init_failed()
+            || owner.is_stopped()
+            || owner.is_faulted()
+            || owner.admission_closed()
+            || !binding.is_live()
+        {
+            return TB_CLOSED;
+        }
+
+        let peer = binding.peer().as_str().as_bytes();
+        if peer.len() > crate::name::MAX_NAME_LEN {
+            return TB_BAD_ARGUMENT;
+        }
+        if capacity < peer.len() {
+            unsafe { out_len.write(peer.len()) };
+            return TB_BUFFER_TOO_SMALL;
+        }
+        if !peer.is_empty() {
+            unsafe { std::ptr::copy_nonoverlapping(peer.as_ptr(), out, peer.len()) };
+        }
+        unsafe { out_len.write(peer.len()) };
+        TB_OK
+    })) {
+        Ok(code) => code,
+        Err(_) => TB_PANICKED,
+    }
 }
 
 #[derive(Debug)]

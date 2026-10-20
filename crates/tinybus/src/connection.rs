@@ -175,6 +175,8 @@ impl PendingReply {
 }
 
 struct Inner {
+    /// Per-receiver identity copied weakly into broker-authenticated contexts.
+    origin: Arc<ConnectionOrigin>,
     transport: Arc<dyn Transport>,
     brokered_native: bool,
     native_provenance: Option<Arc<AtomicBool>>,
@@ -199,6 +201,11 @@ struct Inner {
     // Last: opted-in observers retain whole-Connection teardown ownership,
     // including ObjectTree, streams and cloned method observers.
     catch_observer: std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+/// Opaque allocation identity for one local receive connection.
+pub(crate) struct ConnectionOrigin {
+    _private: u8,
 }
 
 /// Identity of one exact exported interface registration.
@@ -259,6 +266,7 @@ pub struct Connection {
 pub struct WeakConnection {
     inner: std::sync::Weak<Inner>,
     close: std::sync::Weak<CloseOnDrop>,
+    origin: std::sync::Weak<ConnectionOrigin>,
 }
 
 impl std::fmt::Debug for WeakConnection {
@@ -285,6 +293,12 @@ impl WeakConnection {
             _close: close,
         })
     }
+
+    pub(crate) fn matches_origin(&self, origin: &std::sync::Weak<ConnectionOrigin>) -> bool {
+        self.origin.strong_count() > 0
+            && origin.strong_count() > 0
+            && std::sync::Weak::ptr_eq(&self.origin, origin)
+    }
 }
 
 impl Connection {
@@ -297,6 +311,7 @@ impl Connection {
         WeakConnection {
             inner: Arc::downgrade(&self.inner),
             close: Arc::downgrade(&self._close),
+            origin: Arc::downgrade(&self.inner.origin),
         }
     }
 
@@ -389,6 +404,7 @@ impl Connection {
         let (signal_deliveries, _) = broadcast::channel(SIGNAL_BUFFER);
         let (outbox, outbound) = mpsc::channel(OUTBOX_CAPACITY);
         let inner = Arc::new(Inner {
+            origin: Arc::new(ConnectionOrigin { _private: 0 }),
             transport,
             brokered_native,
             native_provenance,
@@ -1803,7 +1819,11 @@ async fn dispatch(inner: &Inner, header: &Header, body: Value, brokered: bool) -
         return Err(Error::protocol("method call is missing an address"));
     };
     let context = if brokered {
-        crate::CallContext::brokered(header.sender.as_ref(), header.confidential)
+        crate::CallContext::brokered_with_origin(
+            header.sender.as_ref(),
+            header.confidential,
+            Some(&inner.origin),
+        )
     } else {
         crate::CallContext::default()
     };

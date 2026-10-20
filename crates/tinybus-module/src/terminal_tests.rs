@@ -30,6 +30,7 @@ fn host() -> HostCalls {
         },
         broker_routing: None,
         native_terminal_state: Some(query),
+        trusted_host_binding: None,
     })
 }
 #[test]

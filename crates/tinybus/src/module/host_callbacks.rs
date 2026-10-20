@@ -701,7 +701,12 @@ impl ModuleHost {
                 .map_err(|_| Error::failed("module configuration is invalid"))?;
             let fingerprint = callback_config_fingerprint(&bytes);
             drop(config);
-            let (transport, host) = ModuleTransport::new(admitted.name.clone(), bytes);
+            let trusted_host = self.inner.broker.restricted_module_controller_binding();
+            let (transport, host) = ModuleTransport::new_with_controller_binding(
+                admitted.name.clone(),
+                bytes,
+                trusted_host,
+            );
             transport.bind_host_callbacks(binding.state.clone())?;
             #[cfg(test)]
             {
