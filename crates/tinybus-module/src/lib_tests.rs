@@ -541,7 +541,14 @@ async fn plain_context_setup_entry_receives_the_selected_controller_binding() {
         send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
         serde_json::json!(true)
     );
-    assert_eq!(unsafe { (out.shutdown)(out.module_ctx, 1000) }, TB_OK);
+    let shutdown = out.shutdown;
+    let context = out.module_ctx as usize;
+    assert_eq!(
+        tokio::task::spawn_blocking(move || unsafe { shutdown(context as *mut c_void, 1000) })
+            .await
+            .unwrap(),
+        TB_OK
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
