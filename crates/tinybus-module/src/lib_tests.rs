@@ -496,7 +496,9 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
         "a confidential context from another live receiver cannot match even with the same sender name"
     );
 
-    let reinitialize = out.reinitialize.expect("configured factory supports reinit");
+    let reinitialize = out
+        .reinitialize
+        .expect("configured factory supports reinit");
     let config = b"{}";
     assert_eq!(
         unsafe { reinitialize(out.module_ctx, config.as_ptr(), config.len()) },
