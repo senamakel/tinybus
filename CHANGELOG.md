@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6
+
+### Added
+
+- Give module setup callbacks an SDK-issued trusted host binding to the
+  restricted module controller selected by the host.
+
 ## 0.3.5
 
 ### Added
