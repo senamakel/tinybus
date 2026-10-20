@@ -2590,16 +2590,19 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
     assert_eq!(after_reinitialize["authorized"], true);
     assert_eq!(after_reinitialize["previousAuthorized"], false);
 
-    // A plain configured module still starts through the same public runtime.
-    let ordinary = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
-    let ordinary_hash =
-        crate::module::hash::file_hex(std::fs::File::open(&ordinary).unwrap()).unwrap();
-    let (_ordinary_dir, ordinary_artifact) = staged_module(&ordinary, &ordinary_hash);
+    // An ordinary linked module still starts through the same public runtime.
+    let mut ordinary_manifest = manifest();
+    ordinary_manifest.lazy_init = true;
     let ordinary_info = runtime
         .host()
-        .load_file_with_config(
-            ordinary_artifact,
-            serde_json::json!({"prefix": "runtime-ordinary:"}),
+        .attach_linked_with_config(
+            crate::module::LinkedModule {
+                descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
+                manifest: ordinary_manifest,
+                init: lazy_echo_init,
+                init_with_setup: None,
+            },
+            serde_json::json!({}),
         )
         .unwrap();
     runtime
@@ -2615,8 +2618,11 @@ async fn a_configured_context_cdylib_preserves_binding_through_reinitialize() {
             ordinary_info.manifest.bus_name.as_str(),
         )
         .unwrap();
-    let now: String = ordinary_proxy.call("Now", ()).await.unwrap();
-    assert!(now.starts_with("runtime-ordinary:"));
+    let echoed: String = ordinary_proxy
+        .call("Echo", ("ordinary-runtime".to_owned(),))
+        .await
+        .unwrap();
+    assert_eq!(echoed, "ordinary-runtime");
 }
 
 async fn contextual_factory_cdylib_instance(
