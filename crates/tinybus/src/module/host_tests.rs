@@ -2516,21 +2516,29 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
         )
         .unwrap();
     assert!(other_proxy.attestation().await.unwrap().is_some());
-    assert!(proxy.call("Schema", ()).await.is_err());
     assert!(
-        other_proxy.call_confidential("Schema", ()).await.is_err(),
+        proxy
+            .call::<serde_json::Value>("Schema", ())
+            .await
+            .is_err()
+    );
+    assert!(
+        other_proxy
+            .call_confidential::<serde_json::Value>("Schema", ())
+            .await
+            .is_err(),
         "recipient attestation alone must not authorize a different sender"
     );
     assert!(
         other_proxy
-            .call_confidential("Transform", ("attacker-id",))
+            .call_confidential::<serde_json::Value>("Transform", ("attacker-id",))
             .await
             .is_err(),
         "a denied caller cannot alter the migration transcript state"
     );
     assert!(
         other_proxy
-            .call_confidential("RegisterOrdinaryLease", ())
+            .call_confidential::<serde_json::Value>("RegisterOrdinaryLease", ())
             .await
             .is_err(),
         "a denied caller cannot register the ordinary lease"
@@ -2541,7 +2549,7 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
     });
     assert!(
         other_proxy
-            .call_confidential("Schema", (forged_identity,))
+            .call_confidential::<serde_json::Value>("Schema", (forged_identity,))
             .await
             .is_err(),
         "JSON claims cannot replace the broker-stamped sender"
