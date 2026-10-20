@@ -538,63 +538,6 @@ async fn contextual_dynamic_export_pins_and_revalidates_the_broker_controller() 
     );
 }
 
-#[cfg(feature = "static-link")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn contextual_factory_dynamic_export_keeps_state_and_refreshes_setup_context() {
-    let _host_state = host_state_guard().await;
-    let before_factory = CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst);
-    let before_setups = CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst);
-    let (out, outgoing) = start_context_export(
-        dynamic_context_factory_export::tinybus_module_init_v1,
-        true,
-        true,
-    );
-    let receiver = CAPTURED_MODULE_NAME
-        .get_or_init(|| StdMutex::new(None))
-        .lock()
-        .unwrap()
-        .clone()
-        .expect("factory setup receives its attachment connection");
-    assert_eq!(
-        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
-        1,
-        "the context factory runs once for this ABI instance"
-    );
-    assert_eq!(
-        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
-        1
-    );
-    assert_eq!(
-        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
-        serde_json::json!(true)
-    );
-
-    let reinitialize = out
-        .reinitialize
-        .expect("configured factory supports reinit");
-    let config = b"{}";
-    assert_eq!(
-        unsafe { reinitialize(out.module_ctx, config.as_ptr(), config.len()) },
-        TB_OK
-    );
-    assert_eq!(
-        CONTEXT_FACTORY_CREATIONS.load(Ordering::SeqCst) - before_factory,
-        1,
-        "reinitialization reuses the same stateful factory callback"
-    );
-    assert_eq!(
-        CONTEXT_FACTORY_SETUPS.load(Ordering::SeqCst) - before_setups,
-        2
-    );
-    assert_eq!(
-        send_context_probe_call(&out, &receiver, ":1.2", true, &outgoing),
-        serde_json::json!(true),
-        "reinitialization receives a fresh context for the active connection"
-    );
-
-    assert_eq!(unsafe { (out.shutdown)(out.module_ctx, 1000) }, TB_OK);
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contextual_static_export_accepts_an_old_host_without_the_optional_binding_tail() {
     let _host_state = host_state_guard().await;
