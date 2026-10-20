@@ -2489,7 +2489,7 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
         controller.unique_name().as_ref(),
         Some(&selected_controller)
     );
-    let modules = ModuleHost::new(broker);
+    let modules = ModuleHost::new(broker.clone());
     let info = modules.load_file(artifact).unwrap();
 
     modules
@@ -2503,6 +2503,38 @@ async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registrati
             "org.example.TrustedMigration",
         )
         .unwrap();
+    assert!(proxy.attestation().await.unwrap().is_some());
+
+    let (other_server, other_client) = MemoryTransport::pair();
+    broker.attach(Arc::new(other_server));
+    let other = Connection::connect(Box::new(other_client)).await.unwrap();
+    let other_proxy = other
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/migration",
+            "org.example.TrustedMigration",
+        )
+        .unwrap();
+    assert!(other_proxy.attestation().await.unwrap().is_some());
+    assert!(proxy.call("Schema", ()).await.is_err());
+    assert!(
+        other_proxy
+            .call_confidential("Schema", ())
+            .await
+            .is_err(),
+        "recipient attestation alone must not authorize a different sender"
+    );
+    let forged_identity = serde_json::json!({
+        "authenticated_sender": controller.unique_name(),
+        "is_confidential": true
+    });
+    assert!(
+        other_proxy
+            .call_confidential("Schema", (forged_identity,))
+            .await
+            .is_err(),
+        "JSON claims cannot replace the broker-stamped sender"
+    );
     let schema: serde_json::Value = proxy.call_confidential("Schema", ()).await.unwrap();
     assert_eq!(schema["required"], serde_json::json!(["id"]));
     let transformed: serde_json::Value = proxy
