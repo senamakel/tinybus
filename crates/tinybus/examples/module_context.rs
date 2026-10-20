@@ -3,28 +3,10 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use tinybus::{CallContext, Connection, Error, Interface, InterfaceName, MemberName, Result};
-use tinybus_module::{ModuleSetupContext, TrustedHost};
-
-#[derive(serde::Deserialize)]
-#[serde(default)]
-struct Config {
-    marker: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            marker: "initial".to_string(),
-        }
-    }
-}
 
 struct ContextService(
     Connection,
     std::sync::Arc<tokio::sync::Mutex<tokio::sync::broadcast::Receiver<tinybus::message::Message>>>,
-    Option<TrustedHost>,
-    String,
-    std::sync::Arc<tokio::sync::Mutex<Option<CallContext>>>,
 );
 
 #[async_trait]
@@ -38,8 +20,6 @@ impl Interface for ContextService {
             "Callback".parse().unwrap(),
             "ConfidentialCallback".parse().unwrap(),
             "WaitForWatchChanged".parse().unwrap(),
-            "Configuration".parse().unwrap(),
-            "TrustedContext".parse().unwrap(),
         ]
     }
     async fn call(&self, _: &MemberName, _: Value) -> Result<Value> {
@@ -59,26 +39,6 @@ impl Interface for ContextService {
         }
         match member.as_str() {
             "Inspect" => Ok(serde_json::json!(sender)),
-            "Configuration" => Ok(serde_json::json!(&self.3)),
-            "TrustedContext" => {
-                let previous = self.4.lock().await.clone();
-                let previous_authorized = self
-                    .2
-                    .as_ref()
-                    .zip(previous.as_ref())
-                    .is_some_and(|(trusted_host, context)| trusted_host.authorizes(context));
-                let authorized = self
-                    .2
-                    .as_ref()
-                    .is_some_and(|trusted_host| trusted_host.authorizes(context));
-                if authorized {
-                    *self.4.lock().await = Some(context.clone());
-                }
-                Ok(serde_json::json!({
-                    "authorized": authorized,
-                    "previousAuthorized": previous_authorized,
-                }))
-            }
             "Callback" | "ConfidentialCallback" => {
                 let proxy = self
                     .0
@@ -105,9 +65,7 @@ impl Interface for ContextService {
     }
 }
 
-async fn setup(context: ModuleSetupContext, config: Config) -> Result<()> {
-    let connection = context.connection().clone();
-    let trusted_host = context.trusted_host().cloned();
+async fn setup(connection: Connection) -> Result<()> {
     let signals = connection
         .proxy("org.example.Context", "/context", "org.example.Context")?
         .receive_directed_signal("WatchChanged")
@@ -118,9 +76,6 @@ async fn setup(context: ModuleSetupContext, config: Config) -> Result<()> {
             ContextService(
                 connection.clone(),
                 std::sync::Arc::new(tokio::sync::Mutex::new(signals)),
-                trusted_host,
-                config.marker,
-                std::sync::Arc::new(tokio::sync::Mutex::new(None)),
             ),
         )
         .await?;
@@ -128,8 +83,7 @@ async fn setup(context: ModuleSetupContext, config: Config) -> Result<()> {
 }
 
 tinybus_module::module_export! {
-    setup_with_context = setup,
-    config = Config,
+    setup = setup,
     worker_threads = 1,
     provides = ["org.example.Context"],
     methods = ["Inspect", "Callback", "ConfidentialCallback", "WaitForWatchChanged"],
