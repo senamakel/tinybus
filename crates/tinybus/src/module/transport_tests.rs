@@ -2758,6 +2758,56 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
         },
         TB_CLOSED
     );
+
+    let replacement_broker = Broker::new_restricted_module_control();
+    let (replacement_server, replacement_client) = MemoryTransport::pair();
+    let replacement_peer = replacement_broker
+        .attach_module_controller(Arc::new(replacement_server))
+        .unwrap();
+    let _replacement = Connection::connect(Box::new(replacement_client))
+        .await
+        .unwrap();
+    assert_eq!(replacement_peer, selected, "separate brokers reuse unique names");
+    let (replacement_transport, replacement_host) =
+        ModuleTransport::new_with_controller_binding(
+            "replacement-migration".into(),
+            vec![],
+            replacement_broker.restricted_module_controller_binding(),
+        );
+    replacement_transport
+        .context
+        .init_started
+        .store(true, Ordering::Release);
+    let replacement_query = replacement_host.trusted_host_binding.unwrap();
+    let mut replacement_output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut replacement_len = 0;
+    assert_eq!(
+        unsafe {
+            replacement_query(
+                replacement_host.host_ctx,
+                replacement_output.as_mut_ptr(),
+                replacement_output.len(),
+                &mut replacement_len,
+            )
+        },
+        TB_OK
+    );
+    assert_eq!(
+        &replacement_output[..replacement_len],
+        replacement_peer.as_str().as_bytes()
+    );
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED,
+        "an old attachment never follows a replacement with the same unique name"
+    );
 }
 
 #[tokio::test]
@@ -2798,8 +2848,13 @@ async fn a_binding_absent_at_transport_creation_is_never_added_later() {
     drop(old_transport);
     drop(new_transport);
 
-    let (unrestricted_transport, unrestricted_host) =
-        ModuleTransport::new_with_controller_binding("unrestricted".into(), vec![], None);
+    let unrestricted = Broker::new();
+    assert!(unrestricted.restricted_module_controller_binding().is_none());
+    let (unrestricted_transport, unrestricted_host) = ModuleTransport::new_with_controller_binding(
+        "unrestricted".into(),
+        vec![],
+        unrestricted.restricted_module_controller_binding(),
+    );
     assert!(unrestricted_host.trusted_host_binding.is_none());
     drop(unrestricted_transport);
 }
@@ -2851,4 +2906,47 @@ async fn a_retained_binding_denies_after_its_module_owner_is_terminal_or_gone() 
         TB_CLOSED,
         "the process-lifetime HostContext callback is a closed tombstone"
     );
+}
+
+#[tokio::test]
+async fn trusted_host_callback_denies_a_poisoned_owner_without_unwinding_through_c() {
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let _controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    let (transport, host) = ModuleTransport::new_with_controller_binding(
+        "poisoned-owner".into(),
+        vec![],
+        broker.restricted_module_controller_binding(),
+    );
+    transport.context.init_started.store(true, Ordering::Release);
+    let query = host.trusted_host_binding.unwrap();
+    let context = transport.context;
+    assert!(
+        std::thread::spawn(move || {
+            let _owner = context.owner.lock().unwrap();
+            panic!("poison the module owner lock for the callback test");
+        })
+        .join()
+        .is_err()
+    );
+
+    let mut output = [0_u8; crate::name::MAX_NAME_LEN];
+    let mut output_len = usize::MAX;
+    assert_eq!(
+        unsafe {
+            query(
+                host.host_ctx,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut output_len,
+            )
+        },
+        TB_CLOSED
+    );
+    assert_eq!(output_len, 0);
 }
