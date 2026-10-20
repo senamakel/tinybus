@@ -87,6 +87,25 @@ mod optional {
     }
 }
 
+mod trusted_context {
+    async fn setup(context: crate::ModuleSetupContext) -> tinybus::Result<()> {
+        let _trusted_host = context.trusted_host();
+        let _connection = context.connection();
+        Ok(())
+    }
+
+    crate::module_export_static! {
+        setup_with_context = setup,
+        worker_threads = 1,
+        provides = ["ai.tinyhumans.tinybus.StaticTrustedContext"],
+        methods = ["Inspect"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
 #[test]
 fn linked_modules_retain_distinct_manifests() {
     fn manifest(slice: tinybus::module::abi::TbSlice) -> tinybus::module::manifest::ModuleManifest {
@@ -97,6 +116,7 @@ fn linked_modules_retain_distinct_manifests() {
     let first_manifest = manifest(first::tinybus_module_manifest_v1());
     let second_manifest = manifest(second::tinybus_module_manifest_v1());
     let configured_manifest = manifest(configured::tinybus_module_manifest_v1());
+    let contextual_manifest = manifest(trusted_context::tinybus_module_manifest_v1());
     assert_eq!(
         first_manifest.bus_name.as_str(),
         "ai.tinyhumans.tinybus.StaticFirst"
@@ -109,11 +129,19 @@ fn linked_modules_retain_distinct_manifests() {
         configured_manifest.bus_name.as_str(),
         "ai.tinyhumans.tinybus.StaticConfigured"
     );
+    assert_eq!(
+        contextual_manifest.bus_name.as_str(),
+        "ai.tinyhumans.tinybus.StaticTrustedContext"
+    );
     assert_eq!(first::linked_module().unwrap().manifest, first_manifest);
     assert_eq!(second::linked_module().unwrap().manifest, second_manifest);
     assert_eq!(
         configured::linked_module().unwrap().manifest,
         configured_manifest
+    );
+    assert_eq!(
+        trusted_context::linked_module().unwrap().manifest,
+        contextual_manifest
     );
     let _entries = (
         &first::TINYBUS_MODULE_ABI_V1,
@@ -122,6 +150,8 @@ fn linked_modules_retain_distinct_manifests() {
         second::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
         &configured::TINYBUS_MODULE_ABI_V1,
         configured::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
+        &trusted_context::TINYBUS_MODULE_ABI_V1,
+        trusted_context::tinybus_module_init_v1 as tinybus::module::abi::TbModuleInit,
     );
     assert!(!optional::tinybus_module_manifest_v1().ptr.is_null());
     #[cfg(feature = "static-link")]

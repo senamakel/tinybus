@@ -77,6 +77,94 @@ async fn brokered_pair() -> (Connection, Connection) {
     (client, service)
 }
 
+struct CaptureCallContext(std::sync::Mutex<Option<tokio::sync::oneshot::Sender<CallContext>>>);
+
+#[async_trait]
+impl Interface for CaptureCallContext {
+    fn name(&self) -> InterfaceName {
+        InterfaceName::new("org.example.ContextCapture").unwrap()
+    }
+
+    fn members(&self) -> Vec<MemberName> {
+        vec![MemberName::new("Capture").unwrap()]
+    }
+
+    async fn call(&self, _: &MemberName, _: Value) -> Result<Value> {
+        Err(Error::failed("context-aware dispatch required"))
+    }
+
+    async fn call_with_context(
+        &self,
+        _: &MemberName,
+        _: Value,
+        context: &CallContext,
+    ) -> Result<Value> {
+        self.0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one capture call")
+            .send(context.clone())
+            .map_err(|_| Error::failed("context receiver closed"))?;
+        Ok(Value::Null)
+    }
+}
+
+struct CapturedContext {
+    context: CallContext,
+    receiver: Connection,
+    caller: Connection,
+    _broker_task: tokio::task::JoinHandle<()>,
+}
+
+async fn capture_context_from_fresh_broker() -> CapturedContext {
+    let bus = MemoryBus::new();
+    let broker_task = Broker::new().spawn(bus.clone());
+    let receiver = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let (capture, captured_rx) = tokio::sync::oneshot::channel();
+    receiver
+        .serve_at(
+            "/capture".parse().unwrap(),
+            CaptureCallContext(std::sync::Mutex::new(Some(capture))),
+        )
+        .await
+        .unwrap();
+    let caller = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = caller
+        .proxy(
+            "org.example.ContextCapture",
+            "/capture",
+            "org.example.ContextCapture",
+        )
+        .unwrap();
+    let _: Value = proxy.call("Capture", ()).await.unwrap();
+    CapturedContext {
+        context: captured_rx.await.unwrap(),
+        receiver,
+        caller,
+        _broker_task: broker_task,
+    }
+}
+
+#[tokio::test]
+async fn captured_contexts_from_distinct_brokers_do_not_match_same_named_receivers() {
+    let first = capture_context_from_fresh_broker().await;
+    let second = capture_context_from_fresh_broker().await;
+    assert_eq!(
+        first.caller.unique_name(),
+        second.caller.unique_name(),
+        "fresh brokers deliberately assign the same sender name"
+    );
+    assert!(first.context.is_for_connection(&first.receiver.downgrade()));
+    assert!(second.context.is_for_connection(&second.receiver.downgrade()));
+    assert!(!first.context.is_for_connection(&second.receiver.downgrade()));
+    assert!(!second.context.is_for_connection(&first.receiver.downgrade()));
+}
+
 struct MutatesObjectTree {
     service: Connection,
     extra_path: ObjectPath,
