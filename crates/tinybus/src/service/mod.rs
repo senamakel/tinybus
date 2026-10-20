@@ -90,6 +90,7 @@ impl CallContext {
             .is_some_and(|origin| connection.matches_origin(origin))
     }
 
+    #[cfg(test)]
     pub(crate) fn brokered(sender: Option<&BusName>, confidential: bool) -> Self {
         Self::brokered_with_origin(sender, confidential, None)
     }

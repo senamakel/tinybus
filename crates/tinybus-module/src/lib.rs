@@ -209,7 +209,10 @@ impl HostCalls {
         if code != TB_OK || len > bytes.len() {
             return None;
         }
-        let sender = std::str::from_utf8(&bytes[..len]).ok()?.parse().ok()?;
+        let sender = std::str::from_utf8(&bytes[..len])
+            .ok()?
+            .parse::<BusName>()
+            .ok()?;
         sender.is_unique().then_some(sender)
     }
 }
