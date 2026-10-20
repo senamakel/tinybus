@@ -337,10 +337,10 @@ impl ModuleTransport {
             ready: host_ready,
             broker_routing: Some(host_broker_routing),
             native_terminal_state: Some(host_native_terminal_state),
-            trusted_host_binding: context
-                .trusted_host_binding
-                .as_ref()
-                .map(|_| host_trusted_host_binding),
+            trusted_host_binding: context.trusted_host_binding.as_ref().map(|_| {
+                host_trusted_host_binding
+                    as unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32
+            }),
         };
         (transport, vtable)
     }
