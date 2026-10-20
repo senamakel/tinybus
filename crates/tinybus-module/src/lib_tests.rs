@@ -1,5 +1,7 @@
 use super::*;
+#[cfg(feature = "static-link")]
 use std::future::Future;
+#[cfg(feature = "static-link")]
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize};
 use std::sync::{OnceLock, mpsc::SyncSender};
