@@ -1409,6 +1409,14 @@ macro_rules! module_export {
             $($rest)*
         }
     };
+    (setup_with_context = $setup:path, $($rest:tt)*) => {
+        $crate::module_export! {
+            @plain export = {#[unsafe(no_mangle)]},
+            start = $crate::start_module_with_context,
+            setup = $setup,
+            $($rest)*
+        }
+    };
     (setup = $setup:path, $($rest:tt)*) => {
         $crate::module_export! {
             @plain export = {#[unsafe(no_mangle)]},
@@ -1450,6 +1458,15 @@ macro_rules! module_export_static {
             start = $crate::start_linked_reconfigurable_module,
             setup = $setup,
             config = $config,
+            $($rest)*
+        }
+        $crate::module_export! { @linked $($rest)* }
+    };
+    (setup_with_context = $setup:path, $($rest:tt)*) => {
+        $crate::module_export! {
+            @plain export = {},
+            start = $crate::start_linked_module_with_context,
+            setup = $setup,
             $($rest)*
         }
         $crate::module_export! { @linked $($rest)* }

@@ -295,7 +295,9 @@ impl WeakConnection {
     }
 
     pub(crate) fn matches_origin(&self, origin: &std::sync::Weak<ConnectionOrigin>) -> bool {
-        std::sync::Weak::ptr_eq(&self.origin, origin)
+        self.origin.strong_count() > 0
+            && origin.strong_count() > 0
+            && std::sync::Weak::ptr_eq(&self.origin, origin)
     }
 }
 

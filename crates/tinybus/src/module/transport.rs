@@ -325,6 +325,7 @@ impl ModuleTransport {
             ready: host_ready,
             broker_routing: Some(host_broker_routing),
             native_terminal_state: Some(host_native_terminal_state),
+            trusted_host_binding: None,
         };
         (transport, vtable)
     }

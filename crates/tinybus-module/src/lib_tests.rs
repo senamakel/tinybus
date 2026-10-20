@@ -75,6 +75,7 @@ fn host(config: &[u8]) -> TbHostVtable {
         ready: host_ready,
         broker_routing: None,
         native_terminal_state: None,
+        trusted_host_binding: None,
     }
 }
 

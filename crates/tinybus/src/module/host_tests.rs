@@ -3,7 +3,7 @@
 use super::*;
 use crate::Connection;
 use crate::module::abi::TbAbiDescriptor;
-use crate::transport::memory::MemoryBus;
+use crate::transport::memory::{MemoryBus, MemoryTransport};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
@@ -2464,8 +2464,49 @@ async fn a_real_cdylib_authenticates_incoming_calls_and_its_host_callback() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires TINYBUS_TEST_CONTEXT_EAGER_MODULE to point at the built cdylib"]
-async fn an_eager_cdylib_authenticates_after_its_worker_runs_before_admission() {
-    authenticates_native_context("TINYBUS_TEST_CONTEXT_EAGER_MODULE").await;
+async fn a_compiled_migration_module_negotiates_before_ordinary_lease_registration() {
+    let artifact = PathBuf::from(
+        std::env::var_os("TINYBUS_TEST_CONTEXT_EAGER_MODULE")
+            .expect("TINYBUS_TEST_CONTEXT_EAGER_MODULE"),
+    );
+    let hash = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+    let (_dir, artifact) = staged_module(&artifact, &hash);
+
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    let modules = ModuleHost::new(broker);
+    let info = modules.load_file(artifact).unwrap();
+
+    modules
+        .ensure_ready(info.manifest.bus_name.as_str())
+        .await
+        .expect("compiled migration setup must receive the selected controller binding");
+    let proxy = controller
+        .proxy(
+            info.manifest.bus_name.as_str(),
+            "/migration",
+            "org.example.TrustedMigration",
+        )
+        .unwrap();
+    let schema: serde_json::Value = proxy.call_confidential("Schema", ()).await.unwrap();
+    assert_eq!(schema["required"], serde_json::json!(["id"]));
+    let transformed: serde_json::Value = proxy
+        .call_confidential("Transform", ("legacy-id",))
+        .await
+        .unwrap();
+    assert_eq!(transformed["id"], "record-legacy-id");
+    assert_eq!(transformed["ordinary_lease_registered"], false);
+    let lease_registered: bool = proxy
+        .call_confidential("RegisterOrdinaryLease", ())
+        .await
+        .unwrap();
+    assert!(lease_registered);
 }
 
 async fn authenticates_native_context(variable: &str) {

@@ -23,6 +23,7 @@ fn host() -> TbHostVtable {
         },
         broker_routing: None,
         native_terminal_state: None,
+        trusted_host_binding: None,
     }
 }
 fn output() -> TbModuleVtable {
