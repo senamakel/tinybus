@@ -29,7 +29,7 @@ fn linked_module() -> tinybus::Result<LinkedModule> {
     fixture::linked_module()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sender_lookup_resolves_the_admitted_peer_during_initialization() {
     let broker = Broker::new_restricted_module_control();
     let broker_task = broker.spawn(MemoryBus::new());
@@ -43,6 +43,27 @@ async fn sender_lookup_resolves_the_admitted_peer_during_initialization() {
 
     let host = Arc::new(ModuleHost::new(broker));
     let lookup = host.sender_lookup();
+
+    // Linked admission hashes the host executable once synchronously. Keep
+    // that unrelated first-use work outside the explicit setup barrier so the
+    // deadline measures module startup and broker progress.
+    let mut hash_warmup = linked_module().unwrap();
+    hash_warmup.descriptor =
+        tinybus::module::abi::TbAbiDescriptor::current("tinybus-sender-lookup-warmup", "0.3.12");
+    hash_warmup.manifest.module.name = "tinybus-sender-lookup-warmup".to_owned();
+    hash_warmup.manifest.bus_name = "ai.tinyhumans.module.SenderLookupWarmup".parse().unwrap();
+    hash_warmup.manifest.object_path = "/ai/tinyhumans/module/SenderLookupWarmup".parse().unwrap();
+    hash_warmup.manifest.lazy_init = true;
+    let warmup_info = host
+        .attach_linked_with_config(hash_warmup, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(warmup_info.state, ModuleState::Resolved);
+    assert!(
+        lookup
+            .sender_for_module("tinybus-sender-lookup-warmup")
+            .is_none()
+    );
+
     let (setup_started_tx, setup_started_rx) = tokio::sync::oneshot::channel();
     let (finish_setup_tx, finish_setup_rx) = tokio::sync::oneshot::channel();
     let attach_host = host.clone();
@@ -66,7 +87,12 @@ async fn sender_lookup_resolves_the_admitted_peer_during_initialization() {
         .expect("module reached setup")
         .expect("setup barrier sender remains live");
 
-    assert_eq!(host.list()[0].state, ModuleState::Initializing);
+    let module_info = host
+        .list()
+        .into_iter()
+        .find(|info| info.name == "tinybus")
+        .expect("linked target module was admitted");
+    assert_eq!(module_info.state, ModuleState::Initializing);
     let sender = lookup
         .sender_for_module("tinybus")
         .expect("the admitted initializing module has a live unique peer");
