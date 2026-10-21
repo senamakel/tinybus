@@ -1700,9 +1700,12 @@ impl Transport for ModuleTransport {
             return Err(Error::ConnectionClosed);
         }
         let is_call = message.header.kind == MessageKind::MethodCall;
-        let pre_ready_authorized_peer = is_call
-            .then(|| self.authorized_pre_ready_peer(&message))
-            .flatten();
+        let pre_ready_bypass_peer = if is_call {
+            self.authorized_pre_ready_peer(&message)
+                .filter(|_| !self.is_ready())
+        } else {
+            None
+        };
         {
             let mut pending = self.pending.lock().expect("module pending lock");
             if self.admission_closed() {
@@ -1711,7 +1714,7 @@ impl Transport for ModuleTransport {
             if is_call {
                 self.context.inflight.fetch_add(1, Ordering::AcqRel);
             }
-            if is_call && !self.is_ready() && pre_ready_authorized_peer.is_none() {
+            if is_call && !self.is_ready() && pre_ready_bypass_peer.is_none() {
                 pending.push_back(message);
                 if !self.drain_started.swap(true, Ordering::AcqRel) {
                     let transport = self.self_ref.upgrade().ok_or(Error::ConnectionClosed)?;
@@ -1721,7 +1724,7 @@ impl Transport for ModuleTransport {
             }
         }
         let result = self
-            .deliver_now_with_pre_ready_peer(message, pre_ready_authorized_peer.as_ref())
+            .deliver_now_with_pre_ready_peer(message, pre_ready_bypass_peer.as_ref())
             .await;
         if result.is_err() && is_call {
             self.context.inflight.fetch_sub(1, Ordering::AcqRel);

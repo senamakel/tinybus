@@ -337,10 +337,12 @@ fn an_owned_sender_lookup_does_not_keep_its_host_alive() {
 
     assert_eq!(observed_lifetime.strong_count(), 1);
     assert!(lookup.module_for_sender(&peer).is_none());
+    assert!(lookup.sender_for_module("clock").is_none());
     drop(host);
 
     assert_eq!(observed_lifetime.strong_count(), 0);
     assert!(lookup.module_for_sender(&peer).is_none());
+    assert!(lookup.sender_for_module("clock").is_none());
 }
 
 #[test]
