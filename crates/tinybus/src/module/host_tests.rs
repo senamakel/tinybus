@@ -267,7 +267,9 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         .module_for_sender(&unique)
         .expect("an admitted module resolves from its unique peer");
     assert_eq!(module_id.as_str(), "clock");
-    assert_eq!(host.sender_for_module("clock"), Some(unique.clone()));
+    assert!(host.sender_for_module("clock").is_none());
+    assert!(lookup.sender_for_module("clock").is_none());
+    assert_eq!(host.list()[0].state, ModuleState::Resolved);
     assert_eq!(
         lookup
             .module_for_sender(&unique)

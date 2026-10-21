@@ -334,10 +334,7 @@ fn sender_for_module(inner: &ModuleHostInner, module_id: &str) -> Option<BusName
             && !module.transport.admission_closed()
             && matches!(
                 module.snapshot().state,
-                ModuleState::Resolved
-                    | ModuleState::Initializing
-                    | ModuleState::Ready
-                    | ModuleState::Serving
+                ModuleState::Initializing | ModuleState::Ready | ModuleState::Serving
             )
     });
     let sender = candidates.next()?.unique_name.clone();
