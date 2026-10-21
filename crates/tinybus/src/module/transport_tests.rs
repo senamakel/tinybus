@@ -2917,7 +2917,7 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
     let (transport, host) = ModuleTransport::new_with_controller_binding(
         "migration-fixture".into(),
         vec![],
-        Some(binding),
+        Some(binding.clone()),
         Arc::from([route]),
     );
     transport
@@ -2996,7 +2996,7 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
     wait_for_pending_len(&transport, queued_pre_ready_count + 2).await;
 
     let mut wrong_route = Message::method_call(
-        module_name,
+        module_name.clone(),
         "/org/tinystoragedrivers/migration/other".parse().unwrap(),
         "org.tinystoragedrivers.Migration".parse().unwrap(),
         "GetSchema".parse().unwrap(),
@@ -3005,6 +3005,26 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
     wrong_route.header.confidential = true;
     controller.send(wrong_route).await.unwrap();
     wait_for_pending_len(&transport, queued_pre_ready_count + 3).await;
+
+    drop(controller);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while binding.is_live() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the selected controller disconnects and its binding becomes stale");
+    let mut stale_controller = Message::method_call(
+        module_name,
+        "/org/tinystoragedrivers/migration".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    stale_controller.header.confidential = true;
+    stale_controller.header.sender = Some(selected.clone());
+    outsider.send(stale_controller).await.unwrap();
+    wait_for_pending_len(&transport, queued_pre_ready_count + 4).await;
     assert_eq!(
         PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire),
         usize::from(delivered_while_initializing)
@@ -3012,13 +3032,13 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
 
     // Release the legacy pending queue so the RED test leaves no blocked task.
     unsafe { (host.ready)(host.host_ctx) };
-    wait_for_pre_ready_delivery_count(4).await;
+    wait_for_pre_ready_delivery_count(5).await;
 
     assert!(
         delivered_while_initializing,
         "the exact confidential selected-controller route should bypass only the READY queue"
     );
-    assert_eq!(PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire), 4);
+    assert_eq!(PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire), 5);
 }
 
 #[tokio::test]
