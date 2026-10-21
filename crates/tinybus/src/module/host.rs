@@ -18,12 +18,13 @@ use crate::module::loader::{self, LoadedArtifact};
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
 use crate::module::transport::{ModuleTransport, StopError};
 use crate::module::{LinkedModule, LinkedModuleInitWithSetup, LinkedSetup, ModuleId};
-use crate::name::{BusName, ObjectPath};
+use crate::name::{BusName, InterfaceName, MemberName, ObjectPath};
 use crate::ports::Transport;
 use crate::version::Version;
 
 const LAZY_MANIFEST_SUFFIX: &str = ".manifest.json";
 const LAZY_MANIFEST_MAX_LEN: u64 = 1024 * 1024;
+const MAX_PRE_READY_CONFIDENTIAL_ROUTES: usize = 64;
 
 /// Current lifecycle state of a discovered module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,8 +241,24 @@ struct ModuleHostInner {
     artifacts: Mutex<Vec<tempfile::TempDir>>,
     warned: AtomicBool,
     search_path_config: RwLock<Option<SearchPathConfig>>,
+    pre_ready_confidential_routes: RwLock<Arc<[PreReadyConfidentialRoute]>>,
     #[cfg(test)]
     after_loaded_publish: Mutex<Option<LoadedPublishBarrier>>,
+}
+
+/// One exact method route that a selected module controller may call
+/// confidentially while an admitted module is initializing.
+///
+/// The list is empty by default and can only be configured before the host
+/// admits a module. This grants no authority to ordinary module clients.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PreReadyConfidentialRoute {
+    /// Object path of the host method.
+    pub path: ObjectPath,
+    /// Interface containing the host method.
+    pub interface: InterfaceName,
+    /// Method member name.
+    pub member: MemberName,
 }
 
 #[cfg(test)]
@@ -444,6 +461,7 @@ impl ModuleHost {
             artifacts: Mutex::new(Vec::new()),
             warned: AtomicBool::new(false),
             search_path_config: RwLock::new(None),
+            pre_ready_confidential_routes: RwLock::new(Arc::from([])),
             #[cfg(test)]
             after_loaded_publish: Mutex::new(None),
         });
@@ -466,6 +484,50 @@ impl ModuleHost {
             .search_path_config
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
+
+    /// Configure exact confidential host methods that the selected module
+    /// controller may call while a module is initializing.
+    ///
+    /// The default is an empty list. Configuration is accepted only before
+    /// any module admission or rejection, and at most 64 distinct routes may
+    /// be configured. Calls outside this exact list retain normal readiness
+    /// behavior. The routes do not broaden the authority of module peers.
+    pub fn set_pre_ready_confidential_routes(
+        &self,
+        routes: Vec<PreReadyConfidentialRoute>,
+    ) -> Result<()> {
+        if routes.len() > MAX_PRE_READY_CONFIDENTIAL_ROUTES {
+            return Err(Error::protocol("too many pre-ready confidential routes"));
+        }
+        let mut unique = HashSet::with_capacity(routes.len());
+        if routes.iter().any(|route| !unique.insert(route)) {
+            return Err(Error::protocol("duplicate pre-ready confidential route"));
+        }
+
+        let _admission = self
+            .inner
+            .admission
+            .lock()
+            .expect("module admission lock");
+        if !self.inner.loaded.lock().expect("module list lock").is_empty()
+            || !self
+                .inner
+                .rejected
+                .lock()
+                .expect("rejected module list lock")
+                .is_empty()
+        {
+            return Err(Error::protocol(
+                "pre-ready confidential routes must be set before module admission",
+            ));
+        }
+        *self
+            .inner
+            .pre_ready_confidential_routes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::from(routes);
+        Ok(())
     }
 
     /// Create an owned weak handle for resolving authenticated module peers.
