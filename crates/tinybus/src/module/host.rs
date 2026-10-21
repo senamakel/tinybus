@@ -505,12 +505,13 @@ impl ModuleHost {
             return Err(Error::protocol("duplicate pre-ready confidential route"));
         }
 
-        let _admission = self
+        let _admission = self.inner.admission.lock().expect("module admission lock");
+        if !self
             .inner
-            .admission
+            .loaded
             .lock()
-            .expect("module admission lock");
-        if !self.inner.loaded.lock().expect("module list lock").is_empty()
+            .expect("module list lock")
+            .is_empty()
             || !self
                 .inner
                 .rejected

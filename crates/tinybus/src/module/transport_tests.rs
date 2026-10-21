@@ -2855,13 +2855,12 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
 #[tokio::test]
 async fn a_binding_absent_at_transport_creation_is_never_added_later() {
     let broker = Broker::new_restricted_module_control();
-    let (old_transport, old_host) =
-        ModuleTransport::new_with_controller_binding(
-            "before-selection".into(),
-            vec![],
-            None,
-            Arc::from([]),
-        );
+    let (old_transport, old_host) = ModuleTransport::new_with_controller_binding(
+        "before-selection".into(),
+        vec![],
+        None,
+        Arc::from([]),
+    );
     assert!(old_host.trusted_host_binding.is_none());
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = 1;

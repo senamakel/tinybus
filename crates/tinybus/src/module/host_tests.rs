@@ -8,6 +8,119 @@ use crate::transport::memory::{MemoryBus, MemoryTransport};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
+mod pre_ready_route_fixture {
+    async fn setup(_: tinybus::Connection) -> tinybus::Result<()> {
+        Ok(())
+    }
+
+    tinybus_module::module_export_static! {
+        setup = setup,
+        worker_threads = 1,
+        provides = ["ai.tinyhumans.module.PreReadyRouteFixture"],
+        methods = ["GetSchema"],
+        signals = [],
+        requires = [],
+        optional = [],
+        lazy = false,
+    }
+}
+
+struct PreReadyRouteService;
+
+#[async_trait::async_trait]
+impl crate::Interface for PreReadyRouteService {
+    fn name(&self) -> crate::InterfaceName {
+        "org.tinystoragedrivers.Migration".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["GetSchema".parse().unwrap()]
+    }
+
+    fn requires_confidential(&self, _: &crate::MemberName) -> bool {
+        true
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(serde_json::json!({"schema": "ready"}))
+    }
+}
+
+#[tokio::test]
+async fn selected_controller_can_call_one_confidential_route_before_module_ready() {
+    use std::time::Duration;
+
+    let broker = Broker::new_restricted_module_control();
+    let bus = MemoryBus::new();
+    let broker_task = broker.spawn(bus);
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    let selected = broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert_eq!(controller.unique_name().as_ref(), Some(&selected));
+
+    let host = ModuleHost::new(broker);
+    host.set_pre_ready_confidential_routes(vec![PreReadyConfidentialRoute {
+        path: "/org/tinystoragedrivers/migration".parse().unwrap(),
+        interface: "org.tinystoragedrivers.Migration".parse().unwrap(),
+        member: "GetSchema".parse().unwrap(),
+    }])
+    .unwrap();
+
+    let (setup_started_tx, setup_started_rx) = tokio::sync::oneshot::channel();
+    let (finish_setup_tx, finish_setup_rx) = tokio::sync::oneshot::channel();
+    let attach = tokio::spawn(async move {
+        host.attach_linked_with_setup(
+            pre_ready_route_fixture::linked_module().unwrap(),
+            serde_json::json!({}),
+            move |connection| async move {
+                connection
+                    .serve_at("/org/tinystoragedrivers/migration", PreReadyRouteService)
+                    .await?;
+                let _ = setup_started_tx.send(());
+                finish_setup_rx
+                    .await
+                    .map_err(|_| crate::Error::failed("test setup gate closed"))
+            },
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), setup_started_rx)
+        .await
+        .expect("linked setup reached its explicit barrier")
+        .expect("setup barrier sender remains live");
+
+    let proxy = controller
+        .proxy(
+            "ai.tinyhumans.module.PreReadyRouteFixture",
+            "/org/tinystoragedrivers/migration",
+            "org.tinystoragedrivers.Migration",
+        )
+        .unwrap();
+    let mut call = Box::pin(proxy.call_confidential::<serde_json::Value>("GetSchema", ()));
+    let early = tokio::time::timeout(Duration::from_secs(1), &mut call).await;
+    let _ = finish_setup_tx.send(());
+    let eventual = tokio::time::timeout(Duration::from_secs(2), call)
+        .await
+        .expect("the queued call completes once setup finishes");
+    assert!(attach.await.unwrap().is_ok());
+    broker_task.abort();
+
+    assert!(
+        early.is_ok(),
+        "the allowlisted call must complete before READY"
+    );
+    assert_eq!(early.unwrap().unwrap()["schema"], "ready");
+    assert_eq!(eventual.unwrap()["schema"], "ready");
+}
+
 #[path = "host_callback_lifecycle_tests.rs"]
 mod callback_lifecycle_tests;
 
@@ -185,11 +298,12 @@ fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
 
     host.set_pre_ready_confidential_routes(vec![route.clone()])
         .expect("one exact route is valid");
-    assert!(host
-        .set_pre_ready_confidential_routes(vec![route.clone(), route.clone()])
-        .is_err());
-    assert!(host
-        .set_pre_ready_confidential_routes(
+    assert!(
+        host.set_pre_ready_confidential_routes(vec![route.clone(), route.clone()])
+            .is_err()
+    );
+    assert!(
+        host.set_pre_ready_confidential_routes(
             (0..=MAX_PRE_READY_CONFIDENTIAL_ROUTES)
                 .map(|index| PreReadyConfidentialRoute {
                     path: ObjectPath::new(format!("/ai/tinyhumans/storage/item{index}")).unwrap(),
@@ -198,7 +312,8 @@ fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
                 })
                 .collect(),
         )
-        .is_err());
+        .is_err()
+    );
 
     host.attach_linked_with_config(
         LinkedModule {
