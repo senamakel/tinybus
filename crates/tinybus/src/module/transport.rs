@@ -852,9 +852,7 @@ impl ModuleTransport {
             return None;
         }
 
-        let Some(binding) = self.context.trusted_host_binding.as_ref() else {
-            return None;
-        };
+        let binding = self.context.trusted_host_binding.as_ref()?;
         if message.header.sender.as_ref() != Some(binding.peer()) || !binding.is_live() {
             return None;
         }
