@@ -17,6 +17,40 @@ static REINITIALIZE_CODE: AtomicI32 = AtomicI32::new(TB_OK);
 static REINITIALIZE_BLOCKED: AtomicBool = AtomicBool::new(false);
 static REINITIALIZE_ENTERED: AtomicBool = AtomicBool::new(false);
 static VTABLE_TEST_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+static PRE_READY_DELIVERED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static PRE_READY_DELIVERY_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" fn pre_ready_deliver(_: *mut c_void, _: *const u8, _: usize) -> i32 {
+    PRE_READY_DELIVERY_COUNT.fetch_add(1, Ordering::AcqRel);
+    PRE_READY_DELIVERED.notify_one();
+    TB_OK
+}
+
+async fn wait_for_pending_len(transport: &ModuleTransport, expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if transport.pending.lock().expect("module pending lock").len() >= expected {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the message reached the module pending queue");
+}
+
+async fn wait_for_pre_ready_delivery_count(expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire) >= expected {
+                break;
+            }
+            PRE_READY_DELIVERED.notified().await;
+        }
+    })
+    .await
+    .expect("module delivery callback reached the expected count");
+}
 
 unsafe extern "C" fn deliver(_: *mut c_void, _: *const u8, _: usize) -> i32 {
     DELIVERIES.fetch_add(1, Ordering::AcqRel);
@@ -2688,6 +2722,7 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
         "trusted-migration".into(),
         vec![],
         Some(binding.clone()),
+        Arc::from([]),
     );
     let query = host
         .trusted_host_binding
@@ -2813,6 +2848,7 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
         "replacement-migration".into(),
         vec![],
         replacement_broker.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     replacement_transport
         .context
@@ -2851,10 +2887,169 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
 }
 
 #[tokio::test]
+async fn selected_controller_route_is_delivered_before_ready_only_for_exact_confidential_call() {
+    use std::time::Duration;
+
+    let _test_guard = VTABLE_TEST_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    PRE_READY_DELIVERY_COUNT.store(0, Ordering::Release);
+
+    let broker = Broker::new_restricted_module_control();
+    let (broker_transport, controller_transport) = MemoryTransport::pair();
+    let selected = broker
+        .attach_module_controller(Arc::new(broker_transport))
+        .unwrap();
+    let controller = Connection::connect(Box::new(controller_transport))
+        .await
+        .unwrap();
+    assert_eq!(controller.unique_name().as_ref(), Some(&selected));
+
+    let route = PreReadyConfidentialRoute {
+        path: "/org/tinystoragedrivers/migration".parse().unwrap(),
+        interface: "org.tinystoragedrivers.Migration".parse().unwrap(),
+        member: "GetSchema".parse().unwrap(),
+    };
+    let binding = broker
+        .restricted_module_controller_binding()
+        .expect("the host selected one live controller");
+    let (transport, host) = ModuleTransport::new_with_controller_binding(
+        "migration-fixture".into(),
+        vec![],
+        Some(binding.clone()),
+        Arc::from([route]),
+    );
+    transport
+        .eager_initialize_with(host, |_| {
+            Ok(TbModuleVtable {
+                size: size_of::<TbModuleVtable>() as u32,
+                _reserved: 0,
+                module_ctx: std::ptr::dangling_mut(),
+                deliver: pre_ready_deliver,
+                shutdown,
+                reinitialize: Some(reinitialize),
+            })
+        })
+        .unwrap();
+    assert!(!transport.is_ready(), "fixture remains pre-READY");
+
+    let staged = broker.attach_module_staged(transport.clone());
+    let unique = staged.unique_name().clone();
+    let module_name: crate::BusName = "org.tinystoragedrivers.Migration".parse().unwrap();
+    broker
+        .reserve_module_name(&unique, module_name.clone())
+        .unwrap();
+    broker.attest_module(
+        &unique,
+        crate::attest::Attestation {
+            name: module_name.clone(),
+            sha256: "a".repeat(64),
+            library_sha256: None,
+        },
+    );
+    staged.start();
+
+    let mut call = Message::method_call(
+        module_name.clone(),
+        "/org/tinystoragedrivers/migration".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    call.header.confidential = true;
+    let notification = PRE_READY_DELIVERED.notified();
+    tokio::pin!(notification);
+    controller.send(call).await.unwrap();
+    let delivered_while_initializing =
+        tokio::time::timeout(Duration::from_millis(200), &mut notification)
+            .await
+            .is_ok();
+
+    let mut ordinary = Message::method_call(
+        module_name.clone(),
+        "/org/tinystoragedrivers/migration".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    ordinary.header.confidential = false;
+    controller.send(ordinary).await.unwrap();
+    let queued_pre_ready_count = usize::from(!delivered_while_initializing);
+    wait_for_pending_len(&transport, queued_pre_ready_count + 1).await;
+
+    let (outsider_broker, outsider_transport) = MemoryTransport::pair();
+    broker.attach(Arc::new(outsider_broker));
+    let outsider = Connection::connect(Box::new(outsider_transport))
+        .await
+        .unwrap();
+    let mut forged = Message::method_call(
+        module_name.clone(),
+        "/org/tinystoragedrivers/migration".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    forged.header.confidential = true;
+    forged.header.sender = Some(selected.clone());
+    outsider.send(forged).await.unwrap();
+    wait_for_pending_len(&transport, queued_pre_ready_count + 2).await;
+
+    let mut wrong_route = Message::method_call(
+        module_name.clone(),
+        "/org/tinystoragedrivers/migration/other".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    wrong_route.header.confidential = true;
+    controller.send(wrong_route).await.unwrap();
+    wait_for_pending_len(&transport, queued_pre_ready_count + 3).await;
+
+    drop(controller);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while binding.is_live() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the selected controller disconnects and its binding becomes stale");
+    let mut stale_controller = Message::method_call(
+        module_name,
+        "/org/tinystoragedrivers/migration".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    stale_controller.header.confidential = true;
+    stale_controller.header.sender = Some(selected.clone());
+    outsider.send(stale_controller).await.unwrap();
+    wait_for_pending_len(&transport, queued_pre_ready_count + 4).await;
+    assert_eq!(
+        PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire),
+        usize::from(delivered_while_initializing)
+    );
+
+    // Release the legacy pending queue so the RED test leaves no blocked task.
+    unsafe { (host.ready)(host.host_ctx) };
+    wait_for_pre_ready_delivery_count(5).await;
+
+    assert!(
+        delivered_while_initializing,
+        "the exact confidential selected-controller route should bypass only the READY queue"
+    );
+    assert_eq!(PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire), 5);
+}
+
+#[tokio::test]
 async fn a_binding_absent_at_transport_creation_is_never_added_later() {
     let broker = Broker::new_restricted_module_control();
-    let (old_transport, old_host) =
-        ModuleTransport::new_with_controller_binding("before-selection".into(), vec![], None);
+    let (old_transport, old_host) = ModuleTransport::new_with_controller_binding(
+        "before-selection".into(),
+        vec![],
+        None,
+        Arc::from([]),
+    );
     assert!(old_host.trusted_host_binding.is_none());
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = 1;
@@ -2883,6 +3078,7 @@ async fn a_binding_absent_at_transport_creation_is_never_added_later() {
         "after-selection".into(),
         vec![],
         broker.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     assert!(new_host.trusted_host_binding.is_some());
     drop(old_transport);
@@ -2898,6 +3094,7 @@ async fn a_binding_absent_at_transport_creation_is_never_added_later() {
         "unrestricted".into(),
         vec![],
         unrestricted.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     assert!(unrestricted_host.trusted_host_binding.is_none());
     drop(unrestricted_transport);
@@ -2920,6 +3117,7 @@ async fn a_retained_binding_denies_after_its_module_owner_is_terminal_or_gone() 
         "terminal-binding".into(),
         vec![],
         Some(binding),
+        Arc::from([]),
     );
     transport.eager_initialize(initialize_ok, host).unwrap();
     let query = host.trusted_host_binding.unwrap();
@@ -2966,6 +3164,7 @@ async fn trusted_host_callback_denies_a_poisoned_owner_without_unwinding_through
         "poisoned-owner".into(),
         vec![],
         broker.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     transport.eager_initialize(initialize_ok, host).unwrap();
     let query = host.trusted_host_binding.unwrap();

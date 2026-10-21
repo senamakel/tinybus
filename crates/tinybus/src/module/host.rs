@@ -18,12 +18,13 @@ use crate::module::loader::{self, LoadedArtifact};
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
 use crate::module::transport::{ModuleTransport, StopError};
 use crate::module::{LinkedModule, LinkedModuleInitWithSetup, LinkedSetup, ModuleId};
-use crate::name::{BusName, ObjectPath};
+use crate::name::{BusName, InterfaceName, MemberName, ObjectPath};
 use crate::ports::Transport;
 use crate::version::Version;
 
 const LAZY_MANIFEST_SUFFIX: &str = ".manifest.json";
 const LAZY_MANIFEST_MAX_LEN: u64 = 1024 * 1024;
+const MAX_PRE_READY_CONFIDENTIAL_ROUTES: usize = 64;
 
 /// Current lifecycle state of a discovered module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,8 +241,24 @@ struct ModuleHostInner {
     artifacts: Mutex<Vec<tempfile::TempDir>>,
     warned: AtomicBool,
     search_path_config: RwLock<Option<SearchPathConfig>>,
+    pre_ready_confidential_routes: RwLock<Arc<[PreReadyConfidentialRoute]>>,
     #[cfg(test)]
     after_loaded_publish: Mutex<Option<LoadedPublishBarrier>>,
+}
+
+/// One exact method route that a selected module controller may call
+/// confidentially while an admitted module is initializing.
+///
+/// The list is empty by default and can only be configured before the host
+/// admits a module. This grants no authority to ordinary module clients.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PreReadyConfidentialRoute {
+    /// Object path of the host method.
+    pub path: ObjectPath,
+    /// Interface containing the host method.
+    pub interface: InterfaceName,
+    /// Method member name.
+    pub member: MemberName,
 }
 
 #[cfg(test)]
@@ -271,6 +288,14 @@ impl ModuleSenderLookup {
             .upgrade()
             .and_then(|inner| module_for_sender(&inner, sender))
     }
+
+    /// Resolve a canonical module ID to its current unique peer, if admitted.
+    #[must_use]
+    pub fn sender_for_module(&self, module_id: &str) -> Option<BusName> {
+        self.inner
+            .upgrade()
+            .and_then(|inner| sender_for_module(&inner, module_id))
+    }
 }
 
 fn module_for_sender(inner: &ModuleHostInner, sender: &BusName) -> Option<ModuleId> {
@@ -294,6 +319,26 @@ fn module_for_sender(inner: &ModuleHostInner, sender: &BusName) -> Option<Module
             | ModuleState::Serving
     )
     .then(|| module.module_id.clone())
+}
+
+fn sender_for_module(inner: &ModuleHostInner, module_id: &str) -> Option<BusName> {
+    if module_id.is_empty() {
+        return None;
+    }
+    let loaded = inner.loaded.lock().expect("module list lock");
+    let mut candidates = loaded.iter().filter(|module| {
+        module.module_id.as_str() == module_id
+            && !module.transport.is_faulted()
+            && !module.transport.init_failed()
+            && !module.transport.is_stopped()
+            && !module.transport.admission_closed()
+            && matches!(
+                module.snapshot().state,
+                ModuleState::Initializing | ModuleState::Ready | ModuleState::Serving
+            )
+    });
+    let sender = candidates.next()?.unique_name.clone();
+    candidates.next().is_none().then_some(sender)
 }
 
 /// Product configuration for directories that `ModuleHost` scans for modules.
@@ -444,6 +489,7 @@ impl ModuleHost {
             artifacts: Mutex::new(Vec::new()),
             warned: AtomicBool::new(false),
             search_path_config: RwLock::new(None),
+            pre_ready_confidential_routes: RwLock::new(Arc::from([])),
             #[cfg(test)]
             after_loaded_publish: Mutex::new(None),
         });
@@ -466,6 +512,51 @@ impl ModuleHost {
             .search_path_config
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
+
+    /// Configure exact confidential host methods that the selected module
+    /// controller may call while a module is initializing.
+    ///
+    /// The default is an empty list. Configuration is accepted only before
+    /// any module admission or rejection, and at most 64 distinct routes may
+    /// be configured. Calls outside this exact list retain normal readiness
+    /// behavior. The routes do not broaden the authority of module peers.
+    pub fn set_pre_ready_confidential_routes(
+        &self,
+        routes: Vec<PreReadyConfidentialRoute>,
+    ) -> Result<()> {
+        if routes.len() > MAX_PRE_READY_CONFIDENTIAL_ROUTES {
+            return Err(Error::protocol("too many pre-ready confidential routes"));
+        }
+        let mut unique = HashSet::with_capacity(routes.len());
+        if routes.iter().any(|route| !unique.insert(route)) {
+            return Err(Error::protocol("duplicate pre-ready confidential route"));
+        }
+
+        let _admission = self.inner.admission.lock().expect("module admission lock");
+        if !self
+            .inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .is_empty()
+            || !self
+                .inner
+                .rejected
+                .lock()
+                .expect("rejected module list lock")
+                .is_empty()
+        {
+            return Err(Error::protocol(
+                "pre-ready confidential routes must be set before module admission",
+            ));
+        }
+        *self
+            .inner
+            .pre_ready_confidential_routes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::from(routes);
+        Ok(())
     }
 
     /// Create an owned weak handle for resolving authenticated module peers.
@@ -556,6 +647,12 @@ impl ModuleHost {
     #[must_use]
     pub fn module_for_sender(&self, sender: &BusName) -> Option<ModuleId> {
         module_for_sender(&self.inner, sender)
+    }
+
+    /// Resolve a canonical module ID to its current unique peer, if admitted.
+    #[must_use]
+    pub fn sender_for_module(&self, module_id: &str) -> Option<BusName> {
+        sender_for_module(&self.inner, module_id)
     }
 
     /// Initialize a loaded module and wait for its host lifecycle readiness.
@@ -1399,10 +1496,17 @@ impl ModuleHost {
             error
         })?;
         let trusted_host = self.inner.broker.restricted_module_controller_binding();
+        let pre_ready_routes = self
+            .inner
+            .pre_ready_confidential_routes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let (transport, host_vtable) = ModuleTransport::new_with_controller_binding(
             admitted.name.clone(),
             config,
             trusted_host,
+            pre_ready_routes,
         );
         match linked_setup {
             Some((init, setup)) => {
@@ -1481,10 +1585,17 @@ impl ModuleHost {
             error
         })?;
         let trusted_host = self.inner.broker.restricted_module_controller_binding();
+        let pre_ready_routes = self
+            .inner
+            .pre_ready_confidential_routes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let (transport, host_vtable) = ModuleTransport::new_with_controller_binding(
             admitted.name.clone(),
             config,
             trusted_host,
+            pre_ready_routes,
         );
         let expected = manifest.clone();
         let artifact_path = path.to_path_buf();

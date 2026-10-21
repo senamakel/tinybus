@@ -174,6 +174,47 @@ pub(super) fn manifest() -> ModuleManifest {
     named_manifest("clock", "Clock")
 }
 
+#[tokio::test]
+async fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
+    let host = ModuleHost::new(Broker::new());
+    let route = PreReadyConfidentialRoute {
+        path: ObjectPath::new("/ai/tinyhumans/storage").unwrap(),
+        interface: crate::InterfaceName::new("ai.tinyhumans.Storage").unwrap(),
+        member: crate::MemberName::new("GetSchema").unwrap(),
+    };
+
+    host.set_pre_ready_confidential_routes(vec![route.clone()])
+        .expect("one exact route is valid");
+    assert!(
+        host.set_pre_ready_confidential_routes(vec![route.clone(), route.clone()])
+            .is_err()
+    );
+    assert!(
+        host.set_pre_ready_confidential_routes(
+            (0..=MAX_PRE_READY_CONFIDENTIAL_ROUTES)
+                .map(|index| PreReadyConfidentialRoute {
+                    path: ObjectPath::new(format!("/ai/tinyhumans/storage/item{index}")).unwrap(),
+                    interface: crate::InterfaceName::new("ai.tinyhumans.Storage").unwrap(),
+                    member: crate::MemberName::new("GetSchema").unwrap(),
+                })
+                .collect(),
+        )
+        .is_err()
+    );
+
+    host.attach_linked_with_config(
+        LinkedModule {
+            descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest: manifest(),
+            init: lazy_echo_init,
+            init_with_setup: None,
+        },
+        serde_json::json!({}),
+    )
+    .expect("fixture module is admitted");
+    assert!(host.set_pre_ready_confidential_routes(Vec::new()).is_err());
+}
+
 fn named_manifest(module_name: &str, surface_name: &str) -> ModuleManifest {
     ModuleManifest {
         schema: MANIFEST_SCHEMA,
@@ -226,6 +267,9 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         .module_for_sender(&unique)
         .expect("an admitted module resolves from its unique peer");
     assert_eq!(module_id.as_str(), "clock");
+    assert!(host.sender_for_module("clock").is_none());
+    assert!(lookup.sender_for_module("clock").is_none());
+    assert_eq!(host.list()[0].state, ModuleState::Resolved);
     assert_eq!(
         lookup
             .module_for_sender(&unique)
@@ -234,6 +278,10 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         Some("clock")
     );
     assert!(host.module_for_sender(&info.manifest.bus_name).is_none());
+    assert!(
+        host.sender_for_module("ai.tinyhumans.module.Clock")
+            .is_none()
+    );
     assert!(lookup.module_for_sender(&info.manifest.bus_name).is_none());
 
     let connection = Connection::connect(bus.connect().await.unwrap())
@@ -277,6 +325,7 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         .await
         .unwrap();
     assert!(host.module_for_sender(&unique).is_none());
+    assert!(host.sender_for_module("clock").is_none());
     assert!(lookup.module_for_sender(&unique).is_none());
     broker_task.abort();
 }
@@ -290,10 +339,12 @@ fn an_owned_sender_lookup_does_not_keep_its_host_alive() {
 
     assert_eq!(observed_lifetime.strong_count(), 1);
     assert!(lookup.module_for_sender(&peer).is_none());
+    assert!(lookup.sender_for_module("clock").is_none());
     drop(host);
 
     assert_eq!(observed_lifetime.strong_count(), 0);
     assert!(lookup.module_for_sender(&peer).is_none());
+    assert!(lookup.sender_for_module("clock").is_none());
 }
 
 #[test]

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.12
+
+### Added
+
+- Allow a bounded, host-configured set of exact confidential controller calls
+  to reach a module during initialization, without changing the wire or ABI.
+- Resolve a live module's unique bus peer from its canonical module ID without
+  loading cold modules or consulting the broker.
+
 ## 0.3.11
 
 ### Fixed

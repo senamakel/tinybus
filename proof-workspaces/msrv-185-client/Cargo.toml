@@ -9,5 +9,5 @@ rust-version = "1.85"
 publish = false
 
 [dependencies]
-tinybus = { path = "../../crates/tinybus", version = "=0.3.11" }
+tinybus = { path = "../../crates/tinybus", version = "=0.3.12" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

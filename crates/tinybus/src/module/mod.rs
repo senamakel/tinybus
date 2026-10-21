@@ -73,7 +73,10 @@ pub use host::callbacks::{
     HostCallbackSignal,
 };
 #[cfg(feature = "modules")]
-pub use host::{ModuleHost, ModuleInfo, ModuleSenderLookup, ModuleState, SearchPathConfig};
+pub use host::{
+    ModuleHost, ModuleInfo, ModuleSenderLookup, ModuleState, PreReadyConfidentialRoute,
+    SearchPathConfig,
+};
 #[cfg(feature = "modules")]
 pub use reconfigure::{ConfigFingerprint, ReconfigurableModule, Reconfigure, ReconfigureGuard};
 pub use release::{ReleaseAsset, ReleaseRecord};
