@@ -174,6 +174,45 @@ pub(super) fn manifest() -> ModuleManifest {
     named_manifest("clock", "Clock")
 }
 
+#[test]
+fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
+    let host = ModuleHost::new(Broker::new());
+    let route = PreReadyConfidentialRoute {
+        path: ObjectPath::new("/ai/tinyhumans/storage").unwrap(),
+        interface: crate::InterfaceName::new("ai.tinyhumans.Storage").unwrap(),
+        member: crate::MemberName::new("GetSchema").unwrap(),
+    };
+
+    host.set_pre_ready_confidential_routes(vec![route.clone()])
+        .expect("one exact route is valid");
+    assert!(host
+        .set_pre_ready_confidential_routes(vec![route.clone(), route.clone()])
+        .is_err());
+    assert!(host
+        .set_pre_ready_confidential_routes(
+            (0..=MAX_PRE_READY_CONFIDENTIAL_ROUTES)
+                .map(|index| PreReadyConfidentialRoute {
+                    path: ObjectPath::new(format!("/ai/tinyhumans/storage/item{index}")).unwrap(),
+                    interface: crate::InterfaceName::new("ai.tinyhumans.Storage").unwrap(),
+                    member: crate::MemberName::new("GetSchema").unwrap(),
+                })
+                .collect(),
+        )
+        .is_err());
+
+    host.attach_linked_with_config(
+        LinkedModule {
+            descriptor: TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest: manifest(),
+            init: lazy_echo_init,
+            init_with_setup: None,
+        },
+        serde_json::json!({}),
+    )
+    .expect("fixture module is admitted");
+    assert!(host.set_pre_ready_confidential_routes(Vec::new()).is_err());
+}
+
 fn named_manifest(module_name: &str, surface_name: &str) -> ModuleManifest {
     ModuleManifest {
         schema: MANIFEST_SCHEMA,
