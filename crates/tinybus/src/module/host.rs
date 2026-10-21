@@ -1461,10 +1461,17 @@ impl ModuleHost {
             error
         })?;
         let trusted_host = self.inner.broker.restricted_module_controller_binding();
+        let pre_ready_routes = self
+            .inner
+            .pre_ready_confidential_routes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let (transport, host_vtable) = ModuleTransport::new_with_controller_binding(
             admitted.name.clone(),
             config,
             trusted_host,
+            pre_ready_routes,
         );
         match linked_setup {
             Some((init, setup)) => {
@@ -1543,10 +1550,17 @@ impl ModuleHost {
             error
         })?;
         let trusted_host = self.inner.broker.restricted_module_controller_binding();
+        let pre_ready_routes = self
+            .inner
+            .pre_ready_confidential_routes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let (transport, host_vtable) = ModuleTransport::new_with_controller_binding(
             admitted.name.clone(),
             config,
             trusted_host,
+            pre_ready_routes,
         );
         let expected = manifest.clone();
         let artifact_path = path.to_path_buf();

@@ -18,6 +18,7 @@ use crate::module::abi::{
     TB_NATIVE_TERMINAL_LIVE, TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable,
     TbModuleVtable, TbSlice,
 };
+use crate::module::host::PreReadyConfidentialRoute;
 use crate::ports::Transport;
 
 const HOST_QUEUE_CAPACITY: usize = 256;
@@ -48,6 +49,7 @@ struct HostContext {
     ready_gate: StdMutex<()>,
     broker_routing: AtomicBool,
     trusted_host_binding: Option<RestrictedModuleControllerBinding>,
+    pre_ready_confidential_routes: Arc<[PreReadyConfidentialRoute]>,
     ready_notify: Notify,
     inflight: AtomicUsize,
 }
@@ -255,13 +257,14 @@ impl ModuleTransport {
 
     #[cfg(test)]
     pub(crate) fn new(label: String, config: Vec<u8>) -> (Arc<Self>, TbHostVtable) {
-        Self::new_with_controller_binding(label, config, None)
+        Self::new_with_controller_binding(label, config, None, Arc::from([]))
     }
 
     pub(crate) fn new_with_controller_binding(
         label: String,
         config: Vec<u8>,
         trusted_host_binding: Option<RestrictedModuleControllerBinding>,
+        pre_ready_confidential_routes: Arc<[PreReadyConfidentialRoute]>,
     ) -> (Arc<Self>, TbHostVtable) {
         let (inbound_tx, inbound_rx) = mpsc::channel(HOST_QUEUE_CAPACITY);
         let context = Box::leak(Box::new(HostContext {
@@ -289,6 +292,7 @@ impl ModuleTransport {
             ready_gate: StdMutex::new(()),
             broker_routing: AtomicBool::new(false),
             trusted_host_binding,
+            pre_ready_confidential_routes,
             ready_notify: Notify::new(),
             inflight: AtomicUsize::new(0),
         }));
