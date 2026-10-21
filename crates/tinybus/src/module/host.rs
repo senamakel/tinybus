@@ -291,8 +291,10 @@ impl ModuleSenderLookup {
 
     /// Resolve a canonical module ID to its current unique peer, if admitted.
     #[must_use]
-    pub fn sender_for_module(&self, _module_id: &str) -> Option<BusName> {
-        None
+    pub fn sender_for_module(&self, module_id: &str) -> Option<BusName> {
+        self.inner
+            .upgrade()
+            .and_then(|inner| sender_for_module(&inner, module_id))
     }
 }
 
@@ -317,6 +319,29 @@ fn module_for_sender(inner: &ModuleHostInner, sender: &BusName) -> Option<Module
             | ModuleState::Serving
     )
     .then(|| module.module_id.clone())
+}
+
+fn sender_for_module(inner: &ModuleHostInner, module_id: &str) -> Option<BusName> {
+    if module_id.is_empty() {
+        return None;
+    }
+    let loaded = inner.loaded.lock().expect("module list lock");
+    let mut candidates = loaded.iter().filter(|module| {
+        module.module_id.as_str() == module_id
+            && !module.transport.is_faulted()
+            && !module.transport.init_failed()
+            && !module.transport.is_stopped()
+            && !module.transport.admission_closed()
+            && matches!(
+                module.snapshot().state,
+                ModuleState::Resolved
+                    | ModuleState::Initializing
+                    | ModuleState::Ready
+                    | ModuleState::Serving
+            )
+    });
+    let sender = candidates.next()?.unique_name.clone();
+    candidates.next().is_none().then_some(sender)
 }
 
 /// Product configuration for directories that `ModuleHost` scans for modules.
@@ -629,8 +654,8 @@ impl ModuleHost {
 
     /// Resolve a canonical module ID to its current unique peer, if admitted.
     #[must_use]
-    pub fn sender_for_module(&self, _module_id: &str) -> Option<BusName> {
-        None
+    pub fn sender_for_module(&self, module_id: &str) -> Option<BusName> {
+        sender_for_module(&self.inner, module_id)
     }
 
     /// Initialize a loaded module and wait for its host lifecycle readiness.

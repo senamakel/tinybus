@@ -267,6 +267,7 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         .module_for_sender(&unique)
         .expect("an admitted module resolves from its unique peer");
     assert_eq!(module_id.as_str(), "clock");
+    assert_eq!(host.sender_for_module("clock"), Some(unique.clone()));
     assert_eq!(
         lookup
             .module_for_sender(&unique)
@@ -275,6 +276,10 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         Some("clock")
     );
     assert!(host.module_for_sender(&info.manifest.bus_name).is_none());
+    assert!(
+        host.sender_for_module("ai.tinyhumans.module.Clock")
+            .is_none()
+    );
     assert!(lookup.module_for_sender(&info.manifest.bus_name).is_none());
 
     let connection = Connection::connect(bus.connect().await.unwrap())
@@ -318,6 +323,7 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         .await
         .unwrap();
     assert!(host.module_for_sender(&unique).is_none());
+    assert!(host.sender_for_module("clock").is_none());
     assert!(lookup.module_for_sender(&unique).is_none());
     broker_task.abort();
 }

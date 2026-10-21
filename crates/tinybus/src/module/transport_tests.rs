@@ -29,13 +29,7 @@ unsafe extern "C" fn pre_ready_deliver(_: *mut c_void, _: *const u8, _: usize) -
 async fn wait_for_pending_len(transport: &ModuleTransport, expected: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
-            if transport
-                .pending
-                .lock()
-                .expect("module pending lock")
-                .len()
-                >= expected
-            {
+            if transport.pending.lock().expect("module pending lock").len() >= expected {
                 break;
             }
             tokio::task::yield_now().await;
@@ -2986,7 +2980,9 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
 
     let (outsider_broker, outsider_transport) = MemoryTransport::pair();
     broker.attach(Arc::new(outsider_broker));
-    let outsider = Connection::connect(Box::new(outsider_transport)).await.unwrap();
+    let outsider = Connection::connect(Box::new(outsider_transport))
+        .await
+        .unwrap();
     let mut forged = Message::method_call(
         module_name.clone(),
         "/org/tinystoragedrivers/migration".parse().unwrap(),

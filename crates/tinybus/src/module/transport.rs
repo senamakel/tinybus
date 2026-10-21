@@ -831,6 +831,45 @@ impl ModuleTransport {
         self.context.ready.load(Ordering::Acquire) && !self.is_faulted() && !self.is_stopped()
     }
 
+    fn authorized_pre_ready_peer(&self, message: &Message) -> Option<crate::BusName> {
+        if message.header.kind != MessageKind::MethodCall || !message.header.confidential {
+            return None;
+        }
+
+        // Serialize the authorization point with READY publication. A call
+        // that passes this gate is admitted while initialization is active;
+        // READY and terminal transitions prevent later calls from using it.
+        let _ready = self.context.ready_gate.lock().expect("module ready lock");
+        if self.context.ready.load(Ordering::Acquire)
+            || !self.context.init_started.load(Ordering::Acquire)
+            || self.admission_closed()
+            || self.is_faulted()
+            || self.context.init_failed.load(Ordering::Acquire)
+            || self.is_stopped()
+            || self.context.native_terminal_state.load(Ordering::Acquire)
+                != crate::module::abi::TB_NATIVE_TERMINAL_LIVE
+        {
+            return None;
+        }
+
+        let Some(binding) = self.context.trusted_host_binding.as_ref() else {
+            return None;
+        };
+        if message.header.sender.as_ref() != Some(binding.peer()) || !binding.is_live() {
+            return None;
+        }
+
+        self.context
+            .pre_ready_confidential_routes
+            .iter()
+            .any(|route| {
+                message.header.path.as_ref() == Some(&route.path)
+                    && message.header.interface.as_ref() == Some(&route.interface)
+                    && message.header.member.as_ref() == Some(&route.member)
+            })
+            .then(|| binding.peer().clone())
+    }
+
     /// Whether a lazy initializer is still available for a pre-init config update.
     pub(crate) fn has_deferred_initializer(&self) -> bool {
         let state = self.context.physical.lock().expect("physical state lock");
@@ -1036,6 +1075,14 @@ impl ModuleTransport {
     }
 
     async fn deliver_now(&self, message: Message) -> Result<()> {
+        self.deliver_now_with_pre_ready_peer(message, None).await
+    }
+
+    async fn deliver_now_with_pre_ready_peer(
+        &self,
+        message: Message,
+        required_controller: Option<&crate::BusName>,
+    ) -> Result<()> {
         if self.is_faulted() || self.admission_closed() {
             return Err(Error::ConnectionClosed);
         }
@@ -1054,6 +1101,15 @@ impl ModuleTransport {
                 return Err(Error::ConnectionClosed);
             };
             let lease = self.callbacks.enter()?;
+            if required_controller.is_some_and(|required| {
+                self.context
+                    .trusted_host_binding
+                    .as_ref()
+                    .is_none_or(|binding| binding.peer() != required || !binding.is_live())
+            }) {
+                drop(lease);
+                return Err(Error::ConnectionClosed);
+            }
             // Stop closes this gate and drains reservations before teardown;
             // a caller disappearing cannot refund a running native callback.
             let code = unsafe { (module.deliver)(module.module_ctx, bytes.as_ptr(), bytes.len()) };
@@ -1644,6 +1700,9 @@ impl Transport for ModuleTransport {
             return Err(Error::ConnectionClosed);
         }
         let is_call = message.header.kind == MessageKind::MethodCall;
+        let pre_ready_authorized_peer = is_call
+            .then(|| self.authorized_pre_ready_peer(&message))
+            .flatten();
         {
             let mut pending = self.pending.lock().expect("module pending lock");
             if self.admission_closed() {
@@ -1652,7 +1711,7 @@ impl Transport for ModuleTransport {
             if is_call {
                 self.context.inflight.fetch_add(1, Ordering::AcqRel);
             }
-            if is_call && !self.is_ready() {
+            if is_call && !self.is_ready() && pre_ready_authorized_peer.is_none() {
                 pending.push_back(message);
                 if !self.drain_started.swap(true, Ordering::AcqRel) {
                     let transport = self.self_ref.upgrade().ok_or(Error::ConnectionClosed)?;
@@ -1661,7 +1720,9 @@ impl Transport for ModuleTransport {
                 return Ok(());
             }
         }
-        let result = self.deliver_now(message).await;
+        let result = self
+            .deliver_now_with_pre_ready_peer(message, pre_ready_authorized_peer.as_ref())
+            .await;
         if result.is_err() && is_call {
             self.context.inflight.fetch_sub(1, Ordering::AcqRel);
         }

@@ -68,6 +68,11 @@ async fn sender_lookup_resolves_the_admitted_peer_during_initialization() {
     let sender = lookup
         .sender_for_module("tinybus")
         .expect("the admitted initializing module has a live unique peer");
+    assert!(
+        lookup
+            .sender_for_module("ai.tinyhumans.module.SenderLookupFixture")
+            .is_none()
+    );
     assert!(sender.is_unique());
     assert_eq!(host.sender_for_module("tinybus"), Some(sender.clone()));
 
