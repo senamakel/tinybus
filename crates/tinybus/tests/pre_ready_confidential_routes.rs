@@ -109,10 +109,17 @@ async fn selected_controller_can_call_allowlisted_confidential_route_before_read
     let mut call = Box::pin(proxy.call_confidential::<serde_json::Value>("GetSchema", ()));
     let early = tokio::time::timeout(Duration::from_secs(1), &mut call).await;
     let _ = finish_setup_tx.send(());
+    let attach_result = tokio::time::timeout(Duration::from_secs(8), attach)
+        .await
+        .expect("linked setup completes after its barrier is released")
+        .unwrap();
     let eventual = tokio::time::timeout(Duration::from_secs(8), call)
         .await
         .expect("the queued call completes once setup finishes");
-    assert!(attach.await.unwrap().is_ok());
+    assert!(
+        attach_result.is_ok(),
+        "linked attach result: {attach_result:?}"
+    );
     broker_task.abort();
 
     assert!(
