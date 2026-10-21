@@ -14,7 +14,7 @@ mod fixture {
     tinybus_module::module_export_static! {
         setup = setup,
         worker_threads = 1,
-        provides = ["ai.tinyhumans.module.PreReadyRouteFixture"],
+        provides = ["org.tinystoragedrivers.Migration"],
         methods = ["GetSchema"],
         signals = [],
         requires = [],
@@ -49,7 +49,9 @@ impl Interface for MigrationEndpoint {
 }
 
 fn linked_module() -> tinybus::Result<LinkedModule> {
-    fixture::linked_module()
+    let mut module = fixture::linked_module()?;
+    module.manifest.object_path = ObjectPath::new("/org/tinystoragedrivers/migration").unwrap();
+    Ok(module)
 }
 
 #[tokio::test]
@@ -101,7 +103,7 @@ async fn selected_controller_can_call_allowlisted_confidential_route_before_read
 
     let proxy = controller
         .proxy(
-            "ai.tinyhumans.module.PreReadyRouteFixture",
+            "org.tinystoragedrivers.Migration",
             "/org/tinystoragedrivers/migration",
             "org.tinystoragedrivers.Migration",
         )
@@ -118,7 +120,10 @@ async fn selected_controller_can_call_allowlisted_confidential_route_before_read
         proxy.call_confidential::<serde_json::Value>("GetSchema", ()),
     )
     .await;
-    eprintln!("early={early:?} attach={attach_result:?} post={post_ready:?}");
+    assert!(
+        post_ready.is_ok(),
+        "post-ready control call: {post_ready:?}"
+    );
     let eventual = tokio::time::timeout(Duration::from_secs(8), call)
         .await
         .expect("the queued call completes once setup finishes");
