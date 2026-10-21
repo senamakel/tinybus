@@ -175,7 +175,7 @@ pub(super) fn manifest() -> ModuleManifest {
 }
 
 #[tokio::test]
-fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
+async fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
     let host = ModuleHost::new(Broker::new());
     let route = PreReadyConfidentialRoute {
         path: ObjectPath::new("/ai/tinyhumans/storage").unwrap(),
