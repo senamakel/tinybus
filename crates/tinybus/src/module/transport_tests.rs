@@ -2931,6 +2931,21 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
         tokio::time::timeout(Duration::from_millis(200), &mut notification)
             .await
             .is_ok();
+    if !delivered_while_initializing {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let pending = transport.pending.lock().expect("module pending lock");
+                let reached_transport = !pending.is_empty();
+                drop(pending);
+                if reached_transport {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the broker delivered the controller call into the READY queue");
+    }
 
     // Release the legacy pending queue so the RED test leaves no blocked task.
     unsafe { (host.ready)(host.host_ctx) };
