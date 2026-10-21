@@ -846,6 +846,7 @@ impl ModuleTransport {
             || self.is_faulted()
             || self.context.init_failed.load(Ordering::Acquire)
             || self.is_stopped()
+            || !self.context.broker_routing.load(Ordering::Acquire)
             || self.context.native_terminal_state.load(Ordering::Acquire)
                 != crate::module::abi::TB_NATIVE_TERMINAL_LIVE
         {
