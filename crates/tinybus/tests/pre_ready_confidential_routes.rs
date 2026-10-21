@@ -113,6 +113,12 @@ async fn selected_controller_can_call_allowlisted_confidential_route_before_read
         .await
         .expect("linked setup completes after its barrier is released")
         .unwrap();
+    let post_ready = tokio::time::timeout(
+        Duration::from_secs(2),
+        proxy.call_confidential::<serde_json::Value>("GetSchema", ()),
+    )
+    .await;
+    eprintln!("early={early:?} attach={attach_result:?} post={post_ready:?}");
     let eventual = tokio::time::timeout(Duration::from_secs(8), call)
         .await
         .expect("the queued call completes once setup finishes");
