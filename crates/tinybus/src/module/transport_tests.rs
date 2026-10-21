@@ -2914,6 +2914,14 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
     broker
         .reserve_module_name(&unique, module_name.clone())
         .unwrap();
+    broker.attest_module(
+        &unique,
+        crate::attest::Attestation {
+            name: module_name.clone(),
+            sha256: "a".repeat(64),
+            library_sha256: None,
+        },
+    );
     staged.start();
 
     let mut call = Message::method_call(
