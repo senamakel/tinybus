@@ -2688,6 +2688,7 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
         "trusted-migration".into(),
         vec![],
         Some(binding.clone()),
+        Arc::from([]),
     );
     let query = host
         .trusted_host_binding
@@ -2813,6 +2814,7 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
         "replacement-migration".into(),
         vec![],
         replacement_broker.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     replacement_transport
         .context
@@ -2854,7 +2856,12 @@ async fn selected_controller_binding_is_available_before_ready_and_revoked_on_di
 async fn a_binding_absent_at_transport_creation_is_never_added_later() {
     let broker = Broker::new_restricted_module_control();
     let (old_transport, old_host) =
-        ModuleTransport::new_with_controller_binding("before-selection".into(), vec![], None);
+        ModuleTransport::new_with_controller_binding(
+            "before-selection".into(),
+            vec![],
+            None,
+            Arc::from([]),
+        );
     assert!(old_host.trusted_host_binding.is_none());
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = 1;
@@ -2883,6 +2890,7 @@ async fn a_binding_absent_at_transport_creation_is_never_added_later() {
         "after-selection".into(),
         vec![],
         broker.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     assert!(new_host.trusted_host_binding.is_some());
     drop(old_transport);
@@ -2898,6 +2906,7 @@ async fn a_binding_absent_at_transport_creation_is_never_added_later() {
         "unrestricted".into(),
         vec![],
         unrestricted.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     assert!(unrestricted_host.trusted_host_binding.is_none());
     drop(unrestricted_transport);
@@ -2920,6 +2929,7 @@ async fn a_retained_binding_denies_after_its_module_owner_is_terminal_or_gone() 
         "terminal-binding".into(),
         vec![],
         Some(binding),
+        Arc::from([]),
     );
     transport.eager_initialize(initialize_ok, host).unwrap();
     let query = host.trusted_host_binding.unwrap();
@@ -2966,6 +2976,7 @@ async fn trusted_host_callback_denies_a_poisoned_owner_without_unwinding_through
         "poisoned-owner".into(),
         vec![],
         broker.restricted_module_controller_binding(),
+        Arc::from([]),
     );
     transport.eager_initialize(initialize_ok, host).unwrap();
     let query = host.trusted_host_binding.unwrap();
