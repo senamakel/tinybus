@@ -49,9 +49,7 @@ impl Interface for MigrationEndpoint {
 }
 
 fn linked_module() -> tinybus::Result<LinkedModule> {
-    let mut module = fixture::linked_module()?;
-    module.manifest.object_path = ObjectPath::new("/org/tinystoragedrivers/migration").unwrap();
-    Ok(module)
+    fixture::linked_module()
 }
 
 #[tokio::test]
@@ -69,7 +67,7 @@ async fn selected_controller_can_call_allowlisted_confidential_route_before_read
 
     let host = ModuleHost::new(broker);
     host.set_pre_ready_confidential_routes(vec![PreReadyConfidentialRoute {
-        path: ObjectPath::new("/org/tinystoragedrivers/migration").unwrap(),
+        path: ObjectPath::new("/org/tinystoragedrivers/Migration").unwrap(),
         interface: InterfaceName::new("org.tinystoragedrivers.Migration").unwrap(),
         member: MemberName::new("GetSchema").unwrap(),
     }])
@@ -84,7 +82,7 @@ async fn selected_controller_can_call_allowlisted_confidential_route_before_read
             move |connection| async move {
                 connection
                     .serve_at(
-                        ObjectPath::new("/org/tinystoragedrivers/migration").unwrap(),
+                        ObjectPath::new("/org/tinystoragedrivers/Migration").unwrap(),
                         MigrationEndpoint,
                     )
                     .await?;
@@ -104,7 +102,7 @@ async fn selected_controller_can_call_allowlisted_confidential_route_before_read
     let proxy = controller
         .proxy(
             "org.tinystoragedrivers.Migration",
-            "/org/tinystoragedrivers/migration",
+            "/org/tinystoragedrivers/Migration",
             "org.tinystoragedrivers.Migration",
         )
         .unwrap();
