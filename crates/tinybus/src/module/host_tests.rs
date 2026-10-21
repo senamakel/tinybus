@@ -174,7 +174,7 @@ pub(super) fn manifest() -> ModuleManifest {
     named_manifest("clock", "Clock")
 }
 
-#[test]
+#[tokio::test]
 fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
     let host = ModuleHost::new(Broker::new());
     let route = PreReadyConfidentialRoute {
