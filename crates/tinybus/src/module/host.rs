@@ -288,6 +288,12 @@ impl ModuleSenderLookup {
             .upgrade()
             .and_then(|inner| module_for_sender(&inner, sender))
     }
+
+    /// Resolve a canonical module ID to its current unique peer, if admitted.
+    #[must_use]
+    pub fn sender_for_module(&self, _module_id: &str) -> Option<BusName> {
+        None
+    }
 }
 
 fn module_for_sender(inner: &ModuleHostInner, sender: &BusName) -> Option<ModuleId> {
@@ -619,6 +625,12 @@ impl ModuleHost {
     #[must_use]
     pub fn module_for_sender(&self, sender: &BusName) -> Option<ModuleId> {
         module_for_sender(&self.inner, sender)
+    }
+
+    /// Resolve a canonical module ID to its current unique peer, if admitted.
+    #[must_use]
+    pub fn sender_for_module(&self, _module_id: &str) -> Option<BusName> {
+        None
     }
 
     /// Initialize a loaded module and wait for its host lifecycle readiness.

@@ -26,6 +26,38 @@ unsafe extern "C" fn pre_ready_deliver(_: *mut c_void, _: *const u8, _: usize) -
     TB_OK
 }
 
+async fn wait_for_pending_len(transport: &ModuleTransport, expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if transport
+                .pending
+                .lock()
+                .expect("module pending lock")
+                .len()
+                >= expected
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the message reached the module pending queue");
+}
+
+async fn wait_for_pre_ready_delivery_count(expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire) >= expected {
+                break;
+            }
+            PRE_READY_DELIVERED.notified().await;
+        }
+    })
+    .await
+    .expect("module delivery callback reached the expected count");
+}
+
 unsafe extern "C" fn deliver(_: *mut c_void, _: *const u8, _: usize) -> i32 {
     DELIVERIES.fetch_add(1, Ordering::AcqRel);
     while DELIVERY_BLOCKED.load(Ordering::Acquire) {
@@ -2925,7 +2957,7 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
     staged.start();
 
     let mut call = Message::method_call(
-        module_name,
+        module_name.clone(),
         "/org/tinystoragedrivers/migration".parse().unwrap(),
         "org.tinystoragedrivers.Migration".parse().unwrap(),
         "GetSchema".parse().unwrap(),
@@ -2939,35 +2971,58 @@ async fn selected_controller_route_is_delivered_before_ready_only_for_exact_conf
         tokio::time::timeout(Duration::from_millis(200), &mut notification)
             .await
             .is_ok();
-    if !delivered_while_initializing {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let pending = transport.pending.lock().expect("module pending lock");
-                let reached_transport = !pending.is_empty();
-                drop(pending);
-                if reached_transport {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the broker delivered the controller call into the READY queue");
-    }
+
+    let mut ordinary = Message::method_call(
+        module_name.clone(),
+        "/org/tinystoragedrivers/migration".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    ordinary.header.confidential = false;
+    controller.send(ordinary).await.unwrap();
+    let queued_pre_ready_count = usize::from(!delivered_while_initializing);
+    wait_for_pending_len(&transport, queued_pre_ready_count + 1).await;
+
+    let (outsider_broker, outsider_transport) = MemoryTransport::pair();
+    broker.attach(Arc::new(outsider_broker));
+    let outsider = Connection::connect(Box::new(outsider_transport)).await.unwrap();
+    let mut forged = Message::method_call(
+        module_name.clone(),
+        "/org/tinystoragedrivers/migration".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    forged.header.confidential = true;
+    forged.header.sender = Some(selected.clone());
+    outsider.send(forged).await.unwrap();
+    wait_for_pending_len(&transport, queued_pre_ready_count + 2).await;
+
+    let mut wrong_route = Message::method_call(
+        module_name,
+        "/org/tinystoragedrivers/migration/other".parse().unwrap(),
+        "org.tinystoragedrivers.Migration".parse().unwrap(),
+        "GetSchema".parse().unwrap(),
+        serde_json::Value::Null,
+    );
+    wrong_route.header.confidential = true;
+    controller.send(wrong_route).await.unwrap();
+    wait_for_pending_len(&transport, queued_pre_ready_count + 3).await;
+    assert_eq!(
+        PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire),
+        usize::from(delivered_while_initializing)
+    );
 
     // Release the legacy pending queue so the RED test leaves no blocked task.
     unsafe { (host.ready)(host.host_ctx) };
-    if PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire) == 0 {
-        tokio::time::timeout(Duration::from_secs(1), &mut notification)
-            .await
-            .expect("the existing post-READY queue drains");
-    }
+    wait_for_pre_ready_delivery_count(4).await;
 
     assert!(
         delivered_while_initializing,
         "the exact confidential selected-controller route should bypass only the READY queue"
     );
-    assert_eq!(PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire), 1);
+    assert_eq!(PRE_READY_DELIVERY_COUNT.load(Ordering::Acquire), 4);
 }
 
 #[tokio::test]
