@@ -702,10 +702,17 @@ impl ModuleHost {
             let fingerprint = callback_config_fingerprint(&bytes);
             drop(config);
             let trusted_host = self.inner.broker.restricted_module_controller_binding();
+            let pre_ready_routes = self
+                .inner
+                .pre_ready_confidential_routes
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             let (transport, host) = ModuleTransport::new_with_controller_binding(
                 admitted.name.clone(),
                 bytes,
                 trusted_host,
+                pre_ready_routes,
             );
             transport.bind_host_callbacks(binding.state.clone())?;
             #[cfg(test)]
