@@ -14,6 +14,12 @@
 //! search path, then the release cache (verified against the host's pinned
 //! digest, downloaded on a miss when allowed), then pruning of stale versions.
 //!
+//! A module counts as serving only once its setup has finished: every rung ends
+//! by waiting for the module to signal ready, and a fault or failure during
+//! setup fails the load with the module's reason. A cached `Ready` is re-checked
+//! against the host on each call, so a module that faults later is reported as
+//! failed rather than answering every call with a bare `Unavailable`.
+//!
 //! Each module has one slot in [`super::resolution`]. The first caller runs the
 //! resolution as a process-lifetime task and every other caller waits on its
 //! outcome; two modules never queue behind each other.
@@ -76,9 +82,9 @@ const SETUP_DEADLINE: Duration = Duration::from_secs(30);
 /// whose outcome could be awaited (a lazy module that has not been called yet).
 fn setup_outcome(info: &ModuleInfo, id: &str) -> Result<(), String> {
     match &info.state {
-        ModuleState::Faulted { reason } | ModuleState::Failed { reason } => Err(format!(
-            "module '{id}' faulted during setup: {reason}"
-        )),
+        ModuleState::Faulted { reason } | ModuleState::Failed { reason } => {
+            Err(format!("module '{id}' faulted during setup: {reason}"))
+        }
         ModuleState::Rejected { reason } | ModuleState::Unresolved { reason } => {
             Err(format!("module '{id}' was refused: {reason}"))
         }
