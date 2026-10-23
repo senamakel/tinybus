@@ -1354,6 +1354,171 @@ mod resolver {
         assert_eq!(f.resolver.mark_terminal(once.clone()), once);
     }
 
+    /// What a module's `init` leaves behind for the test to drive its setup:
+    /// the host's `fault`/`ready` entry points and context, as plain integers.
+    struct SetupHandle {
+        host_ctx: usize,
+        fault: unsafe extern "C" fn(*mut std::ffi::c_void, *const u8, usize),
+        ready: unsafe extern "C" fn(*mut std::ffi::c_void),
+    }
+
+    impl SetupHandle {
+        fn fault(&self) {
+            unsafe { (self.fault)(self.host_ctx as *mut _, std::ptr::null(), 0) };
+        }
+
+        fn ready(&self) {
+            unsafe { (self.ready)(self.host_ctx as *mut _) };
+        }
+    }
+
+    /// A module whose `init` returns at once while its setup is still running:
+    /// it neither calls `ready` nor `fault` until the test says so.
+    macro_rules! slow_setup_module {
+        ($init:ident, $factory:ident, $handle:ident, $entered:ident, $id:literal) => {
+            static $handle: Mutex<Option<SetupHandle>> = Mutex::new(None);
+            static $entered: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+            unsafe extern "C" fn $init(
+                host: *const crate::module::abi::TbHostVtable,
+                module: *mut crate::module::abi::TbModuleVtable,
+            ) -> i32 {
+                let host = unsafe { *host };
+                unsafe {
+                    *module = crate::module::abi::TbModuleVtable {
+                        size: crate::module::abi::TB_MODULE_VTABLE_BASE_SIZE,
+                        _reserved: 0,
+                        module_ctx: Box::into_raw(Box::new(())).cast(),
+                        deliver: accept_raced_message,
+                        shutdown: stop_raced_module,
+                        reinitialize: None,
+                    }
+                };
+                *$handle.lock().unwrap() = Some(SetupHandle {
+                    host_ctx: host.host_ctx as usize,
+                    fault: host.fault,
+                    ready: host.ready,
+                });
+                $entered.notify_one();
+                crate::module::abi::TB_OK
+            }
+
+            fn $factory() -> crate::Result<LinkedModule> {
+                let mut manifest = super::module($id, &[], &[]);
+                manifest.bus_name = crate::BusName::new(concat!("ai.tinyhumans.test.", $id))?;
+                manifest.object_path = crate::ObjectPath::new("/ai/tinyhumans/test/Module")?;
+                Ok(LinkedModule {
+                    descriptor: crate::module::abi::TbAbiDescriptor::current($id, "1.0.0"),
+                    manifest,
+                    init: $init,
+                })
+            }
+        };
+    }
+
+    fn linked_resolver(record: &'static ReleaseRecord, factory: LinkedFactory) -> Resolver {
+        Resolver::new(ResolverInputs {
+            enabled: true,
+            install_dir: None,
+            allow_download: false,
+            bundled_dir: None,
+            sources: HashMap::from([(record.id.to_string(), ModuleSource::Linked)]),
+            linked: HashMap::from([(record.id.to_string(), factory)]),
+            search_skip: Vec::new(),
+            gate: None,
+            on_resolved: None,
+            records: vec![record],
+            terminal_marker: "This is terminal for the running process".into(),
+            runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
+            module_config: Arc::new(|_| serde_json::json!({})),
+            reporter: Arc::new(FailureReporter::new(Arc::new(Recording::default()))),
+        })
+    }
+
+    slow_setup_module!(
+        init_then_fault,
+        faulting_factory,
+        FAULTING_HANDLE,
+        FAULTING_ENTERED,
+        "resolver_setup_faults"
+    );
+
+    #[tokio::test]
+    async fn a_module_whose_setup_faults_after_load_fails_the_load_with_its_reason() {
+        let record = record("resolver_setup_faults");
+        let resolver = linked_resolver(record, faulting_factory);
+        let load = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.ensure_loaded(record.id).await }
+        });
+        FAULTING_ENTERED.notified().await;
+        FAULTING_HANDLE.lock().unwrap().as_ref().unwrap().fault();
+
+        let error = load.await.unwrap().unwrap_err();
+        assert!(
+            error.contains("faulted during setup")
+                && error.contains("module reported an unrecoverable fault"),
+            "load must carry the module's reason, got: {error}"
+        );
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
+        let again = resolver.ensure_loaded(record.id).await.unwrap_err();
+        assert!(again.contains("faulted during setup"), "{again}");
+    }
+
+    slow_setup_module!(
+        init_then_ready,
+        pending_factory,
+        PENDING_HANDLE,
+        PENDING_ENTERED,
+        "resolver_setup_pending"
+    );
+
+    #[tokio::test]
+    async fn a_module_is_not_ready_until_its_setup_signals_ready() {
+        let record = record("resolver_setup_pending");
+        let resolver = linked_resolver(record, pending_factory);
+        let load = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.ensure_loaded(record.id).await }
+        });
+        PENDING_ENTERED.notified().await;
+        assert!(
+            !load.is_finished() && resolver.state_of(record.id) == Availability::Loading,
+            "the module was reported ready while its setup was still running"
+        );
+        PENDING_HANDLE.lock().unwrap().as_ref().unwrap().ready();
+
+        load.await.unwrap().unwrap();
+        assert_eq!(resolver.state_of(record.id), Availability::Ready);
+    }
+
+    slow_setup_module!(
+        init_ready_later_faults,
+        late_fault_factory,
+        LATE_HANDLE,
+        LATE_ENTERED,
+        "resolver_late_fault"
+    );
+
+    #[tokio::test]
+    async fn a_cached_ready_is_not_served_once_the_module_has_faulted() {
+        let record = record("resolver_late_fault");
+        let resolver = linked_resolver(record, late_fault_factory);
+        let load = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.ensure_loaded(record.id).await }
+        });
+        LATE_ENTERED.notified().await;
+        LATE_HANDLE.lock().unwrap().as_ref().unwrap().ready();
+        load.await.unwrap().unwrap();
+        assert_eq!(resolver.state_of(record.id), Availability::Ready);
+
+        LATE_HANDLE.lock().unwrap().as_ref().unwrap().fault();
+        let error = resolver.ensure_loaded(record.id).await.unwrap_err();
+        assert!(error.contains("faulted during setup"), "{error}");
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
+    }
+
     #[test]
     fn wire_forms_of_source_and_availability_are_stable() {
         assert_eq!(
