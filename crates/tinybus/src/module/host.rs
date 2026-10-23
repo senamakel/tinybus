@@ -407,6 +407,39 @@ impl ModuleHost {
         modules
     }
 
+    /// Wait until the module that owns `bus_name` has finished setup, then
+    /// snapshot it.
+    ///
+    /// "Loaded" is not "serving": an eager module's `init` can return while
+    /// its setup (opening a socket, starting a server) is still running, and
+    /// that setup can fault afterwards. A caller that reports the module usable
+    /// at load time reports a module that is about to lose its name. This
+    /// returns once the module signalled ready, faulted, failed or was closed,
+    /// or after `deadline`; a module still `Initializing` in the snapshot timed
+    /// out. A lazy module that has not been asked to initialise yet is
+    /// returned at once, since nothing is running whose outcome could be
+    /// awaited. `None` when no loaded module owns the name.
+    pub(crate) async fn settle(&self, bus_name: &str, deadline: Duration) -> Option<ModuleInfo> {
+        let transport = {
+            let loaded = self.inner.loaded.lock().expect("module list lock");
+            let module = loaded
+                .iter()
+                .find(|module| module.info.manifest.bus_name.as_str() == bus_name)?;
+            if matches!(module.snapshot().state, ModuleState::Resolved) {
+                return Some(module.snapshot());
+            }
+            module.transport.clone()
+        };
+        let _ = tokio::time::timeout(deadline, transport.wait_ready()).await;
+        self.inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .find(|module| module.info.manifest.bus_name.as_str() == bus_name)
+            .map(LoadedModule::snapshot)
+    }
+
     /// Return the broker-assigned unique peer name for a live, ready module.
     ///
     /// `module_name` is the module's sanitized descriptor name as returned by
