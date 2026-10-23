@@ -1477,18 +1477,20 @@ mod resolver {
     async fn a_module_is_not_ready_until_its_setup_signals_ready() {
         let record = record("resolver_setup_pending");
         let resolver = linked_resolver(record, pending_factory);
-        let load = tokio::spawn({
-            let resolver = resolver.clone();
-            async move { resolver.ensure_loaded(record.id).await }
-        });
-        PENDING_ENTERED.notified().await;
-        assert!(
-            !load.is_finished() && resolver.state_of(record.id) == Availability::Loading,
+        // A deadline, not a sleep: nothing signals ready, so a bounded wait
+        // must run out while the module is still loading.
+        assert_eq!(
+            resolver
+                .ensure_loaded_within(record.id, Some(Duration::from_millis(200)))
+                .await,
+            Err(LoadError::StillLoading),
             "the module was reported ready while its setup was still running"
         );
+        assert_eq!(resolver.state_of(record.id), Availability::Loading);
+        PENDING_ENTERED.notified().await;
         PENDING_HANDLE.lock().unwrap().as_ref().unwrap().ready();
 
-        load.await.unwrap().unwrap();
+        resolver.ensure_loaded(record.id).await.unwrap();
         assert_eq!(resolver.state_of(record.id), Availability::Ready);
     }
 
