@@ -49,6 +49,15 @@ impl ObjectTree {
         drop(replaced);
     }
 
+    /// Export `interface` at `path` only if no interface is already served there.
+    pub fn insert_if_absent(&mut self, path: ObjectPath, interface: Arc<dyn Interface>) -> bool {
+        if self.objects.contains_key(&path) {
+            return false;
+        }
+        self.insert(path, interface);
+        true
+    }
+
     /// Export `interface` and return the identity of this exact registration.
     /// A later replacement at the same path and interface gets a different
     /// identity, so an older owner cannot unregister the newer implementation.

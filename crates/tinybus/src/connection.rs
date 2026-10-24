@@ -490,6 +490,26 @@ impl Connection {
         }
     }
 
+    /// Export `interface` at `path` only when the object path is unoccupied.
+    ///
+    /// Unlike [`Connection::serve_at`], this never replaces an existing
+    /// interface. Concurrent registrations are atomic: exactly one can win.
+    pub async fn try_serve_at(&self, path: ObjectPath, interface: impl Interface) -> Result<()> {
+        if self
+            .inner
+            .objects
+            .write()
+            .await
+            .insert_if_absent(path, Arc::new(interface))
+        {
+            Ok(())
+        } else {
+            Err(Error::failed(
+                "interface is already served at this object path",
+            ))
+        }
+    }
+
     /// Export one interface and retain the exact registration identity for an
     /// owner guard. Public `serve_at` replacements invalidate older identities.
     #[cfg(feature = "modules")]
