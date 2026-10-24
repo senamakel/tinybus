@@ -298,7 +298,8 @@ async fn revoke_after_route_selection_blocks_dispatch_and_direct_unverified_disp
     assert!(resolves(&router, &message).is_ok());
     let (entered, mut receiver) = tokio::sync::mpsc::channel(1);
     let guarded = GuardedInterface {
-        endpoint: endpoint(),
+        endpoint: Some(endpoint()),
+        stream_endpoint: None,
         state: state.clone(),
         interface: BlockingCallback {
             entered,
@@ -355,7 +356,8 @@ async fn revoke_during_await_preserves_running_charge_until_actual_completion() 
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let published = Arc::new(AtomicUsize::new(0));
     let guarded = GuardedInterface {
-        endpoint: endpoint(),
+        endpoint: Some(endpoint()),
+        stream_endpoint: None,
         state: state.clone(),
         interface: BlockingCallback {
             entered,
@@ -1427,7 +1429,8 @@ fn runtime_drop_destroys_provider_future_before_offruntime_native_cleanup() {
                     guard: HostCallbackGuard(account.clone()),
                     observed: observed.clone(),
                 },
-                endpoint: endpoint(),
+                endpoint: Some(endpoint()),
+                stream_endpoint: None,
                 state: account.clone(),
             };
             let context = CallContext::brokered(account.module_peer().as_ref(), true);
@@ -1504,7 +1507,8 @@ async fn completing_provider_future_is_destroyed_before_its_running_account() {
             guard: HostCallbackGuard(account.clone()),
             observed: observed.clone(),
         },
-        endpoint: endpoint(),
+        endpoint: Some(endpoint()),
+        stream_endpoint: None,
         state: account.clone(),
     };
     let context = CallContext::brokered(account.module_peer().as_ref(), true);

@@ -40,6 +40,23 @@ impl Interface for Echo {
     }
 }
 
+struct ReplacementEcho;
+
+#[async_trait]
+impl Interface for ReplacementEcho {
+    fn name(&self) -> InterfaceName {
+        InterfaceName::new("ai.tinyhumans.Test").unwrap()
+    }
+
+    fn members(&self) -> Vec<MemberName> {
+        vec![MemberName::new("Echo").unwrap()]
+    }
+
+    async fn call(&self, _: &MemberName, _: Value) -> Result<Value> {
+        Ok(Value::String("replacement".to_owned()))
+    }
+}
+
 fn path() -> ObjectPath {
     ObjectPath::new("/ai/tinyhumans/Test").unwrap()
 }
@@ -76,6 +93,20 @@ async fn brokered_pair() -> (Connection, Connection) {
         .await
         .unwrap();
     (client, service)
+}
+
+#[tokio::test]
+async fn try_serve_at_refuses_a_collision_without_replacing_the_live_interface() {
+    let (client, service) = pair().await;
+    assert!(service.try_serve_at(path(), ReplacementEcho).await.is_err());
+
+    let result: Value = client
+        .proxy("ai.tinyhumans.Test", path(), "ai.tinyhumans.Test")
+        .unwrap()
+        .call("Echo", ("original",))
+        .await
+        .unwrap();
+    assert_eq!(result, serde_json::json!(["original"]));
 }
 
 struct CaptureCallContext(std::sync::Mutex<Option<tokio::sync::oneshot::Sender<CallContext>>>);
