@@ -17,10 +17,18 @@ fn signal_declaration() -> HostCallbackSignal {
         members: vec!["WatchChanged".parse().unwrap()],
     }
 }
+fn stream_endpoint() -> HostStreamCallbackEndpoint {
+    HostStreamCallbackEndpoint {
+        path: "/callback".parse().unwrap(),
+        interface: "org.example.Callback".parse().unwrap(),
+        members: vec!["Transfer".parse().unwrap()],
+    }
+}
 fn state(source: BusName, destination: BusName) -> Arc<CallbackState> {
     Arc::new(CallbackState {
         destination,
         endpoints: vec![endpoint()],
+        stream_endpoints: vec![],
         signals: vec![signal_declaration()],
         module_transport: Mutex::new(None),
         lifetime: Mutex::new(Lifetime {
@@ -1506,4 +1514,58 @@ async fn completing_provider_future_is_destroyed_before_its_running_account() {
     assert!(result.is_ok());
     assert_eq!(observed.load(Ordering::Acquire), 1);
     assert_eq!(HostCallbackGuard(account).running(), 0);
+}
+
+#[tokio::test]
+async fn host_stream_callbacks_are_bound_to_the_declared_module_peer() {
+    let broker = Broker::new();
+    let bus = crate::transport::memory::MemoryBus::new();
+    let broker_task = broker.spawn(bus.clone());
+    let host = ModuleHost::new(broker);
+    let binding = host
+        .prepare_host_callbacks_with_stream_endpoints(vec![], vec![stream_endpoint()])
+        .await
+        .unwrap();
+    let module = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let module_peer = module.unique_name().unwrap();
+    {
+        let mut state = binding.state.lifetime.lock().unwrap();
+        state.active = true;
+        state.module = Some(module_peer.clone());
+    }
+    let context = CallContext::brokered(Some(&module_peer), false);
+
+    let mut module_to_host = module
+        .open_stream(binding.unique_name(), StreamDescriptor::with_len(5))
+        .await
+        .unwrap();
+    let mut host_reader = binding
+        .accept_stream_from_module(&context, &module_to_host.stream_ref())
+        .unwrap();
+    let send = tokio::spawn(async move {
+        module_to_host.write(b"hello").await.unwrap();
+        module_to_host.finish().await.unwrap();
+    });
+    assert_eq!(host_reader.read_to_end_capped(5).await.unwrap(), b"hello");
+    send.await.unwrap();
+
+    let mut host_to_module = binding
+        .open_stream_to_module(
+            &context,
+            StreamDescriptor::with_len(5),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    let mut module_reader = module
+        .accept_stream_from(&host_to_module.stream_ref(), binding.unique_name())
+        .unwrap();
+    host_to_module.write(b"world").await.unwrap();
+    host_to_module.finish().await.unwrap();
+    assert_eq!(module_reader.read_to_end_capped(5).await.unwrap(), b"world");
+
+    binding.close().await.unwrap();
+    broker_task.abort();
 }
