@@ -1435,6 +1435,21 @@ mod resolver {
         })
     }
 
+    async fn wait_until_attached(record: &ReleaseRecord) {
+        for _ in 0..2000 {
+            if shared_runtime()
+                .host()
+                .list()
+                .iter()
+                .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("module never finished attaching");
+    }
+
     slow_setup_module!(
         init_then_fault,
         faulting_factory,
@@ -1452,6 +1467,10 @@ mod resolver {
             async move { resolver.ensure_loaded(record.id).await }
         });
         FAULTING_ENTERED.notified().await;
+        // `init` signals from inside attachment; faulting before the host has
+        // registered the module races admission instead of exercising a fault
+        // raised during setup.
+        wait_until_attached(record).await;
         FAULTING_HANDLE.lock().unwrap().as_ref().unwrap().fault();
 
         let error = load.await.unwrap().unwrap_err();
