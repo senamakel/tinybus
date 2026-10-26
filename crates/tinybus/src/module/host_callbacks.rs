@@ -918,6 +918,37 @@ impl ModuleHost {
         config: serde_json::Value,
         binding: &HostCallbackBinding,
     ) -> Result<ModuleInfo> {
+        self.load_file_with_host_callbacks_checked(path, config, binding, None)
+            .await
+    }
+
+    /// Load a verified artifact with callbacks only when its admitted bus name
+    /// and object path match the registry record the resolver selected. This
+    /// identity check runs before attachment or initialization.
+    pub(crate) async fn load_file_with_host_callbacks_for(
+        &self,
+        path: impl AsRef<Path>,
+        config: serde_json::Value,
+        binding: &HostCallbackBinding,
+        expected_bus_name: &str,
+        expected_object_path: &str,
+    ) -> Result<ModuleInfo> {
+        self.load_file_with_host_callbacks_checked(
+            path,
+            config,
+            binding,
+            Some((expected_bus_name, expected_object_path)),
+        )
+        .await
+    }
+
+    async fn load_file_with_host_callbacks_checked(
+        &self,
+        path: impl AsRef<Path>,
+        config: serde_json::Value,
+        binding: &HostCallbackBinding,
+        expected_identity: Option<(&str, &str)>,
+    ) -> Result<ModuleInfo> {
         if !Arc::ptr_eq(&self.inner.broker.router, &binding.broker.router)
             || !binding
                 .owner
@@ -971,6 +1002,15 @@ impl ModuleHost {
         let transport = {
             let _admission = self.inner.admission.lock().expect("module admission lock");
             let admitted = self.validate(path, &artifact.descriptor, &artifact.manifest)?;
+            if expected_identity.is_some_and(|(bus_name, object_path)| {
+                admitted.manifest.bus_name.as_str() != bus_name
+                    || admitted.manifest.object_path.as_str() != object_path
+            }) {
+                return Err(Error::module_refused(
+                    path,
+                    "artifact identity does not match the requested module",
+                ));
+            }
             if self
                 .inner
                 .loaded

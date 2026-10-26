@@ -220,9 +220,15 @@ mod resolver {
         // prevent the normal resolver path from deciding the module outcome.
         f.resolver.ensure_loaded(record.id).await.unwrap_err();
         assert_eq!(f.resolver.state_of(record.id), Availability::Failed);
-        assert_eq!(runtime.host().list().iter().filter(|info| {
-            info.manifest.bus_name.as_str() == record.bus_name
-        }).count(), 0);
+        assert_eq!(
+            runtime
+                .host()
+                .list()
+                .iter()
+                .filter(|info| { info.manifest.bus_name.as_str() == record.bus_name })
+                .count(),
+            0
+        );
     }
 
     fn admitted_info(record: &ReleaseRecord, state: ModuleState) -> ModuleInfo {

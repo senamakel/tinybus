@@ -36,8 +36,7 @@ use crate::module::resolution::{self, Claim, Resolution, ResolutionState, Waited
 use crate::module::runtime::ModuleRuntime;
 use crate::module::{
     Availability, HostCallbackBinding, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord,
-    SearchPathConfig,
-    load_first_admitted, prune_stale_versions,
+    SearchPathConfig, load_first_admitted, prune_stale_versions,
 };
 
 fn recover_admission(
@@ -557,7 +556,10 @@ impl Resolver {
         }
 
         if let Some((binding, _)) = callbacks.as_ref() {
-            if !matches!(self.inner.sources.get(id), Some(ModuleSource::LocalFile { .. })) {
+            if !matches!(
+                self.inner.sources.get(id),
+                Some(ModuleSource::LocalFile { .. })
+            ) {
                 return Err(LoadError::Failed(format!(
                     "module '{id}' host callbacks require a verified local-file source"
                 )));
@@ -742,6 +744,7 @@ impl Resolver {
         &self,
         record: &'static ReleaseRecord,
         sender: tokio::sync::watch::Sender<Option<Resolution>>,
+        callbacks: Option<(Arc<HostCallbackBinding>, serde_json::Value)>,
     ) {
         let this = self.clone();
         let id = record.id;
@@ -751,7 +754,7 @@ impl Resolver {
                 version = record.version,
                 "[tinybus::module] resolving"
             );
-            let resolution = match this.ladder(record).await {
+            let resolution = match this.ladder(record, callbacks).await {
                 Ok(()) => {
                     tracing::info!(module = id, "[tinybus::module] serving");
                     Resolution::Ready
@@ -785,7 +788,11 @@ impl Resolver {
     }
 
     /// Get `record` serving: loaded, override, search path, release cache, prune.
-    async fn ladder(&self, record: &'static ReleaseRecord) -> Result<(), String> {
+    async fn ladder(
+        &self,
+        record: &'static ReleaseRecord,
+        callbacks: Option<(Arc<HostCallbackBinding>, serde_json::Value)>,
+    ) -> Result<(), String> {
         let runtime = self.runtime().await.map_err(|_| {
             format!(
                 "module '{}' is unavailable: the module bus could not start",
@@ -801,6 +808,12 @@ impl Resolver {
             .iter()
             .any(|info| is_live_match(info, record))
         {
+            if callbacks.is_some() {
+                return Err(format!(
+                    "module '{}' is already loaded without the requested callback binding",
+                    record.id
+                ));
+            }
             return Ok(());
         }
 
@@ -815,13 +828,57 @@ impl Resolver {
         match self.inner.sources.get(record.id) {
             Some(ModuleSource::LocalFile { path }) => {
                 let path = PathBuf::from(path);
-                let module_config = (self.inner.module_config)(record.id);
-                let result = self
-                    .blocking(move || Self::load_local(runtime, &path, record.id, module_config))
-                    .await;
+                let result = if let Some((binding, module_config)) = callbacks.clone() {
+                    let host = runtime.host();
+                    let handle = tokio::runtime::Handle::current();
+                    tokio::task::spawn_blocking(move || {
+                        handle.block_on(async move {
+                            host.load_file_with_host_callbacks_for(
+                                path,
+                                module_config,
+                                &binding,
+                                record.bus_name,
+                                record.object_path,
+                            )
+                            .await
+                            .map_err(|error| {
+                                format!("module '{}' callback load failed: {error}", record.id)
+                            })?;
+                            host.retain_host_callback_binding(record.bus_name, binding)
+                                .map_err(|error| {
+                                    format!(
+                                        "module '{}' callback retention failed: {error}",
+                                        record.id
+                                    )
+                                })
+                        })
+                    })
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "module '{}' callback loader did not finish: {error}",
+                            record.id
+                        )
+                    })?
+                } else {
+                    let module_config = (self.inner.module_config)(record.id);
+                    self.blocking(move || {
+                        Self::load_local(runtime, &path, record.id, module_config)
+                    })
+                    .await
+                };
+                if callbacks.is_some() {
+                    return result;
+                }
                 return recover_admission(result, &runtime.host().list(), record);
             }
             Some(ModuleSource::Linked) => {
+                if callbacks.is_some() {
+                    return Err(format!(
+                        "module '{}' cannot use host callbacks from a linked source",
+                        record.id
+                    ));
+                }
                 let factory = self.inner.linked.get(record.id);
                 let module_config = (self.inner.module_config)(record.id);
                 let result = self
@@ -830,6 +887,13 @@ impl Resolver {
                 return recover_admission(result, &runtime.host().list(), record);
             }
             Some(ModuleSource::Pinned) | None => {}
+        }
+
+        if callbacks.is_some() {
+            return Err(format!(
+                "module '{}' host callbacks require a verified local-file source",
+                record.id
+            ));
         }
 
         // The search path tinybus itself honours. A refused search-path artifact
