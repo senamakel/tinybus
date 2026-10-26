@@ -416,15 +416,19 @@ mod resolver {
         let source = PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
         let hash = crate::module::hash::file_hex(std::fs::File::open(&source).unwrap()).unwrap();
         let root = tempfile::tempdir().unwrap();
+        // macOS exposes `/tmp` through a symlink. ModuleHost deliberately
+        // rejects symlinked search-path components, so use the resolved
+        // temporary directory as the artifact root on every platform.
+        let root_path = std::fs::canonicalize(root.path()).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&root_path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        let artifact = root.path().join(source.file_name().unwrap());
+        let artifact = root_path.join(source.file_name().unwrap());
         std::fs::copy(&source, &artifact).unwrap();
         std::fs::write(
-            root.path().join("modules.toml"),
+            root_path.join("modules.toml"),
             format!(
                 "{:?} = {hash:?}\n",
                 source.file_name().unwrap().to_str().unwrap()
