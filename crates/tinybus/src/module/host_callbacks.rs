@@ -1080,10 +1080,23 @@ impl ModuleHost {
         let hash = allowlisted_hash(path, std::fs::File::open(path)?)?.ok_or_else(|| {
             Error::module_refused(path, "scoped callbacks require a verified artifact")
         })?;
-        let artifact =
-            loader::load_verified(path, self.inner.strict.load(Ordering::Acquire), Some(&hash))?;
+        if pinned_library_sha256
+            .as_ref()
+            .is_some_and(|pinned| !pinned.eq_ignore_ascii_case(&hash))
+        {
+            return Err(Error::module_refused(
+                path,
+                "release library pin disagrees with the local module allowlist",
+            ));
+        }
+        let library_pin = pinned_library_sha256.unwrap_or_else(|| hash.clone());
+        let artifact = loader::load_verified(
+            path,
+            self.inner.strict.load(Ordering::Acquire),
+            Some(&library_pin),
+        )?;
         self.ensure_dependencies(&artifact.manifest, path)?;
-        if allowlisted_hash(path, std::fs::File::open(path)?)?.as_ref() != Some(&hash) {
+        if allowlisted_hash(path, std::fs::File::open(path)?)?.as_ref() != Some(&library_pin) {
             return Err(Error::module_refused(
                 path,
                 "verified artifact changed during loading",
@@ -1157,8 +1170,8 @@ impl ModuleHost {
                     lazy_init: true,
                     lazy_load: false,
                     descriptor_info: None,
-                    pinned_sha256: Some(hash.clone()),
-                    pinned_library_sha256: Some(hash),
+                        pinned_sha256: Some(pinned_sha256.unwrap_or_else(|| hash.clone())),
+                        pinned_library_sha256: Some(library_pin),
                 },
             )?;
             rollback.transport = Some(transport.clone());
