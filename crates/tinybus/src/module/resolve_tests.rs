@@ -332,6 +332,75 @@ mod resolver {
         assert_eq!(resolver.state_of(record.id), Availability::Failed);
     }
 
+    #[tokio::test]
+    async fn callback_resolution_rejects_a_module_already_loaded_without_its_binding() {
+        use crate::module::HostCallbackEndpoint;
+
+        let record = record("resolver_callback_rejects_preloaded_generic_module");
+        let runtime = shared_runtime();
+        let binding = Arc::new(
+            runtime
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        binding
+            .serve_at("/callback".parse().unwrap(), ResolverCallback)
+            .await
+            .unwrap();
+        let mut manifest = super::module(record.id, &[], &[]);
+        manifest.bus_name = crate::BusName::new(record.bus_name).unwrap();
+        manifest.object_path = crate::ObjectPath::new(record.object_path).unwrap();
+        runtime
+            .host()
+            .attach_linked_with_config(
+                crate::module::LinkedModule {
+                    descriptor: crate::module::abi::TbAbiDescriptor::current(record.id, "1.0.0"),
+                    manifest,
+                    init: initialize_raced_module,
+                    init_with_setup: None,
+                },
+                serde_json::Value::Null,
+            )
+            .unwrap();
+
+        let f = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: "/unused/verified-module.so".to_owned(),
+                },
+            )]),
+            None,
+        );
+        let error = f
+            .resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("already loaded without this callback binding"),
+            "{error}"
+        );
+        assert_eq!(f.resolver.state_of(record.id), Availability::Available);
+        assert_eq!(
+            runtime
+                .host()
+                .list()
+                .iter()
+                .filter(|info| { info.manifest.bus_name.as_str() == record.bus_name })
+                .count(),
+            1
+        );
+    }
+
     fn admitted_info(record: &ReleaseRecord, state: ModuleState) -> ModuleInfo {
         let mut manifest = super::module(record.id, &[], &[]);
         manifest.bus_name = crate::BusName::new(record.bus_name).unwrap();
