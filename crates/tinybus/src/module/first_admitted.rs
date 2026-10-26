@@ -328,7 +328,6 @@ where
             }
             Err(error) => {
                 last_error = error.to_string();
-                eprintln!("callback candidate failed: {last_error}");
                 tracing::warn!(
                     "[modules] '{id}' artifact for {} was not admitted: {last_error}",
                     asset.host_key
