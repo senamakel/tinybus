@@ -1029,13 +1029,6 @@ impl Resolver {
             Some(ModuleSource::Pinned) | None => {}
         }
 
-        if callbacks.is_some() {
-            return Err(format!(
-                "module '{}' host callbacks require a verified local-file source",
-                record.id
-            ));
-        }
-
         // The search path tinybus itself honours. A refused search-path artifact
         // is ordinary (most directories hold nothing), so errors are dropped and
         // only an enabled, nonterminal match on the registry identity counts.
