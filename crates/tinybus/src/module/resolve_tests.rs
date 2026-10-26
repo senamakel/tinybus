@@ -170,6 +170,27 @@ fn two_modules_claiming_one_bus_name_are_both_reported_and_neither_is_initialize
 mod resolver {
     use super::super::test_support::{Recording, fixture, record, shared_runtime};
 
+    struct ResolverCallback;
+
+    #[async_trait::async_trait]
+    impl crate::Interface for ResolverCallback {
+        fn name(&self) -> crate::InterfaceName {
+            "org.example.Callback".parse().unwrap()
+        }
+
+        fn members(&self) -> Vec<crate::MemberName> {
+            vec!["Observe".parse().unwrap()]
+        }
+
+        async fn call(
+            &self,
+            _: &crate::MemberName,
+            _: serde_json::Value,
+        ) -> crate::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+    }
+
     #[tokio::test]
     async fn callback_resolution_rejects_a_binding_from_another_host_without_claiming_the_slot() {
         use crate::module::HostCallbackEndpoint;
@@ -229,6 +250,86 @@ mod resolver {
                 .count(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn callback_resolution_does_not_join_a_generic_in_flight_load() {
+        use crate::module::HostCallbackEndpoint;
+        use std::sync::{Condvar, Mutex};
+
+        let record = record("resolver_callback_does_not_join_generic_load");
+        let runtime = shared_runtime();
+        let binding = Arc::new(
+            runtime
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        binding
+            .serve_at("/callback".parse().unwrap(), ResolverCallback)
+            .await
+            .unwrap();
+        let f = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: "/unused/verified-module.so".to_owned(),
+                },
+            )]),
+            None,
+        );
+        let entered = Arc::new((Mutex::new(false), Condvar::new()));
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let hook_entered = entered.clone();
+        let hook_release = release.clone();
+        let mut resolver = f.resolver.clone();
+        resolver.after_initial_host_check = Some(Arc::new(move |_, _| {
+            let (lock, changed) = &*hook_entered;
+            *lock.lock().unwrap() = true;
+            changed.notify_one();
+            let (lock, changed) = &*hook_release;
+            let mut ready = lock.lock().unwrap();
+            while !*ready {
+                ready = changed.wait(ready).unwrap();
+            }
+        }));
+
+        let generic_resolver = resolver.clone();
+        let generic_load =
+            tokio::spawn(async move { generic_resolver.ensure_loaded(record.id).await });
+        let waiting = entered.clone();
+        tokio::task::spawn_blocking(move || {
+            let (lock, changed) = &*waiting;
+            let mut entered = lock.lock().unwrap();
+            while !*entered {
+                entered = changed.wait(entered).unwrap();
+            }
+        })
+        .await
+        .unwrap();
+
+        let error = resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("already resolving without this callback binding"),
+            "{error}"
+        );
+        assert_eq!(resolver.state_of(record.id), Availability::Loading);
+
+        let (lock, changed) = &*release;
+        *lock.lock().unwrap() = true;
+        changed.notify_one();
+        assert!(generic_load.await.unwrap().is_err());
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
     }
 
     fn admitted_info(record: &ReleaseRecord, state: ModuleState) -> ModuleInfo {
