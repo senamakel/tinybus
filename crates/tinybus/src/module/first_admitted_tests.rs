@@ -179,12 +179,24 @@ fn a_bundle_marker_is_never_honoured_from_the_download_cache() {
 }
 
 #[derive(Clone)]
-struct TestCallback;
+struct TestCallback(crate::BusName);
 
-#[tinybus::interface(name = "org.example.Callback")]
-impl TestCallback {
-    async fn observe(&self) -> tinybus::Result<()> {
-        Ok(())
+#[async_trait::async_trait]
+impl crate::Interface for TestCallback {
+    fn name(&self) -> crate::InterfaceName {
+        "org.example.Callback".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<crate::MemberName> {
+        vec!["Observe".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &crate::MemberName,
+        _: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(serde_json::json!(self.0))
     }
 }
 
@@ -289,7 +301,10 @@ async fn release_callback_resolution_uses_a_fresh_binding_for_each_rejected_cand
                     .map_err(|error| error.to_string())?,
             );
             binding
-                .serve_at("/callback".parse().unwrap(), TestCallback)
+                .serve_at(
+                    "/callback".parse().unwrap(),
+                    TestCallback(binding.unique_name().clone()),
+                )
                 .await
                 .map_err(|error| error.to_string())?;
             attempts.lock().unwrap().push(Arc::clone(&binding));
