@@ -618,49 +618,80 @@ impl Resolver {
             return Err(LoadError::Disabled(label));
         }
 
-        if let Some((binding, _)) = callbacks.as_ref() {
-            if !matches!(
-                self.inner.sources.get(id),
-                Some(ModuleSource::LocalFile { .. })
-            ) {
-                return Err(LoadError::Failed(format!(
-                    "module '{id}' host callbacks require a verified local-file source"
-                )));
-            }
+        if let Some(callbacks) = callbacks.as_ref() {
             let runtime = self.runtime().await.map_err(|_| {
                 LoadError::Failed(format!(
                     "module '{id}' is unavailable: the module bus could not start"
                 ))
             })?;
-            if runtime
-                .host()
-                .list()
-                .iter()
-                .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
-            {
-                if runtime
-                    .host()
-                    .retains_host_callback_binding(record.bus_name, binding)
-                {
-                    return Ok(());
+            match callbacks {
+                CallbackLoad::Single(binding, _) => {
+                    if !matches!(
+                        self.inner.sources.get(id),
+                        Some(ModuleSource::LocalFile { .. })
+                    ) {
+                        return Err(LoadError::Failed(format!(
+                            "module '{id}' host callbacks require a verified local-file source"
+                        )));
+                    }
+                    if runtime
+                        .host()
+                        .list()
+                        .iter()
+                        .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
+                    {
+                        if runtime
+                            .host()
+                            .retains_host_callback_binding(record.bus_name, binding)
+                        {
+                            return Ok(());
+                        }
+                        return Err(LoadError::Failed(format!(
+                            "module '{id}' is already loaded without this callback binding"
+                        )));
+                    }
+                    runtime
+                        .host()
+                        .validate_host_callback_binding(binding)
+                        .map_err(|error| {
+                            LoadError::Failed(format!(
+                                "module '{id}' callback binding is invalid: {error}"
+                            ))
+                        })?;
                 }
-                return Err(LoadError::Failed(format!(
-                    "module '{id}' is already loaded without this callback binding"
-                )));
+                CallbackLoad::PerAttempt { selected, .. } => {
+                    if !matches!(
+                        self.inner.sources.get(id),
+                        None | Some(ModuleSource::Pinned | ModuleSource::LocalFile { .. })
+                    ) {
+                        return Err(LoadError::Failed(format!(
+                            "module '{id}' callback source cannot preserve admitted identity"
+                        )));
+                    }
+                    if runtime
+                        .host()
+                        .list()
+                        .iter()
+                        .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
+                    {
+                        let binding = runtime
+                            .host()
+                            .retained_host_callback_binding(record.bus_name)
+                            .ok_or_else(|| {
+                                LoadError::Failed(format!(
+                                    "module '{id}' is already loaded without a callback binding"
+                                ))
+                            })?;
+                        *selected.lock().expect("callback selection lock") = Some(binding);
+                        return Ok(());
+                    }
+                }
             }
-            runtime
-                .host()
-                .validate_host_callback_binding(binding)
-                .map_err(|error| {
-                    LoadError::Failed(format!(
-                        "module '{id}' callback binding is invalid: {error}"
-                    ))
-                })?;
         }
 
         let receiver = match resolution::global().claim(id) {
             Claim::Done(Resolution::Ready) => {
-                if let Some((binding, _)) = callbacks.as_ref() {
+                if let Some(CallbackLoad::Single(binding, _)) = callbacks.as_ref() {
                     let runtime = self.runtime().await.map_err(|_| {
                         LoadError::Failed(format!(
                             "module '{id}' is unavailable: the module bus could not start"
@@ -675,6 +706,22 @@ impl Resolver {
                     return Err(LoadError::Failed(format!(
                         "module '{id}' was loaded without the requested callback binding"
                     )));
+                }
+                if let Some(CallbackLoad::PerAttempt { selected, .. }) = callbacks.as_ref() {
+                    let runtime = self.runtime().await.map_err(|_| {
+                        LoadError::Failed(format!(
+                            "module '{id}' is unavailable: the module bus could not start"
+                        ))
+                    })?;
+                    let binding = runtime
+                        .host()
+                        .retained_host_callback_binding(record.bus_name)
+                        .ok_or_else(|| {
+                            LoadError::Failed(format!(
+                                "module '{id}' was loaded without a callback binding"
+                            ))
+                        })?;
+                    *selected.lock().expect("callback selection lock") = Some(binding);
                 }
                 return Ok(());
             }
