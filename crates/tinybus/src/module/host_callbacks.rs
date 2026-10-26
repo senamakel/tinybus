@@ -1078,9 +1078,17 @@ impl ModuleHost {
             check_directory(parent)?;
         }
         check_file(path)?;
-        let hash = allowlisted_hash(path, std::fs::File::open(path)?)?.ok_or_else(|| {
-            Error::module_refused(path, "scoped callbacks require a verified artifact")
-        })?;
+        let allowlisted = allowlisted_hash(path, std::fs::File::open(path)?)?;
+        let hash = match (allowlisted, pinned_sha256.is_some()) {
+            (Some(hash), _) => hash,
+            (None, true) => crate::module::hash::file_hex(std::fs::File::open(path)?)?,
+            (None, false) => {
+                return Err(Error::module_refused(
+                    path,
+                    "scoped callbacks require a verified artifact",
+                ));
+            }
+        };
         if pinned_library_sha256
             .as_ref()
             .is_some_and(|pinned| !pinned.eq_ignore_ascii_case(&hash))
@@ -1097,7 +1105,9 @@ impl ModuleHost {
             Some(&library_pin),
         )?;
         self.ensure_dependencies(&artifact.manifest, path)?;
-        if allowlisted_hash(path, std::fs::File::open(path)?)?.as_ref() != Some(&library_pin) {
+        let current_library = allowlisted_hash(path, std::fs::File::open(path)?)?
+            .or_else(|| crate::module::hash::file_hex(std::fs::File::open(path).ok()?).ok());
+        if current_library.as_ref() != Some(&library_pin) {
             return Err(Error::module_refused(
                 path,
                 "verified artifact changed during loading",
