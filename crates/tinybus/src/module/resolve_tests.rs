@@ -1554,3 +1554,47 @@ mod resolver {
         }
     }
 }
+
+fn info_in(state: ModuleState) -> ModuleInfo {
+    ModuleInfo {
+        name: "probe".into(),
+        version: "1.0.0".into(),
+        file: "module.so".into(),
+        state,
+        manifest: module("probe", &[], &[]),
+        rustc_version: String::new(),
+        rustc_mismatch: false,
+        enabled: true,
+    }
+}
+
+#[test]
+fn setup_outcome_names_why_a_module_is_not_serving() {
+    let reason = || "because".to_string();
+    let err = |state| setup_outcome(&info_in(state), "probe").unwrap_err();
+    assert!(
+        err(ModuleState::Faulted { reason: reason() }).contains("faulted during setup: because")
+    );
+    assert!(err(ModuleState::Failed { reason: reason() }).contains("faulted during setup"));
+    assert!(err(ModuleState::Rejected { reason: reason() }).contains("was refused: because"));
+    assert!(err(ModuleState::Unresolved { reason: reason() }).contains("was refused"));
+    assert!(err(ModuleState::Stopped).contains("is not running"));
+    assert!(err(ModuleState::Disabled).contains("is not running"));
+    assert!(err(ModuleState::Initializing).contains("did not finish setup within 30 seconds"));
+    assert!(setup_outcome(&info_in(ModuleState::Ready), "probe").is_ok());
+}
+
+#[test]
+fn load_error_messages_are_fit_for_a_user() {
+    assert_eq!(LoadError::Failed("x".into()).into_message(), "x");
+    assert!(
+        LoadError::StillLoading
+            .into_message()
+            .contains("still loading")
+    );
+    assert!(
+        LoadError::Disabled("voice")
+            .into_message()
+            .contains("(voice)")
+    );
+}
