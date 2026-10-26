@@ -40,7 +40,9 @@ use crate::module::{
 };
 
 type HostCallbackFactory = Arc<
-    dyn Fn(usize) -> Pin<
+    dyn Fn(
+            usize,
+        ) -> Pin<
             Box<
                 dyn Future<Output = Result<(Arc<HostCallbackBinding>, serde_json::Value), String>>
                     + Send,
@@ -1100,14 +1102,15 @@ impl Resolver {
                 bundled_root: bundled.as_deref(),
                 allow_download,
             };
-            let (info, binding) = crate::module::first_admitted::load_first_admitted_with_host_callbacks(
-                runtime.host(),
-                &plan,
-                |attempt| selected.prepare(attempt),
-                record.bus_name,
-                record.object_path,
-            )
-            .await?;
+            let (info, binding) =
+                crate::module::first_admitted::load_first_admitted_with_host_callbacks(
+                    runtime.host(),
+                    &plan,
+                    |attempt| selected.prepare(attempt),
+                    record.bus_name,
+                    record.object_path,
+                )
+                .await?;
             selected.retain_selected(binding);
             let _ = info;
             Ok(())

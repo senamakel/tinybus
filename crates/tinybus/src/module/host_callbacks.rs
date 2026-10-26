@@ -1013,12 +1013,13 @@ impl ModuleHost {
         expected_bus_name: &str,
         expected_object_path: &str,
     ) -> Result<ModuleInfo> {
-        let hit = crate::module::cache::find_marked(directory, asset_name, pin).ok_or_else(|| {
-            Error::module_refused(
-                directory,
-                "bundled digest marker does not match the pin, or the extraction is unusable",
-            )
-        })?;
+        let hit =
+            crate::module::cache::find_marked(directory, asset_name, pin).ok_or_else(|| {
+                Error::module_refused(
+                    directory,
+                    "bundled digest marker does not match the pin, or the extraction is unusable",
+                )
+            })?;
         self.load_file_with_host_callbacks_checked(
             hit.module,
             config,
@@ -1170,8 +1171,8 @@ impl ModuleHost {
                     lazy_init: true,
                     lazy_load: false,
                     descriptor_info: None,
-                        pinned_sha256: Some(pinned_sha256.unwrap_or_else(|| hash.clone())),
-                        pinned_library_sha256: Some(library_pin),
+                    pinned_sha256: Some(pinned_sha256.unwrap_or_else(|| hash.clone())),
+                    pinned_library_sha256: Some(library_pin),
                 },
             )?;
             rollback.transport = Some(transport.clone());

@@ -191,17 +191,21 @@ pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
     mut prepare: F,
     expected_bus_name: &str,
     expected_object_path: &str,
-) -> Result<(ModuleInfo, std::sync::Arc<crate::module::HostCallbackBinding>), String>
+) -> Result<
+    (
+        ModuleInfo,
+        std::sync::Arc<crate::module::HostCallbackBinding>,
+    ),
+    String,
+>
 where
     F: FnMut(usize) -> Fut,
     Fut: std::future::Future<
-        Output = Result<
-            (
+            Output = Result<(
                 std::sync::Arc<crate::module::HostCallbackBinding>,
                 serde_json::Value,
-            ),
+            )>,
         >,
-    >,
 {
     let id = plan.id;
     if plan.assets.is_empty() {
@@ -264,7 +268,9 @@ where
             match result {
                 Ok((info, binding)) => {
                     host.retain_host_callback_binding(expected_bus_name, Arc::clone(&binding))
-                        .map_err(|error| format!("module '{id}' callback retention failed: {error}"))?;
+                        .map_err(|error| {
+                            format!("module '{id}' callback retention failed: {error}")
+                        })?;
                     return Ok((info, binding));
                 }
                 Err(error) => {
@@ -287,7 +293,8 @@ where
     for asset in plan.assets {
         let Some(cache_dir) = artifact_dir(plan.install_root, id, plan.version, asset.host_key)
         else {
-            last_error = "the module's cache path could not be built from its registry entry".into();
+            last_error =
+                "the module's cache path could not be built from its registry entry".into();
             continue;
         };
         secure_release_cache(plan.install_root, &cache_dir);
