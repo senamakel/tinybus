@@ -178,6 +178,143 @@ fn a_bundle_marker_is_never_honoured_from_the_download_cache() {
     assert!(error.contains("downloads are disabled"), "{error}");
 }
 
+#[derive(Clone)]
+struct TestCallback;
+
+#[tinybus::interface(name = "org.example.Callback")]
+impl TestCallback {
+    async fn observe(&self) -> tinybus::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBUS_TEST_HOST_CALLBACK_MODULE to point at the built cdylib"]
+async fn release_callback_resolution_uses_a_fresh_binding_for_each_rejected_candidate() {
+    use super::load_first_admitted_with_host_callbacks;
+    use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
+    use std::sync::{Arc, Mutex};
+
+    let fixture =
+        std::path::PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(root.path()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let runtime = Arc::new(
+        ModuleRuntime::start(
+            &RuntimeNames {
+                thread: "tinybus-callback-release-test".into(),
+                worker: "tinybus-callback-release-worker".into(),
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let record = Box::leak(Box::new(crate::module::ReleaseRecord {
+        id: "tinybus",
+        bus_name: "org.example.EagerCallback",
+        object_path: "/org/example/EagerCallback",
+        version: "0.0.0",
+        release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
+        assets: &[],
+    }));
+
+    let mut assets = Vec::new();
+    for (host_key, archive_name, bytes) in [
+        ("candidate-one", "one.tar.gz", b"archive-one".as_slice()),
+        ("candidate-two", "two.tar.gz", b"archive-two".as_slice()),
+    ] {
+        let dir = artifact_dir(&root, record.id, record.version, host_key).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(archive_name), bytes).unwrap();
+        let digest =
+            crate::module::hash::file_hex(std::fs::File::open(dir.join(archive_name)).unwrap())
+                .unwrap();
+        let module = dir.join(format!(
+            "libcandidate.{}",
+            crate::module::cache::library_extension()
+        ));
+        if host_key == "candidate-one" {
+            std::fs::write(&module, b"not a loadable module").unwrap();
+        } else {
+            std::fs::copy(&fixture, &module).unwrap();
+            let library_hash =
+                crate::module::hash::file_hex(std::fs::File::open(&module).unwrap()).unwrap();
+            std::fs::write(
+                dir.join("modules.toml"),
+                format!(
+                    "{:?} = {library_hash:?}\n",
+                    module.file_name().unwrap().to_str().unwrap()
+                ),
+            )
+            .unwrap();
+        }
+        assets.push(ReleaseAsset {
+            host_key: Box::leak(host_key.to_owned().into_boxed_str()),
+            archive: Box::leak(archive_name.to_owned().into_boxed_str()),
+            sha256: Box::leak(digest.into_boxed_str()),
+            library_sha256: None,
+        });
+    }
+
+    let plan = ReleasePlan {
+        id: record.id,
+        version: record.version,
+        release_url: record.release_url,
+        assets: &assets,
+        install_root: &root,
+        bundled_root: None,
+        allow_download: false,
+    };
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let factory_runtime = Arc::clone(&runtime);
+    let factory_attempts = Arc::clone(&attempts);
+    let prepare = move |_attempt: usize| {
+        let runtime = Arc::clone(&factory_runtime);
+        let attempts = Arc::clone(&factory_attempts);
+        async move {
+            let binding = Arc::new(
+                runtime
+                    .host()
+                    .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                        path: "/callback".parse().unwrap(),
+                        interface: "org.example.Callback".parse().unwrap(),
+                        members: vec!["Observe".parse().unwrap()],
+                    }])
+                    .await
+                    .map_err(|error| error.to_string())?,
+            );
+            binding
+                .serve_at("/callback".parse().unwrap(), TestCallback)
+                .await
+                .map_err(|error| error.to_string())?;
+            attempts.lock().unwrap().push(Arc::clone(&binding));
+            let config = serde_json::json!({ "host": binding.unique_name().as_str() });
+            Ok((binding, config))
+        }
+    };
+
+    let host = runtime.host();
+    let (_info, selected) = load_first_admitted_with_host_callbacks(
+        host,
+        &plan,
+        prepare,
+        record.bus_name,
+        record.object_path,
+    )
+    .await
+    .unwrap();
+    let bindings = attempts.lock().unwrap();
+    assert_eq!(bindings.len(), 2);
+    assert!(!host.retains_host_callback_binding(record.bus_name, &bindings[0]));
+    assert!(host.retains_host_callback_binding(record.bus_name, &selected));
+    assert!(Arc::ptr_eq(&bindings[1], &selected));
+}
+
 /// A marker-style bundle entry whose library and allowlist agree, so nothing
 /// about its bytes is refused before the loader reaches the directory gate.
 #[cfg(unix)]
