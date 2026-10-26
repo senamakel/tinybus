@@ -569,14 +569,6 @@ impl Resolver {
                     "module '{id}' is unavailable: the module bus could not start"
                 ))
             })?;
-            runtime
-                .host()
-                .validate_host_callback_binding(binding)
-                .map_err(|error| {
-                    LoadError::Failed(format!(
-                        "module '{id}' callback binding is invalid: {error}"
-                    ))
-                })?;
             if runtime
                 .host()
                 .list()
@@ -593,6 +585,14 @@ impl Resolver {
                     "module '{id}' is already loaded without this callback binding"
                 )));
             }
+            runtime
+                .host()
+                .validate_host_callback_binding(binding)
+                .map_err(|error| {
+                    LoadError::Failed(format!(
+                        "module '{id}' callback binding is invalid: {error}"
+                    ))
+                })?;
         }
 
         let receiver = match resolution::global().claim(id) {

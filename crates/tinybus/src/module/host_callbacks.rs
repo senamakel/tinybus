@@ -673,6 +673,20 @@ impl ModuleHost {
         bus_name: &str,
         binding: &Arc<HostCallbackBinding>,
     ) -> bool {
+        let peer = {
+            let state = binding
+                .state
+                .lifetime
+                .lock()
+                .expect("callback lifetime lock");
+            if !state.active || state.revoked || !binding.state.module_live() {
+                return false;
+            }
+            state.module.clone()
+        };
+        let Some(peer) = peer else {
+            return false;
+        };
         self.inner
             .loaded
             .lock()
@@ -680,6 +694,7 @@ impl ModuleHost {
             .iter()
             .any(|module| {
                 module.info.manifest.bus_name.as_str() == bus_name
+                    && module.unique_name == peer
                     && module
                         ._callback_binding
                         .as_ref()
