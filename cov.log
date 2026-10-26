@@ -1,0 +1,1196 @@
+   Compiling cfg-if v1.0.4
+   Compiling typenum v1.20.1
+   Compiling once_cell v1.21.4
+   Compiling zeroize v1.9.0
+   Compiling itoa v1.0.18
+   Compiling adler2 v2.0.1
+   Compiling untrusted v0.9.0
+   Compiling bitflags v2.13.1
+   Compiling bytes v1.12.1
+   Compiling simd-adler32 v0.3.10
+   Compiling linux-raw-sys v0.12.1
+   Compiling log v0.4.33
+   Compiling winnow v1.0.4
+   Compiling memchr v2.8.3
+   Compiling base64 v0.23.1
+   Compiling subtle v2.6.1
+   Compiling equivalent v1.0.2
+   Compiling pin-project-lite v0.2.17
+   Compiling hashbrown v0.17.1
+   Compiling libc v0.2.189
+   Compiling serde_core v1.0.229
+   Compiling rustls-pki-types v1.15.1
+   Compiling crc32fast v1.5.0
+   Compiling httparse v1.10.1
+   Compiling http v1.5.0
+   Compiling zmij v1.0.23
+   Compiling tracing-core v0.1.36
+   Compiling fastrand v2.5.0
+   Compiling typed-path v0.12.3
+   Compiling cpufeatures v0.2.17
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling utf8-zero v0.8.1
+   Compiling getrandom v0.2.17
+   Compiling generic-array v0.14.7
+   Compiling rustix v1.1.4
+   Compiling miniz_oxide v0.8.9
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling indexmap v2.14.0
+   Compiling getrandom v0.4.3
+   Compiling filetime v0.2.29
+   Compiling percent-encoding v2.3.2
+   Compiling tinybus v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus)
+   Compiling webpki-roots v1.0.10
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling serde_json v1.0.151
+   Compiling ring v0.17.14
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling flate2 v1.1.9
+   Compiling xattr v1.6.1
+   Compiling serde v1.0.229
+   Compiling tempfile v3.27.0
+   Compiling tokio v1.53.3
+   Compiling thiserror v2.0.20
+   Compiling tracing v0.1.44
+   Compiling digest v0.10.7
+   Compiling toml v1.1.6+spec-1.1.0
+   Compiling tar v0.4.46
+   Compiling sha2 v0.10.9
+   Compiling rustls-webpki v0.103.16
+   Compiling rustls v0.23.46
+   Compiling ureq-proto v0.6.5
+   Compiling zip v9.0.5
+   Compiling ureq v3.5.0
+   Compiling tinybus-module v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus-module)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.75s
+warning: --ignore-filename-regex may not be used together with --no-report
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.4
+   Compiling find-msvc-tools v0.1.10
+   Compiling shlex v2.0.1
+   Compiling version_check v0.9.5
+   Compiling serde_core v1.0.229
+   Compiling once_cell v1.21.4
+   Compiling rustix v1.1.4
+   Compiling typenum v1.20.1
+   Compiling crc32fast v1.5.0
+   Compiling zeroize v1.9.0
+   Compiling bitflags v2.13.1
+   Compiling adler2 v2.0.1
+   Compiling bytes v1.12.1
+   Compiling utf8parse v0.2.2
+   Compiling untrusted v0.9.0
+   Compiling itoa v1.0.18
+   Compiling simd-adler32 v0.3.10
+   Compiling httparse v1.10.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling pin-project-lite v0.2.17
+   Compiling regex-syntax v0.8.11
+   Compiling zmij v1.0.23
+   Compiling anstyle v1.0.14
+   Compiling rustls v0.23.46
+   Compiling getrandom v0.4.3
+   Compiling cc v1.4.2
+   Compiling generic-array v0.14.7
+   Compiling rustls-pki-types v1.15.1
+   Compiling anstyle-parse v1.0.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling log v0.4.33
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling tracing-core v0.1.36
+   Compiling http v1.5.0
+   Compiling strsim v0.11.1
+   Compiling miniz_oxide v0.8.9
+   Compiling serde_json v1.0.151
+   Compiling base64 v0.23.1
+   Compiling serde v1.0.229
+   Compiling subtle v2.6.1
+   Compiling clap_lex v1.1.0
+   Compiling ring v0.17.14
+   Compiling memchr v2.8.3
+   Compiling lazy_static v1.5.0
+   Compiling thiserror v2.0.20
+   Compiling hashbrown v0.17.1
+   Compiling winnow v1.0.4
+   Compiling heck v0.5.0
+   Compiling equivalent v1.0.2
+   Compiling webpki-roots v1.0.10
+   Compiling thread_local v1.1.10
+   Compiling anstream v1.0.0
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling tinybus v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus)
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling cpufeatures v0.2.17
+   Compiling typed-path v0.12.3
+   Compiling indexmap v2.14.0
+   Compiling fastrand v2.5.0
+   Compiling utf8-zero v0.8.1
+   Compiling percent-encoding v2.3.2
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling sharded-slab v0.1.7
+   Compiling digest v0.10.7
+   Compiling flate2 v1.1.9
+   Compiling sha2 v0.10.9
+   Compiling zip v9.0.5
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml v1.1.6+spec-1.1.0
+   Compiling clap_builder v4.6.6
+   Compiling ureq-proto v0.6.5
+   Compiling getrandom v0.2.17
+   Compiling errno v0.3.14
+   Compiling filetime v0.2.29
+   Compiling mio v1.2.2
+   Compiling socket2 v0.6.5
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling tokio-macros v2.7.2
+   Compiling clap_derive v4.6.4
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v2.0.20
+   Compiling async-trait v0.1.92
+   Compiling tracing-attributes v0.1.31
+   Compiling tinybus-macros v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus-macros)
+   Compiling tracing v0.1.44
+   Compiling signal-hook-registry v1.4.8
+   Compiling xattr v1.6.1
+   Compiling tempfile v3.27.0
+   Compiling tar v0.4.46
+   Compiling regex-automata v0.4.18
+   Compiling tokio v1.53.3
+   Compiling clap v4.6.6
+   Compiling matchers v0.2.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling rustls-webpki v0.103.16
+   Compiling ureq v3.5.0
+   Compiling tinybus-module v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus-module)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.56s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus-9dab8edfb83e80ca)
+
+running 715 tests
+test attest::tests::an_allowlist_line_without_an_assignment_is_skipped_rather_than_guessed_at ... ok
+test __private::tests::generated_helpers_round_trip_values_and_redact_bad_arguments ... ok
+test __private::tests::literal_parsers_reject_invalid_generated_names ... ok
+test __private::tests::unknown_method_uses_a_safe_fallback_member ... ok
+test attest::tests::an_allowlist_reads_entries_and_ignores_comments_and_sections ... ok
+test attest::tests::only_a_full_length_hex_digest_counts_as_a_hash ... ok
+test broker::module_control_tests::restriction_starts_closed_and_denies_before_argument_parsing ... ok
+test broker::module_control_tests::restricted_enable_refuses_noncontroller_before_callback ... ok
+test broker::module_control_tests::controller_cannot_be_rebound_through_a_clone_or_after_disconnect ... ok
+test broker::module_control_tests::restricted_github_load_refuses_noncontroller_before_callback ... ok
+test broker::module_control_tests::closed_admission_precedes_missing_host_lookup_and_no_wire_method_selects_controller ... ok
+test broker::module_control_tests::restricted_load_refuses_noncontroller_before_callback ... ok
+test broker::module_control_tests::restricted_reinitialize_refuses_noncontroller_before_callback ... ok
+test broker::module_control_tests::concurrent_host_selection_attaches_exactly_one_controller ... ok
+test broker::module_control_tests::restricted_stop_refuses_noncontroller_before_callback ... ok
+test broker::module_control_tests::restricted_rescan_refuses_noncontroller_before_callback ... ok
+test broker::module_control_tests::permissive_broker_retains_legacy_control_calls_and_cannot_claim_restricted_binding ... ok
+test broker::tests::a_confidential_call_to_an_unattested_unique_peer_is_refused ... ok
+test broker::tests::a_peer_that_never_announced_is_still_callable ... ok
+test broker::tests::a_second_claimant_for_a_name_is_refused ... ok
+test broker::tests::a_confidential_call_reaches_the_fixed_unique_admitted_peer ... ok
+test broker::tests::a_sensitive_call_may_only_address_the_bus_module_host ... ok
+test broker::module_control_tests::replacing_module_host_does_not_relax_broker_controller_admission ... ok
+test broker::tests::a_sensitive_call_is_refused_for_every_member_but_module_configuration ... ok
+test broker::tests::a_confidential_call_to_the_bus_itself_is_refused_before_its_body_is_parsed ... ok
+test broker::tests::the_stream_interface_gets_no_exemption_from_attestation ... ok
+test connection::reply_tests::another_broker_peer_cannot_complete_a_waiter_with_a_forged_reply ... ok
+test broker::tests::the_bus_answers_ping_and_reports_a_stable_id ... ok
+test connection::reply_tests::conditional_owner_header_requires_a_unique_method_call_target ... ok
+test broker::tests::serving_stops_cleanly_on_listener_shutdown_and_reports_listener_errors ... ok
+test build_info::tests::every_known_feature_bit_has_a_stable_name ... ok
+test build_info::tests::unknown_feature_bits_do_not_leak_an_untrusted_value ... ok
+test connection::reply_tests::absent_conditional_header_round_trips_legacy_wire_frames ... ok
+test broker::tests::a_confidential_call_to_an_unattested_recipient_is_refused ... ok
+test broker::tests::the_sender_is_stamped_by_the_broker_and_cannot_be_forged ... ok
+test broker::tests::a_peer_announces_and_another_reads_the_manifest_back ... ok
+test broker::module_control_tests::selected_controller_can_mutate_and_other_peers_can_inspect ... ok
+test broker::tests::malformed_bus_arguments_are_replied_to_without_hanging ... ok
+test connection::reply_tests::reply_authority_rejects_other_peers_and_requires_private_success ... ok
+test connection::reply_tests::legacy_alias_calls_remain_routable_without_a_conditional_header ... ok
+test connection::reply_tests::confidential_alias_takeover_is_refused_before_dispatch ... ok
+test connection::reply_tests::guarded_call_serial_follows_its_owner_negotiation ... ok
+test connection::reply_tests::captured_alias_owner_is_checked_atomically_before_dispatch ... ok
+test connection::signal_tests::a_signal_addressed_to_a_well_known_name_is_refused ... ok
+test connection::reply_tests::genuine_broker_routing_and_control_errors_retain_native_wire_names ... ok
+test connection::reply_tests::confidential_named_reply_binds_the_attested_owner ... ok
+test broker::tests::a_name_handed_on_to_another_peer_does_not_hand_on_its_attestation ... ok
+test connection::reply_tests::unsupported_owner_guard_negotiation_fails_before_alias_delivery ... ok
+test broker::tests::the_bus_reserves_its_own_name ... ok
+test connection::reply_tests::confidential_unique_reply_preserves_genuine_sanitized_error ... ok
+test connection::tests::a_rule_round_trips_through_its_wire_form ... ok
+test connection::tests::a_scalar_argument_is_wrapped_into_the_positional_array ... ok
+test connection::signal_tests::an_admitted_local_handler_refuses_identical_remote_payload_and_only_accepts_bound_publisher ... ok
+test broker::tests::module_control_calls_validate_their_arguments_and_answer_for_unknown_modules ... ok
+test connection::signal_tests::cancelling_receive_and_later_raw_injection_cannot_relabel_queued_broker_delivery ... ok
+test connection::signal_tests::raw_peer_signal_with_forged_sender_has_no_verified_identity ... ok
+test connection::reply_tests::unique_reply_preserves_genuine_error_after_rejecting_forged_errors ... ok
+test connection::tests::a_dropped_peer_wakes_waiters_instead_of_making_them_wait_out_the_clock ... ok
+test connection::signal_tests::local_signal_captures_exact_publisher_identity_not_header_or_tenant ... ok
+test connection::reply_tests::stream_abort_stays_with_the_peer_that_answered_open ... ok
+test error::tests::feature_disabled_names_the_flag_to_rebuild_with ... ok
+test error::tests::a_method_failure_travels_under_its_own_name ... ok
+test error::tests::module_refusal_uses_a_safe_filename_fallback ... ok
+test error::tests::bad_arguments_keeps_the_diagnosis_and_drops_the_value ... ok
+test error::tests::module_refusal_sanitizes_an_untrusted_reason ... ok
+test error::tests::missing_owner_names_the_integration_that_is_not_running ... ok
+test error::tests::every_structured_error_has_a_stable_wire_name ... ok
+test error::tests::redaction_survives_an_unclosed_quote ... ok
+test connection::tests::a_failing_method_arrives_as_an_error_with_its_name_intact ... ok
+test events::subscriber::tests::a_handler_without_a_filter_accepts_every_domain ... ok
+test connection::tests::a_streaming_caller_accepts_an_ordinary_legacy_reply ... ok
+test events::tests::invalid_catalog_configuration_fails_before_a_subscription_is_created ... ok
+test connection::reply_tests::stream_chunks_and_close_stay_with_the_peer_that_answered_open ... ok
+test message::codec::tests::a_malformed_payload_is_a_decode_error_not_a_panic ... ok
+test message::tests::a_call_without_a_destination_is_refused_on_ingress ... ok
+test message::tests::a_confidential_message_without_a_destination_is_refused_on_ingress ... ok
+test message::codec::tests::a_frame_round_trips_with_its_newlines_intact ... ok
+test message::tests::a_directed_signal_requires_one_unique_recipient_and_cannot_be_private ... ok
+test message::tests::a_reply_goes_back_to_the_senders_unique_name ... ok
+test message::tests::a_reply_inherits_confidentiality_and_an_error_reply_never_does ... ok
+test message::tests::a_header_from_a_peer_that_predates_the_flag_reads_as_not_confidential ... ok
+test message::tests::a_signal_cannot_be_confidential ... ok
+test message::tests::a_signal_needs_no_destination ... ok
+test message::tests::an_error_reply_keeps_the_dotted_name_matchable ... ok
+test message::tests::an_ordinary_message_does_not_pay_for_private_flags ... ok
+test message::tests::messages_round_trip_through_json ... ok
+test message::tests::only_a_method_call_can_request_a_streamed_reply ... ok
+test module::abi::tests::an_uninitialized_module_vtable_refuses_calls ... ok
+test connection::tests::callback_connection_does_not_keep_its_served_object_and_bus_name_alive ... ok
+test message::tests::the_header_omits_absent_fields_rather_than_writing_nulls ... ok
+test module::abi::tests::field_bytes_stops_at_nul_or_uses_the_entire_field ... ok
+test module::abi::tests::prefix_hosts_normalize_both_tails ... ok
+test module::abi::tests::routing_tail_survives_newer_optional_tail ... ok
+test module::abi::tests::terminal_tail_requires_its_complete_field ... ok
+test connection::tests::a_service_can_export_and_remove_objects_during_a_method_call ... ok
+test module::abi::tests::the_current_descriptor_describes_this_build_and_truncates_long_fields ... ok
+test module::cache::tests::a_component_that_cannot_name_a_directory_yields_no_cache_path ... ok
+test events::tests::an_event_crosses_a_process_boundary_between_two_peers ... ok
+test module::cache::tests::a_commit_onto_a_missing_target_creates_it ... ok
+test module::cache::tests::a_group_writable_cache_directory_loses_group_and_other_write ... ok
+test connection::tests::brokered_context_authenticates_distinct_senders_and_overwrites_forgery ... ok
+test module::cache::tests::a_failed_commit_leaves_no_staging_directory_behind ... ok
+test error::tests::a_generic_failure_falls_back_to_the_failed_name ... ok
+test global::tests::a_once_bus_can_be_a_static ... ok
+test events::tests::decoding_rejects_other_catalogs_and_malformed_event_bodies ... ok
+test error::tests::a_backtick_inside_a_quoted_value_does_not_end_the_redaction_early ... ok
+test global::tests::the_native_registry_works_without_a_runtime_or_an_initialised_bus ... ok
+test connection::tests::concurrent_try_serve_at_calls_have_exactly_one_winner ... ok
+test message::codec::tests::a_value_that_cannot_be_serialized_is_an_encode_error_not_a_panic ... ok
+test global::tests::default_constructs_the_same_uninitialised_singleton ... ok
+test message::codec::tests::an_announced_oversize_frame_is_rejected_before_allocating ... ok
+test connection::tests::inbound_callback_can_register_an_interface_without_deadlock ... ok
+test events::tests::try_recv_skips_another_catalogs_signals_rather_than_reporting_them ... ok
+test module::cache::tests::a_bundle_marker_beside_a_mismatched_allowlist_is_not_a_hit ... ok
+test module::cache::tests::a_bundle_marker_without_an_allowlist_is_not_a_hit ... ok
+test module::cache::tests::an_archive_matching_the_pin_beside_one_module_is_a_hit ... ok
+test module::cache::tests::an_archive_that_does_not_match_the_pin_is_not_a_hit ... ok
+test module::cache::tests::a_present_archive_is_never_bypassed_by_its_marker ... ok
+test module::cache::tests::download_urls_follow_the_release_asset_path ... ok
+test module::cache::tests::an_allowlist_beside_the_module_is_honoured ... ok
+test module::cache::tests::each_artifact_of_a_version_has_its_own_cache_directory ... ok
+test module::cache::tests::a_staging_directory_needs_a_parent ... ok
+test module::cache::tests::errors_name_the_reason_not_the_path ... ok
+test module::cache::tests::a_symlink_in_place_of_a_cache_directory_leaves_its_target_alone ... ok
+test module::cache::tests::pruning_does_not_follow_directory_symlinks_while_looking_for_staging ... ok
+test module::cache::tests::an_unreadable_allowlist_is_a_disagreement_not_a_pass ... ok
+test module::cache::tests::without_a_marker_or_an_archive_there_is_no_bundle_hit ... ok
+test module::client::tests::a_disabled_registry_refuses_without_starting_anything ... ok
+test module::client::tests::call_errors_render_the_already_reported_prefix ... ok
+test module::client::tests::bus_errors_classify_to_closed_outcomes ... ok
+test module::client::tests::malformed_json_is_a_module_fault_reported_by_identity_only ... ok
+test module::failure::tests::a_sink_that_is_not_ready_does_not_spend_the_key ... ok
+test module::failure::tests::a_terminal_report_is_delivered_once_per_module_and_reason ... ok
+test module::failure::tests::invocation_failures_are_never_deduplicated ... ok
+test module::failure::tests::reason_codes_and_stages_are_the_closed_vocabulary ... ok
+test module::failure::tests::unknown_modules_share_one_anonymous_key ... ok
+test module::client::tests::a_fixture_proxy_is_classified_and_reported_when_the_call_fails ... ok
+test module::client::tests::derived_objects_keep_the_configured_deadline_and_report_failures ... ok
+test module::first_admitted::tests::a_bundle_refused_for_its_content_is_still_authoritative ... ok
+test module::first_admitted::tests::a_terminal_failure_with_downloads_enabled_says_to_restart ... ok
+test module::first_admitted::tests::an_absent_installer_bundle_uses_the_release_cache_path ... ok
+test module::first_admitted::tests::an_invalid_installer_bundle_is_reported_without_falling_back_to_the_cache ... ok
+test module::first_admitted::tests::an_unbuildable_bundle_path_is_skipped_and_the_release_cache_is_used ... ok
+test module::first_admitted::tests::an_unbuildable_cache_path_falls_through_then_reports_the_miss ... ok
+test module::first_admitted::tests::no_candidates_means_unavailable_on_this_platform ... ok
+test broker::tests::one_wedged_peer_does_not_stall_another_peers_traffic ... ok
+test module::first_admitted::tests::a_bundle_refused_only_for_its_location_falls_back_to_the_release_cache ... ok
+test module::first_admitted::tests::the_release_cache_is_repaired_to_owner_only_write_before_it_is_used ... ok
+test module::github::tests::a_cache_miss_with_downloads_disabled_is_refused_without_the_network ... ok
+test module::github::tests::a_concurrent_fill_that_verifies_is_kept_rather_than_replaced ... ok
+test module::github::tests::a_download_that_disagrees_with_its_manifest_is_refused_and_cleaned_up ... ok
+test module::github::tests::a_verified_cache_answers_without_the_network ... ok
+test module::cache::tests::a_missing_archive_is_not_a_hit ... ok
+test events::subscriber::tests::handlers_and_closures_can_be_called_through_the_trait ... ok
+test global::tests::announcing_before_initialisation_is_a_safe_no_op ... ok
+test events::subscriber::tests::forgetting_a_completed_handle_leaves_its_task_alone ... ok
+test module::client::tests::unavailable_loads_and_explicit_reports_use_only_registered_identity ... ok
+test module::cache::tests::a_directory_without_exactly_one_module_is_not_a_hit ... ok
+test events::subscriber::tests::a_closed_signal_stream_ends_the_dispatch_loop ... ok
+test module::github::tests::github_tag_urls_parse_without_accepting_other_hosts_or_paths ... ok
+test module::github::tests::checksum_manifests_accept_the_documented_toml_and_json_shapes ... ok
+test module::cache::tests::without_a_pin_the_recorded_digest_decides ... ok
+test module::github::tests::release_extraction_tempdirs_are_private_regardless_of_umask ... ok
+test module::github::tests::module_paths_are_canonicalized_before_admission ... ok
+test connection::reply_tests::raw_direct_reply_compatibility_does_not_claim_broker_identity ... ok
+test module::github::tests::tar_archives_refuse_hard_link_entries ... ok
+test connection::tests::a_call_reaches_the_service_and_the_reply_comes_back ... ok
+test module::github::tests::the_manifest_digest_must_agree_with_the_host_pin ... ok
+test module::github::tests::tar_root_entry_cannot_widen_release_extraction_directory ... ok
+test module::github::tests::an_asset_name_that_leaves_the_cache_directory_is_refused ... ok
+test global::tests::an_existing_transport_initialises_and_announces_a_manifest ... ok
+test module::hash::tests::sha256_matches_a_published_multi_block_input_vector ... ok
+test connection::signal_tests::custom_transport_and_successful_hello_cannot_borrow_broker_signal_proof ... ok
+test events::tests::a_published_event_reaches_a_subscriber ... ok
+test module::hash::tests::a_failing_read_is_an_error_not_a_digest_of_what_was_read ... ok
+test module::github::tests::zip_archives_refuse_symlink_entries ... ok
+test module::github::tests::tar_archives_refuse_symlink_entries ... ok
+test module::hash::tests::sha256_matches_the_published_56_byte_input_vector ... ok
+test module::github::tests::zip_archives_refuse_paths_outside_the_destination ... ok
+test module::github::tests::zip_archives_do_not_apply_setuid_or_executable_permissions ... ok
+test module::github::tests::zip_archives_extract_only_enclosed_regular_files_and_directories ... ok
+test module::hash::tests::sha256_matches_the_published_empty_input_vector ... ok
+test module::hash::tests::an_interrupted_read_is_retried_not_reported ... ok
+test module::host::admission_tests::release_cache_directories_are_private_under_a_permissive_umask ... ok
+test module::host::admission_tests::a_private_directory_this_user_created_is_admitted ... ok
+test module::host::admission_tests::a_directory_writable_by_the_users_private_group_is_admitted ... ok
+test module::github::tests::zip_archives_refuse_special_file_entries ... ok
+test module::host::callbacks::tests::a_host_alias_and_a_second_verified_module_inherit_no_authority ... ok
+test module::host::callbacks::tests::a_transport_rejects_replacement_of_its_exact_callback_account ... ok
+test module::client::tests::fixture_json_and_object_calls_preserve_deadlines_and_confidential_refusals ... ok
+test connection::tests::a_panic_reply_carries_the_location_but_never_the_payload ... ok
+test module::host::callbacks::tests::a_module_fault_revokes_dispatch_authority_before_peer_detach ... ok
+test module::client::tests::pinned_objects_and_derived_children_keep_the_original_peer ... ok
+test module::host::callbacks::tests::a_bound_callback_can_receive_and_send_streams_without_exposing_its_connection ... ok
+test module::host::callbacks::tests::actual_native_early_unwind_releases_entry_and_reclaims_after_callback_return ... ok
+test module::host::callbacks::tests::actual_native_release_owner_survives_canceled_waiter_and_runtime_drop ... ok
+test module::host::callbacks::tests::completing_provider_future_is_destroyed_before_its_running_account ... ok
+test module::host::callbacks::tests::controlled_release_wakes_entry_and_releases_channels_on_early_unwind ... ok
+test module::host::callbacks::tests::configuration_fingerprints_preserve_json_equality_without_normalizing_strings ... ok
+test module::host::callbacks::tests::detaching_either_peer_revokes_stale_guard_and_replacements ... ok
+test module::host::callbacks::tests::directed_signals_target_only_the_live_bound_module_and_declared_member ... ok
+test module::host::callbacks::tests::child_creation_prunes_expired_parent_entries ... ok
+test connection::writer_tests::a_refused_signal_does_not_stop_later_calls ... ok
+test module::host::callbacks::tests::mixed_callback_dispatch_keeps_confidential_and_stream_members_separate ... ok
+test module::host::callbacks::tests::draining_a_binding_waits_for_running_grandchild_callbacks ... ok
+test module::host::callbacks::tests::registration_is_exact_single_use_and_failed_load_detaches_the_local_peer ... ok
+test module::host::callbacks::tests::revoke_after_route_selection_blocks_dispatch_and_direct_unverified_dispatch ... ok
+test module::host::callbacks::tests::revoke_during_await_preserves_running_charge_until_actual_completion ... ok
+test module::host::callbacks::tests::reset_requests_receive_distinct_revocable_host_callback_bindings ... ok
+test module::host::callbacks::tests::restricted_outgoing_handle_preserves_typed_calls_and_metadata ... ok
+test module::host::callbacks::tests::root_drain_retains_ancestry_for_running_grandchild_after_child_drop ... ok
+test module::host::callbacks::tests::runtime_drop_destroys_provider_future_before_offruntime_native_cleanup ... ok
+test module::host::callbacks::tests::scoped_routes_match_every_field_and_never_attest_the_host ... ok
+test module::host::callbacks::tests::setup_attachment_wait_allows_preload_to_outlive_product_deadlines ... ok
+test module::host::callbacks::tests::setup_attachment_wait_reports_an_early_load_failure ... ok
+test module::host::callbacks::tests::setup_attachment_watchdog_cancels_a_stuck_preload ... ok
+test module::host::callbacks::tests::unverified_sources_cannot_be_enrolled_and_scopes_are_bounded ... ok
+test module::cache::tests::a_version_directory_that_cannot_be_listed_is_treated_as_being_staged ... ok
+test module::client::tests::an_unknown_module_is_unavailable_and_reported_anonymously ... ok
+test module::host::callbacks::tests::endpoint_declarations_registration_and_broker_ownership_are_checked ... ok
+test module::host::reload_tests::native_log_fixture_recovers_poison_without_unwinding_across_abi ... ok
+test connection::tests::replacing_a_well_known_name_does_not_inherit_the_old_sender_identity ... ok
+test connection::tests::a_streamed_reply_that_stops_making_progress_times_out ... ok
+test events::subscriber::tests::malformed_and_lagged_messages_do_not_end_the_dispatch_loop ... ok
+test events::tests::a_domain_becomes_a_path_element ... ok
+test connection::reply_tests::named_reply_rejects_forged_success_and_errors_with_any_private_flags ... ok
+test module::host::required_tests::an_unsupported_actual_manifest_is_refused_before_setup ... ok
+test broker::tests::a_confidential_call_carrying_a_stream_handle_is_refused_before_it_is_sent ... ok
+test connection::tests::module_management_helpers_forward_their_requests_to_the_broker ... ok
+test broker::writer_tests::a_refused_message_is_dropped_and_the_next_one_is_delivered ... ok
+test broker::tests::hello_assigns_distinct_unique_names ... ok
+test module::host::callbacks::tests::rollback_after_attach_releases_the_actual_initialization_observer ... ok
+test module::host::callbacks::tests::setup_attachment_wait_preserves_actual_admission_refusal_before_c_entry ... ok
+test broker::tests::a_dead_peers_manifest_goes_with_it ... ok
+test connection::tests::a_custom_transport_cannot_borrow_its_inner_broker_provenance ... ok
+test connection::tests::a_confidential_call_refuses_streamed_reply_semantics_before_send ... ok
+test connection::tests::unserve_stops_new_admission_but_preserves_an_already_admitted_call ... ok
+test connection::reply_tests::owner_negotiation_rejects_non_unique_responder_before_delivery ... ok
+test broker::tests::calling_an_integration_that_is_not_running_fails_fast_and_names_it ... ok
+test events::tests::a_panicking_handler_does_not_stop_its_neighbour_or_itself ... ok
+test module::host::required_tests::invalid_requirements_are_refused_without_echoing_input ... ok
+test connection::tests::retaining_a_broker_endpoint_does_not_allow_authenticated_injection ... ok
+test module::host::required_tests::a_provisional_lazy_sidecar_cannot_satisfy_activation_requirements ... ok
+test connection::tests::a_streaming_call_keeps_errors_as_ordinary_replies ... ok
+test connection::writer_tests::a_call_the_transport_refuses_fails_at_once_and_the_connection_keeps_working ... ok
+test broker::tests::remove_match_validates_its_rule_and_accepts_one_that_was_added ... ok
+test module::host::required_tests::requirements_compare_identity_address_versions_and_methods_on_one_interface ... ok
+test module::host::required_tests::the_matching_loaded_artifact_reaches_its_original_initializer ... ok
+test events::subscriber::tests::a_handle_exposes_its_name_and_cancels_its_task ... ok
+test connection::tests::try_serve_at_refuses_any_occupied_object_path ... ok
+test module::host::tests::a_bundle_marker_without_an_allowlist_is_refused_rather_than_loaded_unhashed ... ok
+test module::host::tests::a_bundle_marker_equal_to_the_pin_admits_the_extraction_without_its_archive ... ok
+test broker::tests::a_service_dying_releases_its_name_and_announces_it ... ok
+test connection::signal_tests::emit_to_reaches_only_the_addressed_subscriber ... ok
+test connection::tests::opted_in_method_fault_fences_before_primary_payload_drop ... ok
+test module::host::reload_tests::a_stopped_native_sdk_instance_can_be_replaced_after_all_names_are_released ... ok
+test broker::tests::require_passes_on_a_compatible_peer_and_names_both_versions_otherwise ... ok
+test module::host::tests::a_descriptor_with_a_bad_magic_is_refused_without_reading_past_the_prefix ... ok
+test module::host::tests::a_descriptor_smaller_than_the_host_expects_is_refused_and_a_larger_one_is_accepted ... ok
+test module::host::tests::a_directory_counts_as_empty_only_when_missing_or_without_entries ... ok
+test module::host::tests::a_gid_inside_a_subordinate_range_is_delegated ... ok
+test module::host::tests::a_file_that_is_not_a_regular_file_is_skipped ... ok
+test module::host::tests::a_module_built_against_an_incompatible_tinybus_is_refused_and_names_both_versions ... ok
+test module::host::tests::a_module_built_for_a_different_target_triple_is_refused ... ok
+test module::host::tests::a_module_built_by_a_different_rustc_is_refused_in_strict_mode_and_only_warned_about_otherwise ... ok
+test module::host::tests::a_module_built_for_an_older_abi_revision_is_refused_before_its_init_runs ... ok
+test module::host::tests::a_module_directory_owned_by_another_user_is_refused ... ok
+test module::host::tests::a_module_compiled_with_panic_abort_is_refused_because_a_panic_would_kill_the_host ... ok
+test module::host::tests::a_directory_refusal_names_the_ancestor_that_failed ... ok
+test module::host::tests::a_module_needing_a_feature_the_host_lacks_is_refused_and_names_the_feature ... ok
+test module::host::tests::a_module_that_never_had_its_init_called_is_the_refusal_path ... ok
+test module::host::tests::a_plain_directory_has_no_extended_acl ... ok
+test module::host::tests::a_refused_ancestor_is_named_without_leaking_a_path ... ok
+test module::host::tests::a_refusal_names_the_file_but_never_the_path_or_the_descriptor_bytes ... ok
+test module::host::tests::a_sidecar_without_lazy_init_refuses_the_artifact_instead_of_loading_it_eagerly ... ok
+test events::tests::a_receiver_yields_decoded_events ... ok
+test module::host::tests::a_cdylib_built_for_a_different_target_is_refused_at_the_gate ... ok
+test module::host::tests::a_call_to_a_rejected_module_names_the_state_rather_than_timing_out ... ok
+test module::host::tests::a_sticky_world_writable_module_directory_is_accepted ... ok
+test connection::tests::a_streamed_reply_can_keep_progressing_past_the_reply_deadline ... ok
+test module::host::tests::a_world_writable_module_directory_is_refused_before_any_dlopen ... ok
+test module::host::tests::accounts_count_as_local_only_without_a_directory_service ... ok
+test module::host::tests::a_module_with_neither_a_pin_nor_an_allowlist_is_loaded_but_never_attested ... ok
+test module::hash::tests::sha256_matches_the_published_million_a_vector ... ok
+test module::host::tests::an_invalid_lazy_sidecar_refuses_the_artifact_instead_of_loading_it_eagerly ... ok
+test module::host::tests::actual_native_host_drop_keeps_terminal_tombstone_and_other_instance_live ... ok
+test module::host::reload_tests::native_replacement_logs_and_sanitized_panics_use_only_its_original_host_callback ... ok
+test module::host::tests::a_real_cdylib_loads_and_serves_a_call ... ok
+test module::host::tests::group_write_by_a_shared_group_is_refused_even_with_a_private_group ... ok
+test module::host::tests::group_write_by_an_ordinary_group_is_still_refused ... ok
+test module::host::tests::group_write_by_gid_zero_is_refused_off_macos ... ok
+test module::host::tests::group_write_by_the_users_private_group_is_admitted ... ok
+test module::host::tests::a_lazy_module_initializes_on_the_first_call_and_two_racing_callers_initialize_it_once ... ok
+test module::cache::tests::pruning_keeps_the_pinned_version_and_anything_still_being_staged ... ok
+test module::cache::tests::a_pin_that_is_not_a_digest_is_not_a_hit ... ok
+test module::first_admitted::tests::a_bundle_marker_is_never_honoured_from_the_download_cache ... ok
+test global::tests::publishing_before_init_is_a_no_op_rather_than_a_panic ... ok
+test module::cache::tests::a_marker_equal_to_the_pin_without_its_archive_is_a_bundle_hit ... ok
+test module::host::tests::an_allowlist_with_a_mismatched_hash_refuses_the_file ... ok
+test module::host::tests::a_match_rule_on_a_lazy_modules_signal_does_not_initialize_it ... ok
+test events::tests::root_catalogs_and_awaited_publishing_keep_the_same_wire_shape ... ok
+test module::host::tests::a_lazy_manifest_registers_an_unmapped_library_and_the_first_call_loads_it ... ok
+test global::tests::a_second_init_returns_the_first_bus ... ok
+test events::tests::local_delivery_reaches_the_handler_without_a_per_event_task_hop ... ok
+test broker::writer_tests::a_failed_link_still_ends_the_writer ... ok
+test broker::tests::an_unknown_bus_method_is_an_error_reply_rather_than_a_hang ... ok
+test module::cache::tests::a_module_symlinked_outside_its_directory_is_never_a_hit ... ok
+test connection::tests::an_unknown_member_is_reported_as_such_rather_than_hanging ... ok
+test events::tests::a_local_subscriber_still_receives_once_the_outbox_has_overflowed ... ok
+test connection::tests::broker_introspection_and_name_lifecycle_use_the_typed_helpers ... ok
+test events::tests::a_closure_subscriber_receives_events ... ok
+test connection::tests::a_timed_out_call_does_not_leak_its_pending_slot ... ok
+test broker::tests::get_attestation_answers_for_a_name_nobody_owns ... ok
+test module::cache::tests::staging_is_committed_by_one_rename_and_replaces_what_was_there ... ok
+test module::host::admission_tests::a_bundle_others_can_write_falls_back_to_the_verified_release_cache ... ok
+test module::cache::tests::a_marker_that_does_not_match_the_pin_is_not_a_bundle_hit ... ok
+test module::host::tests::actual_native_fault_during_ordinary_stop_keeps_fault_state_and_single_join ... ok
+test module::host::callbacks::tests::callback_streams_reject_other_peers_nonconfidential_calls_and_revoked_bindings ... ok
+test broker::tests::a_confidential_call_reaches_a_module_the_host_verified ... ok
+test module::cache::tests::a_nested_module_is_found ... ok
+test module::host::tests::search_skip_matches_file_stems_only ... ok
+test connection::tests::concurrent_calls_are_matched_by_serial_not_by_order ... ok
+test events::tests::try_recv_drains_without_waiting_and_reports_why_it_is_empty ... ok
+test module::host::tests::actual_native_rejected_stop_submission_retains_guard_through_host_drop ... ok
+test connection::tests::try_serve_at_refuses_a_collision_without_replacing_the_live_interface ... ok
+test connection::tests::direct_header_sender_is_not_authenticated ... ok
+test module::host::tests::the_user_private_group_rule_reads_local_accounts_and_proves_exclusivity ... ok
+test global::tests::an_in_process_bus_delivers_end_to_end ... ok
+test broker::tests::a_client_calls_a_service_by_its_well_known_name ... ok
+test module::first_admitted::tests::a_bundle_marker_that_does_not_match_the_pin_is_refused_without_falling_back ... ok
+test module::host::tests::world_write_without_sticky_is_refused_even_for_root_groups ... ok
+test module::host::tests::two_modules_exporting_the_same_symbol_name_each_resolve_to_their_own ... ok
+test module::loader::tests::descriptor_gate_rejects_invalid_size_and_endianness_declarations ... ok
+test connection::tests::weak_references_cannot_resurrect_dispatch_state_after_the_last_owner_drops ... ok
+test broker::tests::list_names_shows_the_well_known_name_and_the_unique_ones ... ok
+test module::platform::tests::a_linux_host_below_every_published_floor_gets_nothing ... ok
+test module::manifest::tests::defaults_make_a_minimal_manifest_safe_to_load ... ok
+test module::loader::tests::unix_loader_refuses_missing_and_nul_containing_paths ... ok
+test module::manifest::tests::peer_manifest_and_interface_lookup_follow_the_declaration ... ok
+test module::loader::tests::the_manifest_slice_is_refused_for_each_reason ... ok
+test module::platform::tests::an_unsupported_os_or_architecture_gets_nothing ... ok
+test module::platform::tests::glibc_versions_parse_with_and_without_a_patch_level ... ok
+test module::platform::tests::macos_prefers_the_newer_build_and_falls_back ... ok
+test module::platform::tests::the_running_host_resolves_without_panicking ... ok
+test module::platform::tests::windows_arm64_has_only_the_windows_11_build ... ok
+test module::release::tests::asset_lookup_matches_the_exact_host_key_and_rejects_unknown_hosts ... ok
+test module::manifest::tests::a_manifest_round_trips_and_omits_empty_optional_metadata ... ok
+test events::tests::a_domain_filter_excludes_other_domains ... ok
+test events::tests::every_subscriber_sees_every_matching_event ... ok
+test module::platform::tests::an_older_linux_host_is_offered_only_what_its_glibc_can_load ... ok
+test module::platform::tests::a_modern_linux_host_prefers_the_newer_build_but_can_fall_back ... ok
+test module::platform::tests::a_non_glibc_linux_host_gets_nothing ... ok
+test events::tests::publishing_with_no_subscribers_is_not_an_error ... ok
+test connection::tests::a_panicking_module_method_becomes_an_error_reply_rather_than_an_abort ... ok
+test module::loader::tests::the_descriptor_prefix_is_refused_for_each_reason ... ok
+test connection::signal_tests::typed_broker_signal_keeps_authenticated_original_publisher_through_queue ... ok
+test connection::tests::serve_at_keeps_its_existing_replacement_behavior ... ok
+test module::remembered_hash::tests::a_file_touched_inside_the_quiet_period_is_never_remembered ... ok
+test module::host::tests::module_host_helpers_preserve_safe_names_states_and_allowlist_decisions ... ok
+test module::host::callbacks::tests::callback_stream_acceptance_rejects_a_handle_opened_by_another_peer ... ok
+test module::host::tests::scanning_loading_rescanning_and_shutting_down_a_module_directory_are_consistent ... ok
+test module::host::tests::one_refused_module_does_not_stop_the_others_in_the_directory_from_loading ... ok
+test module::resolution::tests::the_first_claim_runs_and_every_later_claim_waits ... ok
+test module::resolution::tests::the_process_wide_resolution_table_is_stable ... ok
+test module::resolve::tests::a_dependency_cycle_is_reported_rather_than_loaded ... ok
+test module::resolve::tests::a_module_blocked_behind_an_unresolved_provider_is_not_reported_as_a_cycle ... ok
+test module::resolve::tests::a_module_is_initialized_after_every_module_it_depends_on ... ok
+test module::resolve::tests::a_required_dependency_no_module_provides_leaves_the_module_unresolved_and_names_the_interface ... ok
+test module::resolve::tests::an_optional_dependency_that_is_missing_still_resolves ... ok
+test module::resolution::tests::a_bounded_wait_returns_an_outcome_that_arrives_before_its_deadline ... ok
+test module::resolution::tests::a_ready_module_that_faults_settles_as_failed ... ok
+test module::resolve::tests::resolver::a_client_over_a_resolver_is_unavailable_and_reports_when_modules_are_disabled ... ok
+test module::resolution::tests::a_failure_is_terminal_and_carries_its_reason ... ok
+test module::resolution::tests::a_resolver_that_dies_without_reporting_fails_its_waiters ... ok
+test module::resolve::tests::resolver::a_duplicate_admission_error_recovers_when_the_requested_module_is_initializing ... ok
+test module::resolution::tests::modules_do_not_share_a_slot ... ok
+test module::resolution::tests::test_hooks_plant_and_remove_a_slot ... ok
+test module::resolve::tests::resolver::disabled_configuration_wins_over_a_loaded_module ... ok
+test module::resolve::tests::resolver::a_gated_module_is_refused_before_anything_starts_or_is_reported ... ok
+test module::resolution::tests::an_outcome_reaches_every_waiter_and_is_remembered ... ok
+test module::host::tests::duplicate_module_declarations_are_reported_without_attaching_either_copy ... ok
+test module::resolve::tests::resolver::admission_recovery_requires_the_exact_enabled_nonterminal_module ... ok
+test module::host::tests::actual_native_reservation_rollback_retains_one_cleanup_and_fault_tombstone ... ok
+test module::resolve::tests::resolver::status_reflects_the_gate_and_a_local_source_on_an_unsupported_host ... ok
+test module::resolve::tests::resolver::refusals_never_start_the_module_runtime ... ok
+test module::resolve::tests::resolver::wire_forms_of_source_and_availability_are_stable ... ok
+test module::resolve::tests::resolver::mark_terminal_is_idempotent ... ok
+test module::host::tests::a_module_that_never_replies_times_out_the_caller_and_leaves_the_bus_usable ... ok
+test module::host::tests::a_module_whose_init_fails_is_terminal_and_is_never_initialized_again ... ok
+test module::remembered_hash::tests::the_public_entry_point_returns_the_same_digest ... ok
+test module::resolve::tests::two_modules_claiming_one_bus_name_are_both_reported_and_neither_is_initialized ... ok
+test module::tests::public_file_hashing_uses_the_same_sha256_implementation_as_module_admission ... ok
+test module::transport::tests::a_module_log_line_is_accepted_at_every_level_and_with_a_hostile_length ... ok
+test module::transport::tests::a_new_host_keeps_the_frozen_prefix_readable_by_old_modules ... ok
+test module::transport::tests::a_failed_initializer_is_reported_to_callers ... ok
+test module::transport::tests::a_send_waiting_for_initialization_admission_closes_without_an_initializer_fault ... ok
+
+running 1 test
+test module::runtime::tests::configured_worker_stack_supports_deep_synchronous_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 0.01s
+
+test module::resolution::tests::a_bounded_wait_reports_still_loading_instead_of_hanging ... ok
+test module::remembered_hash::tests::an_untouched_file_is_hashed_once ... ok
+test module::runtime::tests::configured_worker_stack_supports_deep_synchronous_work ... ok
+test connection::tests::a_wedged_method_times_out_the_caller_and_not_the_connection ... ok
+test module::transport::tests::a_module_that_faults_is_detached_and_can_no_longer_send ... ok
+test module::transport::tests::a_module_log_line_reaches_the_hosts_subscriber_with_its_level ... ok
+test module::transport::tests::actual_native_fault_between_return_and_publication_uses_same_owner ... ok
+test module::transport::tests::actual_native_deadline_fault_retains_late_cleanup_without_wall_clock_sleep ... ok
+test module::transport::tests::an_actual_initializer_failure_during_stop_is_retained ... ok
+test broker::tests::a_signal_reaches_a_subscriber_and_skips_a_non_subscriber ... ok
+test module::transport::tests::actual_native_late_init_is_joined_after_initiator_abandonment ... ok
+test module::transport::tests::actual_native_controller_is_owned_until_shutdown_callback_returns ... ok
+test module::transport::tests::an_older_vtable_loads_but_reports_reinitialization_as_unsupported ... ok
+test module::transport::tests::actual_native_eager_fault_denies_while_config_remains_borrowed_then_joins ... ok
+test events::tests::dropping_the_handle_stops_delivery ... ok
+test events::tests::a_peer_that_publishes_and_subscribes_sees_the_event_exactly_once ... ok
+test module::transport::tests::a_pending_call_is_failed_when_the_module_closes_its_delivery_queue ... ok
+test module::transport::tests::actual_native_late_eager_publication_cannot_refund_failed_cleanup_spawn ... ok
+test module::transport::tests::disconnected_artificial_finish_gate_does_not_unwind ... ok
+test module::transport::tests::every_host_callback_refuses_null_arguments_without_crashing ... ok
+test module::transport::tests::an_uninitialized_module_answers_calls_and_rejects_signals ... ok
+test broker::tests::a_confidential_body_is_never_fanned_out_to_a_monitor ... ok
+test module::transport::tests::incomplete_module_vtables_are_rejected_and_shutdown_reports_closed ... ok
+test module::runtime::tests::a_failing_setup_fails_the_start ... ok
+test module::transport::tests::host_callbacks_accept_messages_and_make_the_transport_closed_on_fault ... ok
+test module::host::tests::a_ready_module_accepts_replacement_configuration_without_reloading ... ok
+test module::transport::tests::actual_native_reinitializer_fault_denies_before_c_returns_and_joins_once ... ok
+test module::transport::tests::observing_fault_owned_job_does_not_create_ordinary_stop_marker ... ok
+test module::host::tests::a_call_to_a_disabled_module_that_still_owns_its_name_is_refused_promptly ... ok
+test module::runtime::tests::setup_runs_before_the_runtime_is_handed_out ... ok
+test module::resolve::tests::resolver::a_bounded_wait_reports_still_loading_without_cancelling_the_resolution ... ok
+test module::resolve::tests::resolver::a_callback_request_does_not_claim_resolution_when_runtime_start_fails ... ok
+test module::resolve::tests::resolver::a_linked_source_without_a_factory_is_terminal_and_never_retried ... ok
+test module::runtime::tests::proxies_validate_names_and_unloaded_modules_do_not_answer ... ok
+test module::resolve::tests::resolver::a_faulted_module_is_never_retried_in_process ... ok
+test module::resolve::tests::resolver::a_missing_install_dir_is_terminal ... ok
+test module::resolve::tests::resolver::the_resolved_hook_runs_once_before_waiters_are_released ... ok
+test module::resolve::tests::resolver::the_access_trait_delegates_to_the_resolver ... ok
+test module::resolve::tests::resolver::resolver_refuses_host_callbacks_for_pinned_sources_before_loading ... ok
+test module::resolve::tests::resolver::a_panicking_resolved_hook_does_not_strand_waiters ... ok
+test module::resolve::tests::resolver::a_failing_linked_factory_is_terminal_and_names_no_cause ... ok
+test module::resolve::tests::resolver::a_linked_module_that_is_not_the_requested_record_is_refused_before_attach ... ok
+test module::resolve::tests::resolver::a_local_override_is_tried_before_the_release_cache ... ok
+test module::resolve::tests::resolver::status_of_reports_the_failure_reason_and_unsupported_platforms ... ok
+test module::transport::tests::a_reserved_native_entry_cannot_start_after_teardown_even_if_stop_caller_is_cancelled ... ok
+test module::runtime::tests::work_outlives_the_caller_runtime_and_blocking_reports_errors ... ok
+test module::transport::tests::abandoning_initiating_waiter_faults_and_retains_late_initializer_cleanup ... ok
+test module::transport::tests::ready_followed_by_fault_is_not_successful_readiness ... ok
+test module::transport::tests::rejected_initialization_releases_observer_without_claiming_initializing ... ok
+test module::host::tests::callback_lifecycle_tests::cancelling_reinitialize_cannot_enable_a_module_while_native_callback_still_runs ... ok
+test module::transport::tests::rejected_spawn_retains_actual_initializer_owner_and_never_resubmits ... ok
+test module::transport::tests::rejected_observer_after_ordinary_stop_preserves_nonfault_cause ... ok
+test module::transport::tests::rejected_ordinary_worker_submission_retains_original_lifecycle_guard ... ok
+test module::transport::tests::scheduled_initializer_fault_cancels_before_actual_entry ... ok
+test module::transport::tests::scheduled_initializer_is_adopted_by_original_ordinary_stop ... ok
+test module::windows_acl::tests::a_parent_component_never_counts_as_in_scope ... ok
+test module::windows_acl::tests::a_trusted_principal_may_write ... ok
+test module::windows_acl::tests::an_inherit_only_grant_does_not_apply_to_the_directory ... ok
+test module::windows_acl::tests::an_untrusted_modify_grant_on_the_directory_is_refused ... ok
+test module::windows_acl::tests::deny_entries_never_count_as_a_grant ... ok
+test module::windows_acl::tests::read_only_grants_to_anyone_are_accepted ... ok
+test module::windows_acl::tests::scope_comparison_ignores_case_and_requires_a_real_prefix ... ok
+test module::windows_acl::tests::the_repair_covers_the_cache_tree_but_not_its_container ... ok
+test module::windows_acl::tests::the_sddl_is_protected_and_names_only_the_owner_and_system ... ok
+test name::tests::a_unique_name_must_be_digits ... ok
+test name::tests::a_single_element_is_not_a_bus_name ... ok
+test name::tests::dotted_names_reject_empty_and_leading_digit_elements ... ok
+test name::tests::every_name_grammar_rejects_its_boundary_cases ... ok
+test name::tests::deserializing_a_malformed_name_fails_rather_than_producing_one ... ok
+test name::tests::generated_conversions_preserve_each_valid_name ... ok
+test name::tests::member_names_reject_dots_so_match_rules_stay_unambiguous ... ok
+test name::tests::names_round_trip_through_json ... ok
+test name::tests::object_paths_follow_the_slash_grammar ... ok
+test module::windows_acl::tests::every_single_write_right_counts ... ok
+test name::tests::over_long_names_are_refused_rather_than_stored ... ok
+test name::tests::subtree_matching_does_not_match_a_sibling_with_a_shared_prefix ... ok
+test module::windows_acl::tests::off_windows_private_creation_is_plain_create_dir_all_and_repair_is_a_no_op ... ok
+test name::tests::well_known_and_unique_names_both_parse ... ok
+test module::windows_acl::tests::only_an_owned_real_directory_the_gate_refuses_is_repaired ... ok
+test module::windows_acl::tests::a_malformed_sid_never_reaches_the_sddl ... ok
+test module::transport::tests::stop_errors_keep_the_underlying_safe_error_for_both_lifecycle_phases ... ok
+test native::tests::a_handler_error_reaches_the_caller_with_its_message ... ok
+test native::tests::clearing_an_empty_or_populated_registry_leaves_no_handlers ... ok
+test native::tests::native_errors_render_their_operation_and_type_details ... ok
+test native::tests::methods_are_listed_sorted_for_introspection ... ok
+test native::tests::a_type_mismatch_is_an_error_rather_than_a_transmute ... ok
+test native::tests::a_registered_handler_round_trips_a_typed_payload ... ok
+test native::tests::re_registering_replaces_so_a_test_can_stub_production ... ok
+test module::host::tests::authenticated_peer_is_available_only_for_a_live_ready_module ... ok
+test router::tests::a_confidential_message_reaches_no_subscriber_however_broad_the_rule ... ok
+test router::tests::a_dead_peers_attestation_does_not_survive_it ... ok
+test router::tests::a_fixed_unique_peer_retains_its_admitted_artifact_across_alias_handover_until_detach ... ok
+test native::tests::an_unregistered_method_names_itself ... ok
+test native::tests::a_non_serializable_payload_passes_through_untouched ... ok
+test proxy::tests::a_proxy_reports_a_missing_destination_and_filters_its_signals ... ok
+test module::host::tests::admission_rejects_duplicate_names_bad_initializers_collisions_and_missing_dependencies ... ok
+test proxy::tests::a_proxy_calls_its_service_and_exposes_its_address ... ok
+test module::transport::tests::stop_before_initialization_terminates_all_waiters ... ok
+test native::tests::registration_needs_no_async_runtime ... ok
+test native::tests::registry_introspection_and_debug_never_block_on_a_writer ... ok
+test native::tests::a_poisoned_lock_does_not_disable_the_registry ... ok
+test router::tests::a_namespace_rule_covers_the_subtree_but_not_a_sibling ... ok
+test router::tests::directed_signal_rules_do_not_match_broadcast_signals_or_each_other ... ok
+test router::tests::parsing_rejects_unknown_keys_rather_than_ignoring_them ... ok
+test router::tests::a_well_known_name_has_one_owner_and_the_loser_is_told_who_won ... ok
+test router::tests::a_name_attestation_does_not_admit_the_unique_connection ... ok
+test module::transport::tests::actual_native_initializer_owner_outlives_runtime_and_host_handle_drop ... ok
+test router::tests::an_empty_rule_matches_everything ... ok
+test router::tests::parses_directed_signal_rules_as_a_separate_message_kind ... ok
+test router::tests::every_set_field_must_match ... ok
+test router::tests::removing_a_match_stops_delivery ... ok
+test router::tests::unique_names_are_minted_in_order_and_never_reused ... ok
+test router::tests::an_unattested_owner_routes_normally_but_never_confidentially ... ok
+test router::tests::an_unsubscribed_peer_is_not_woken ... ok
+test router::tests::a_name_attestation_does_not_replace_an_explicitly_admitted_artifact ... ok
+test router::tests::an_attested_owner_can_receive_a_confidential_message ... ok
+test router::tests::an_attestation_is_bound_to_the_name_it_was_verified_for ... ok
+test router::tests::detaching_frees_the_names_and_reports_the_change ... ok
+test module::host::tests::fixed_unique_module_calls_are_refused_in_terminal_states_before_detach ... ok
+test router::tests::the_bus_name_and_unique_names_cannot_be_claimed ... ok
+test module::host::tests::cancelling_a_waiting_stop_clears_its_pending_transition ... ok
+test secret::tests::zeroizing_covers_the_full_capacity_not_just_the_initialized_length ... ok
+test secret::tests::a_secret_round_trips_the_bytes_it_was_built_from ... ok
+test secret::tests::a_secrets_debug_output_does_not_leak_length_derived_secrets ... ok
+test secret::tests::an_empty_secret_reports_empty_without_touching_a_null_pointer ... ok
+test service::macro_test::a_failing_method_keeps_its_own_error_name_across_the_bus ... ok
+test service::macro_test::a_snake_case_method_is_callable_as_its_pascal_case_member ... ok
+test secret::tests::dropping_a_secret_does_not_panic_regardless_of_lock_state ... ok
+test secret::tests::harden_and_unlock_round_trip_without_panicking_on_a_live_allocation ... ok
+test secret::tests::hardening_the_process_is_callable_and_leaves_secrets_usable ... ok
+test secret::tests::zeroizing_a_live_buffer_overwrites_every_byte_with_zero ... ok
+test secret::tests::zeroizing_an_empty_buffer_is_a_harmless_no_op ... ok
+test router::tests::a_sender_never_receives_its_own_signal ... ok
+test service::macro_test::a_zero_argument_method_accepts_an_empty_array ... ok
+test secret::tests::a_secret_never_prints_its_contents_when_display_formatted ... ok
+test secret::tests::a_secret_never_prints_its_contents_when_debug_formatted ... ok
+test service::macro_test::an_explicit_member_name_overrides_the_derived_one ... ok
+test service::macro_test::arguments_are_decoded_positionally ... ok
+test service::macro_test::generated_confidential_metadata_is_enforced_by_object_dispatch ... ok
+test service::macro_test::skipped_and_receiverless_methods_are_not_on_the_bus ... ok
+test service::macro_test::the_generated_interface_reports_its_name_and_members ... ok
+test service::tests::only_a_brokered_unique_sender_is_authenticated ... ok
+test service::tree::tests::a_confidential_member_rejects_an_ordinary_dispatch ... ok
+test service::tree::tests::direct_context_dispatch_defaults_to_unverified_and_keeps_legacy_arguments ... ok
+test service::tree::tests::dispatch_finds_the_registered_interface ... ok
+test service::tree::tests::one_object_can_carry_several_contracts ... ok
+test service::tree::tests::re_registering_a_contract_replaces_it_rather_than_shadowing_it ... ok
+test service::tree::tests::the_three_failure_modes_are_distinguishable ... ok
+test signal::tests::default_context_has_no_verified_authority ... ok
+test service::macro_test::wrong_argument_types_fail_at_the_service_without_naming_the_arguments ... ok
+test module::transport::tests::native_provenance_requires_actual_broker_admission ... ok
+test signal::tests::even_verified_delivery_does_not_authenticate_missing_or_well_known_sender ... ok
+test signal::tests::local_identity_is_stable_for_clones_and_distinct_for_new_connections ... ok
+test stream::base64::tests::a_padded_group_carrying_bits_it_does_not_encode_is_rejected ... ok
+test stream::base64::tests::a_symbol_outside_the_alphabet_is_rejected ... ok
+test stream::base64::tests::a_decode_failure_never_quotes_the_chunk_it_rejected ... ok
+test stream::base64::tests::the_encoding_matches_the_rfc_test_vectors ... ok
+test stream::base64::tests::a_truncated_group_is_rejected_rather_than_padded_silently ... ok
+test stream::base64::tests::the_full_byte_range_survives_a_round_trip ... ok
+test stream::base64::tests::every_length_modulo_three_round_trips ... ok
+test stream::base64::tests::padding_in_the_middle_of_a_chunk_is_rejected ... ok
+test stream::stream_test::a_dropped_writer_aborts_the_stream_instead_of_leaving_it_open ... ok
+test stream::stream_test::a_closed_stream_still_counts_for_nothing_against_the_live_limit ... ok
+test stream::stream_test::a_reader_sees_an_error_rather_than_an_eof_when_the_sender_aborts ... ok
+test stream::stream_test::a_payload_that_fits_the_window_can_finish_before_the_reader_attaches ... ok
+test module::transport::tests::a_running_reinitialization_excludes_another_reinitialization_and_shutdown ... ok
+test stream::stream_test::a_declared_length_over_the_receivers_cap_is_refused_before_a_byte_moves ... ok
+test stream::stream_test::a_handle_that_names_no_stream_is_an_error_rather_than_an_empty_payload ... ok
+test stream::stream_test::a_malformed_open_is_a_bad_arguments_error_that_does_not_quote_the_body ... ok
+test stream::stream_test::a_peer_holding_open_more_streams_than_its_share_is_refused_a_new_one ... ok
+test stream::stream_test::a_peer_cannot_write_into_a_stream_another_peer_opened ... ok
+test stream::stream_test::a_stream_handle_is_detected_wherever_it_sits_in_a_body ... ok
+test stream::stream_test::a_reader_reports_what_the_sender_declared_about_the_payload ... ok
+test module::host::tests::cancelling_reinitialization_releases_the_host_lifecycle_reservation ... ok
+test stream::stream_test::abort_wakes_a_pending_write_and_retains_the_unclaimed_reader ... ok
+test stream::stream_test::accept_stream_from_refuses_an_unknown_id ... ok
+test stream::stream_test::a_chunk_out_of_order_aborts_the_stream_rather_than_transposing_it ... ok
+test stream::stream_test::a_stream_longer_than_it_declared_is_cut_off_at_the_declaration ... ok
+test stream::stream_test::a_stream_can_only_be_read_once ... ok
+test stream::stream_test::accept_stream_from_binds_the_stream_to_the_peer_that_opened_it ... ok
+test stream::stream_test::an_aborted_stream_remains_available_as_a_terminal_failure_until_accepted ... ok
+test stream::stream_test::an_empty_payload_is_a_complete_stream_rather_than_an_error ... ok
+test stream::stream_test::an_unknown_member_on_the_stream_interface_is_an_unknown_method ... ok
+test stream::stream_test::an_ordinary_body_is_not_mistaken_for_a_stream_handle ... ok
+test stream::stream_test::an_undeclared_stream_is_still_stopped_at_the_receivers_cap ... ok
+test module::remembered_hash::tests::a_file_rewritten_in_place_is_hashed_again_even_at_the_same_length ... ok
+test stream::stream_test::reading_past_the_callers_own_limit_is_an_error_not_a_silent_truncation ... ok
+test stream::stream_test::closing_short_of_the_declared_length_is_an_error_not_a_short_read ... ok
+test stream::stream_test::a_reader_whose_connection_went_away_reports_it_rather_than_a_clean_eof ... ok
+test stream::stream_test::one_peers_open_streams_do_not_consume_another_peers_slots ... ok
+test stream::stream_test::the_stream_interface_cannot_be_shadowed_by_a_service_exporting_it ... ok
+test stream::stream_test::neither_end_of_a_stream_prints_the_payload_when_debugged ... ok
+test stream::stream_test::a_receiver_does_not_reserve_memory_for_a_length_the_sender_merely_claimed ... ok
+test stream::stream_test::a_stream_that_has_gone_idle_is_reaped_and_stops_holding_its_window ... ok
+test stream::stream_test::an_unclaimed_aborted_stream_uses_the_bounded_closed_unread_slot ... ok
+test stream::stream_test::a_sender_is_told_when_the_receiver_drops_the_reader_mid_transfer ... ok
+test stream::stream_test::writing_after_close_is_refused_rather_than_appended ... ok
+test stream::stream_test::a_stream_the_receiver_never_reads_does_not_stall_the_rest_of_the_bus ... ok
+test stream::stream_test::a_service_gets_the_stream_interface_without_exporting_anything ... ok
+test connection::signal_tests::emit_to_still_requires_the_target_to_have_subscribed ... ok
+test test_support::tests::an_uncommitted_load_reservation_can_be_retried ... ok
+test test_support::tests::checks_the_adjacent_modules_toml_digest_before_loading ... ok
+test test_support::tests::missing_module_environment_variable_is_reported_before_reserving_the_load_slot ... ok
+test test_support::tests::rejects_a_file_that_is_not_a_dynamic_module ... ok
+test test_support::tests::rejects_a_missing_or_unpinned_module_artifact ... ok
+test stream::stream_test::a_closed_stream_nobody_collects_is_evicted_oldest_first ... ok
+test test_support::tests::requires_a_dedicated_module_artifact_directory ... ok
+test test_support::tests::resolves_a_crate_name_to_the_current_platform_library_filename ... ok
+test test_support::tests::waits_report_missing_module_and_timeout_errors ... ok
+test tests::bus_constants_parse_as_the_names_they_claim_to_be ... ok
+test transport::memory::tests::a_bus_describes_itself_as_the_memory_listener ... ok
+test tests::version_is_the_package_version ... ok
+test transport::memory::tests::a_pair_delivers_in_order_in_both_directions ... ok
+test stream::stream_test::a_stream_call_with_no_member_is_rejected_by_the_receiver ... ok
+test transport::memory::tests::a_dropped_peer_reads_as_clean_shutdown_not_as_an_error ... ok
+test module::transport::tests::a_shutdown_task_timeout_is_distinguished_from_a_lifecycle_lock_timeout ... ok
+test module::transport::tests::a_fault_reply_does_not_release_the_fixture_before_physical_cleanup ... ok
+test module::transport::tests::a_reinitialization_that_times_out_reports_a_timeout_without_the_configuration ... ok
+test transport::memory::tests::connecting_hands_the_far_end_to_the_listener ... ok
+test version::tests::a_consumer_that_declares_nothing_accepts_anything ... ok
+test version::tests::a_major_bump_in_either_direction_is_caught ... ok
+test version::tests::a_provider_accepts_its_whole_series_but_a_consumer_only_looks_forward ... ok
+test version::tests::a_newer_compatible_provider_is_accepted ... ok
+test version::tests::an_explicit_range_can_widen_beyond_the_caret_default ... ok
+test version::tests::an_older_provider_than_the_caller_needs_is_rejected ... ok
+test version::tests::an_undeclared_interface_is_reported_as_not_provided ... ok
+test version::tests::malformed_versions_are_refused ... ok
+test transport::memory::tests::sending_to_a_dropped_peer_is_a_transport_error ... ok
+test version::tests::ordering_ignores_the_tag ... ok
+test version::tests::a_manifest_round_trips_through_json ... ok
+test transport::memory::tests::sending_on_a_closed_end_is_a_transport_error ... ok
+test version::tests::the_caret_rule_stops_at_the_next_major ... ok
+test version::tests::ranges_parse_in_all_three_spellings ... ok
+test version::tests::a_provider_that_dropped_old_callers_says_so ... ok
+test version::tests::versions_parse_and_round_trip ... ok
+test version::tests::zero_x_treats_every_minor_as_breaking ... ok
+test transport::memory::tests::a_transport_and_a_default_bus_describe_themselves ... ok
+test transport::unix::tests::a_clean_hangup_is_none_rather_than_an_error ... ok
+test transport::unix::tests::a_message_survives_the_socket_with_newlines_intact ... ok
+test transport::unix::tests::a_mid_frame_hangup_is_a_protocol_error_and_close_is_idempotent ... ok
+test transport::unix::tests::binding_over_a_stale_socket_succeeds_but_over_a_live_one_fails ... ok
+test transport::unix::tests::socket_labels_and_failed_dials_are_operator_useful ... ok
+test transport::unix::tests::transient_accept_errors_are_classified_without_hiding_fatal_errors ... ok
+test module::hash::tests::sha256_is_the_same_whatever_the_read_sizes_and_chunk_boundaries ... ok
+test module::transport::tests::an_actual_delivery_failure_overlapping_stop_is_retained ... ok
+test module::host::tests::one_wedged_module_does_not_stall_another_modules_traffic ... ok
+test secret::tests::construction_succeeds_even_when_the_memory_lock_would_fail ... ok
+test stream::stream_test::a_chunk_over_the_cap_is_refused_by_the_sender_before_it_reaches_the_wire ... ok
+test module::host::tests::shutdown_does_not_report_a_module_stopped_while_reinitialization_is_running ... ok
+test module::host::tests::stopping_one_module_leaves_the_other_serving ... ok
+test module::host::tests::the_sender_on_a_module_frame_is_stamped_by_the_broker_like_any_other_peers ... ok
+test module::transport::tests::actual_signal_callback_is_drained_despite_stop_timeout ... ok
+test module::transport::tests::cancelling_a_started_shutdown_keeps_physical_exclusion_without_faulting ... ok
+test module::transport::tests::completed_shutdown_has_already_released_its_native_lifecycle_marker ... ok
+test stream::stream_test::a_chunk_over_the_cap_is_refused_by_the_receiver_too ... ok
+test module::transport::tests::concurrent_pending_sends_cannot_resurrect_a_completed_transport_drainer ... ok
+test module::transport::tests::deferred_initialization_waits_for_ready_then_delivers_pending_calls ... ok
+test module::transport::tests::delivery_maps_a_faulted_transport_a_missing_module_and_module_refusals ... ok
+test module::transport::tests::eager_rejected_outputs_keep_uncertainty_and_never_call_returned_callbacks ... ok
+test module::transport::tests::fresh_signal_and_call_cannot_enter_an_actual_running_shutdown ... ok
+test module::transport::tests::backpressure_retry_closes_without_fault_while_actual_shutdown_is_blocked ... ok
+test module::transport::tests::installed_vtable_without_init_flag_closes_fresh_admission_before_teardown ... ok
+test native::tests::a_slow_handler_does_not_block_an_unrelated_dispatch ... ok
+test module::host::tests::ordinary_stop_never_fabricates_faulted_before_or_after_callback_completion ... ok
+test module::host::tests::module_control_tracks_disable_stop_detach_and_unavailable_states ... ok
+test module::host::tests::a_module_whose_artifact_does_not_match_the_allowlist_never_loads_at_all ... ok
+test module::host::tests::a_module_from_a_pinned_release_becomes_an_attested_recipient_without_an_allowlist_file ... ok
+test module::host::reload_tests::compiled_native_host_stop_and_fault_deny_factory_after_entered_init_barrier ... ok
+test module::transport::tests::lifecycle_waiters_do_not_reenter_a_transport_disposed_by_the_prior_shutdown ... ok
+test message::codec::tests::an_oversize_payload_is_refused_at_encode_time ... ok
+test stream::stream_test::writing_to_a_stream_nobody_will_read_fails_instead_of_hanging_forever ... ok
+test module::transport::tests::ordinary_shutdown_deadline_preserves_state_until_callback_returns ... ok
+test module::transport::tests::ordinary_shutdown_retains_non_ok_return_without_physical_success ... ok
+test module::transport::tests::ordinary_stop_wakes_backpressure_without_turning_closure_into_a_fault ... ok
+test module::transport::tests::queued_readiness_and_backpressure_retire_before_actual_shutdown_returns ... ok
+test module::transport::tests::rejected_module_outputs_never_invoke_untrusted_callbacks ... ok
+test module::transport::tests::reinitialization_maps_callback_failures_without_exposing_configuration ... ok
+test module::transport::tests::stopping_initialized_module_before_ready_releases_observers_and_queued_calls ... ok
+test module::transport::tests::unanswered_method_calls_are_not_physical_callback_leases ... ok
+test stream::stream_test::a_payload_read_chunk_by_chunk_never_needs_the_whole_thing_in_memory ... ok
+test module::host::callbacks::tests::actual_native_callback_gate_rejection_after_ordinary_stop_preserves_cause ... ok
+test module::host::callbacks::tests::actual_native_readiness_deadline_still_faults_after_ordinary_stop ... ok
+test module::host::callbacks::tests::actual_native_callback_notready_after_ordinary_stop_preserves_cause ... ok
+test module::host::callbacks::tests::actual_native_ready_commit_cancellation_preserves_ordinary_cause ... ok
+test module::host::callbacks::tests::actual_native_fault_at_ready_commit_dominates_ordinary_stop ... ok
+test module::host::callbacks::tests::actual_callback_setup_unwind_still_faults_after_ordinary_stop ... ok
+test module::host::callbacks::tests::actual_native_callback_load_drop_after_ordinary_stop_preserves_cause ... ok
+test module::host::callbacks::tests::actual_callback_setup_error_still_faults_after_ordinary_stop ... ok
+test module::host::tests::a_module_loaded_from_an_allowlisted_artifact_becomes_an_attested_recipient ... ok
+test module::host::tests::an_eager_cdylib_authenticates_after_its_worker_runs_before_admission ... ok
+test module::host::tests::a_real_cdylib_authenticates_incoming_calls_and_its_host_callback ... ok
+test module::host::tests::a_verified_cdylib_can_deliver_a_confidential_host_callback ... ok
+test module::host::callbacks::tests::admitted_module_uses_only_declared_stream_callbacks_and_revoke_blocks_reentry ... ok
+test module::host::tests::a_native_callback_timeout_and_revoke_do_not_claim_worker_completion ... ok
+test module::host::tests::a_bound_cdylib_receives_only_its_declared_host_directed_signal ... ok
+test module::resolve::tests::resolver::ensure_loaded_recovers_when_direct_host_admission_wins_after_its_initial_check ... ok
+test broker::module_control_tests::a_slow_module_load_does_not_stall_other_bus_calls ... ok
+test module::host::required_tests::a_real_required_artifact_is_refused_then_admitted_and_serves_confidentially ... ok
+test module::resolve::tests::resolver::ensure_loaded_rechecks_host_after_search_before_touching_the_release_cache ... ok
+test module::host::tests::linked_module_with_an_unmet_required_interface_is_refused_before_init ... ok
+test module::resolve::tests::resolver::a_foreign_callback_binding_does_not_poison_ordinary_resolution ... ok
+test module::resolve::tests::resolver::recovering_after_a_cache_error_does_not_prune_other_cached_versions ... ok
+test module::resolve::tests::resolver::resolver_loads_a_verified_module_with_only_its_prepared_host_callback ... ok
+test module::resolve::tests::resolver::a_module_is_not_ready_until_its_setup_signals_ready ... ok
+test module::resolve::tests::resolver::a_direct_admission_race_keeps_callback_resolution_available ... ok
+test module::resolve::tests::resolver::a_module_whose_setup_faults_after_load_fails_the_load_with_its_reason ... ok
+test test_support::tests::the_shared_helper_loads_an_allowlisted_module_and_calls_it ... ok
+test module::resolve::tests::resolver::a_cached_ready_is_not_served_once_the_module_has_faulted ... ok
+test module::github::tests::a_stalled_download_fails_within_the_stall_budget ... ok
+test module::host::tests::eager_native_setup_callbacks_are_bound_before_ready_and_failures_rollback ... ok
+test module::host::tests::linked_module_is_admitted_without_a_library_file_and_attested_as_host_code ... ok
+test module::github::tests::a_slow_but_progressing_download_is_not_cut_off ... ok
+test module::host::tests::callback_lifecycle_tests::host_drop_after_cancelled_stop_waits_for_actual_provider_drain ... ok
+test module::host::tests::callback_lifecycle_tests::stopping_a_verified_module_drains_its_admitted_host_callback_before_native_shutdown ... ok
+test module::host::tests::callback_lifecycle_tests::host_stop_drain_cancellation_retains_stop_intent_and_denies_new_admission ... ok
+test module::host::tests::callback_lifecycle_tests::host_stop_drain_timeout_retains_stop_intent_and_denies_new_admission ... ok
+test module::host::tests::callback_lifecycle_tests::native_stop_completion_does_not_wait_for_the_denial_probe_observer ... ok
+test connection::tests::a_reply_larger_than_one_frame_arrives_through_a_bounded_stream ... ok
+test stream::stream_test::a_payload_larger_than_one_frame_arrives_whole_and_in_order ... ok
+
+test result: ok. 715 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.82s
+
+     Running unittests src/bin/tinybus.rs (target/llvm-cov-target/debug/deps/tinybus-cde5afc0b34ee70a)
+
+running 6 tests
+test unix::tests::the_cli_parses_its_declared_commands_and_uses_explicit_addresses ... ok
+test unix::tests::a_module_stop_deadline_cannot_outlive_the_call_deadline ... ok
+test unix::tests::call_emit_list_and_doctor_use_a_running_broker ... ok
+test unix::tests::runtime_and_monitor_rendering_are_usable ... ok
+test unix::tests::module_commands_report_errors_and_valid_commands_succeed ... ok
+test unix::tests::module_cli_controls_a_real_dynamic_module_lifecycle ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests examples/voice_service.rs (target/llvm-cov-target/debug/examples/voice_service-57d93e3b4224c3cf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_macros-8878ef1597d8eec9)
+
+running 5 tests
+test tests::snake_case_becomes_pascal_case ... ok
+test tests::a_leading_underscore_does_not_produce_an_empty_member ... ok
+test tests::attributes_and_interface_names_are_validated ... ok
+test tests::expansion_rejects_invalid_interface_method_signatures ... ok
+test tests::expansion_generates_dispatch_members_and_strips_helper_attributes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-6c8212092ff803b8)
+
+running 80 tests
+module panicked at execution_context_tests.rs:103:41
+module panicked at lib_lifecycle_tests.rs:164:13
+module panicked at execution_context_tests.rs:108:49
+module panicked at lib.rs:88:49
+module panicked at terminal_tests.rs:270:13
+module panicked at terminal_tests.rs:112:13
+module panicked at lib.rs:88:49
+module panicked at lib_tests.rs:216:9
+module panicked at lib.rs:403:36
+test execution_context::tests::terminal_deliver_enters_exact_instance_and_restores_nested_caller ... ok
+test lifecycle_test::shutdown_disposes_callback_even_after_reinitializer_panics ... ok
+test execution_context::tests::nested_caller_scopes_restore_owner_and_stopped_context_never_uses_replacement ... ok
+test execution_context::tests::unowned_and_reentrant_panic_contexts_never_select_a_host_callback ... ok
+test lifecycle_test::invalid_output_or_workers_rejects_before_factory_side_effects ... ok
+test setup_factory_test::native_factory_starter_validates_host_before_constructing_state ... ok
+test static_link_tests::invalid_linked_manifest_never_exposes_partial_bytes ... ok
+test static_link_tests::linked_helper_refuses_an_invalid_descriptor ... ok
+test terminal::tests::callback_lookup_holds_exact_state_across_retirement_until_actual_last_drop ... ok
+test terminal::tests::exhausted_slot_generation_never_wraps_or_selects_old_context ... ok
+test execution_context::tests::worker_blocking_and_block_on_contexts_use_their_own_runtime_callbacks ... ok
+test setup_factory_test::captured_admission_serializes_concurrent_setup_attempts ... ok
+test static_link_tests::linked_modules_retain_distinct_manifests ... ok
+test terminal::tests::first_cleanup_drop_panic_retains_all_unprocessed_resource_owners ... ok
+test terminal::tests::request_primary_payload_is_retained_and_finish_still_attempted_once ... ok
+test terminal_runtime_tests::invalid_initial_config_rejects_before_factory_or_output_publication ... ok
+test terminal_runtime_tests::legacy_callbacks_keep_null_context_bad_argument ... ok
+test terminal_runtime_tests::native_query_is_required_before_terminal_factory_evaluation ... ok
+test terminal_runtime_tests::terminal_callbacks_keep_invalid_frame_and_config_bad_argument ... ok
+test lifecycle_test::failed_setup_disposal_keeps_single_runtime_worker_available ... ok
+test tests::a_frame_over_the_size_cap_is_rejected_rather_than_truncated ... ok
+test terminal_runtime_tests::terminal_callbacks_reject_zero_and_unknown_context_tokens_as_closed ... ok
+test tests::a_new_module_never_writes_past_an_older_hosts_vtable_capacity ... ok
+test tests::a_module_whose_queue_is_full_reports_backpressure_rather_than_blocking_the_broker ... ok
+test terminal::tests::physical_finish_waits_for_bounded_request_completion_and_startup_publication ... ok
+test terminal_runtime_tests::shutdown_rechecks_actual_native_fault_after_local_stop_and_physical_finish ... ok
+test tests::a_manifest_declaration_exports_the_declared_surface_and_dependencies ... ok
+test tests::an_empty_host_config_parses_as_an_empty_object ... ok
+test tests::an_incomplete_host_tail_never_reads_the_callback ... ok
+test terminal::tests::retained_view_reports_exact_execution_owner_and_surviving_sdk_resources ... ok
+test tests::an_older_host_prefix_is_copied_without_reading_the_additive_tail ... ok
+test tests::configured_startup_refuses_a_host_vtable_it_cannot_trust ... ok
+test tests::deliver_and_shutdown_validate_their_arguments_and_closed_state ... ok
+test tests::a_linked_reconfigurable_module_refuses_bad_hosts_and_reports_closed_before_it_connects ... ok
+test terminal::tests::observed_native_terminal_never_reopens_a_retained_view ... ok
+test tests::a_panicking_shutdown_callback_reports_panicked_not_timed_out ... ok
+test tests::deliver_reports_closed_when_the_modules_queue_receiver_is_gone ... ok
+test execution_context::tests::shutdown_suppresses_the_exact_factory_and_configuration_caller_dispatch ... ok
+test tests::native_routing_requires_an_explicit_affirmative_host_assertion ... ok
+test terminal::tests::surviving_sdk_owned_transport_keeps_cleanup_uncertain_and_permit_anchored ... ok
+test terminal::tests::stale_context_never_selects_replacement_and_unknown_contexts_are_closed ... ok
+test tests::reinitialize_validates_its_arguments_and_reports_closed_without_a_handler ... ok
+test terminal::tests::retired_anchor_cannot_refund_permit_while_old_view_survives ... ok
+test lifecycle_test::shutdown_excludes_active_reinitializer_before_disposing_capture ... ok
+test lifecycle_test::shutdown_releases_captured_callback_while_retaining_closed_tombstone ... ok
+test static_link_tests::linked_entries_attach_to_one_broker ... ok
+test tests::configured_reinitializations_are_serialized_bounded_and_keep_the_runtime_alive ... ok
+test tests::old_hosts_retain_sender_headers_without_authenticating_them ... ok
+test tests::the_host_subscriber_hands_out_distinct_span_ids_and_accepts_recorded_fields ... ok
+test tests::start_functions_reject_invalid_host_and_config_before_spawning_a_runtime ... ok
+test tests::admission_never_promotes_a_frame_already_queued_without_provenance ... ok
+test tests::host_calls_and_subscriber_forward_logs_at_their_original_level ... ok
+test tests::module_transport_maps_host_results_and_wakes_after_receiving ... ok
+test tests::unverified_native_frames_preserve_distinct_stream_owners_and_unverified_context ... ok
+test setup_factory_test::factory_callback_with_copying_clone_keeps_initial_admission_on_reinitialize ... ok
+test setup_factory_test::compiled_single_worker_disposal_advances_timer_before_reporting_fault ... ok
+test setup_factory_test::compiled_successful_shutdown_releases_factory_capture ... ok
+test setup_factory_test::compiled_instance_refuses_mode_change_without_replacing_live_service ... ok
+test setup_factory_test::compiled_factory_is_per_instance_and_reinitialization_keeps_its_admission ... ok
+test setup_factory_test::invalid_initial_configuration_does_not_construct_factory_state ... ok
+module panicked at lib_setup_factory_tests.rs:157:9
+test setup_factory_test::factory_panic_is_a_native_initialization_refusal ... ok
+module panicked at lib_setup_factory_tests.rs:398:30
+test setup_factory_test::panicking_initial_setup_releases_factory_capture_and_reports_fault ... ok
+test setup_factory_test::failed_initial_setup_releases_factory_capture_when_host_stops_instance ... ok
+module panicked at lib_terminal_tests.rs:399:22
+module panicked at lib_terminal_tests.rs:475:17
+test terminal_runtime_tests::actual_linked_setup_construction_and_poll_panics_still_finish_real_worker_once ... ok
+test terminal_runtime_tests::actual_prior_reinit_drop_blocks_next_setup_then_stop_settles_same_job ... ok
+test terminal_runtime_tests::successful_repeated_reinit_disposes_prior_future_on_same_physical_worker_off_lock ... ok
+module panicked at lib_terminal_tests.rs:399:22
+module panicked at lib_terminal_tests.rs:475:17
+test terminal_runtime_tests::actual_reinit_source_error_and_panic_request_outside_callback_exclusion ... ok
+test terminal_runtime_tests::actual_linked_rejected_physical_spawn_retains_received_resources_without_retry ... ok
+module panicked at terminal.rs:705:13
+test terminal_runtime_tests::linked_reinit_synchronous_timer_uses_retained_runtime_on_same_worker ... ok
+module panicked at terminal.rs:705:13
+module panicked at terminal.rs:705:13
+module panicked at terminal.rs:705:13
+module panicked at terminal.rs:705:13
+module panicked at terminal.rs:705:13
+module panicked at terminal.rs:705:13
+module panicked at terminal.rs:705:13
+test terminal_runtime_tests::actual_linked_posttransfer_startup_panics_keep_received_captures_on_physical_worker ... ok
+module panicked at lib_terminal_tests.rs:513:21
+module panicked at lib_terminal_tests.rs:528:26
+test terminal_runtime_tests::actual_linked_hook_panics_and_uncertain_finish_preserve_once_join_and_anchor ... ok
+module panicked at lib_terminal_tests.rs:430:21
+test terminal_runtime_tests::actual_prior_reinit_drop_panic_retains_resources_but_attempts_finish_once ... ok
+module panicked at lib_terminal_tests.rs:475:17
+test terminal_runtime_tests::accepted_reinit_config_is_destroyed_on_physical_worker_including_constructor_panic ... ok
+module panicked at lib_terminal_tests.rs:1348:9
+test terminal_runtime_tests::actual_method_observer_fences_native_fault_and_request_done_before_blocked_payload_drop ... ok
+test terminal_runtime_tests::actual_linked_initial_cancellation_drops_future_and_joins_worker_on_physical_thread ... ok
+module panicked at lib_terminal_tests.rs:1475:13
+test terminal_runtime_tests::actual_connection_object_drop_panic_fences_fault_after_owner_suppression ... ok
+test terminal_runtime_tests::actual_connection_object_drop_after_runtime_timeout_denies_physical_completion ... ok
+module panicked at lib_terminal_tests.rs:447:18
+test terminal_runtime_tests::actual_linked_factory_failure_disposes_received_config_on_physical_worker ... ok
+test terminal_runtime_tests::actual_linked_reinit_terminal_cancellation_settles_before_worker_join ... ok
+test terminal_runtime_tests::stop_during_reinit_parse_retains_received_config_until_physical_cleanup ... ok
+
+test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 13.00s
+
+   Compiling tinybus v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus)
+   Compiling tokio v1.53.3
+   Compiling tinybus-module v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus-module)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.24s
+     Running unittests src/lib.rs (target/debug/deps/tinybus_module-81b1ad4589b0012f)
+   Doc-tests tinybus_module
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+   Compiling tinybus v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus)
+   Compiling tokio v1.53.3
+   Compiling tinybus-module v0.1.6 (/home/ubuntu/work/rt/tinybus/crates/tinybus-module)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.68s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_entered_initial_and_reinit_work_settle_before_original_finish ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.55s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_factory_and_hook_failures_preserve_original_finish_and_fault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.22s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_first_foreign_cleanup_panic_keeps_later_resources_and_attempts_original_finish ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.24s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_method_payload_and_whole_connection_drop_retain_actual_sdk_owners ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 18.22s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_nested_factory_reinit_restore_exact_owner_and_suppress_captured_dispatch ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.22s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_prior_reinit_future_drop_restores_owner_and_retains_settlement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.28s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_retained_views_bound_256_and_release_only_at_actual_last_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.35s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_spawn_rejection_retains_received_runtime_task_and_original_finish ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.22s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_startup_transfers_and_runtime_build_error_dispose_on_physical_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.22s
+
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/tinybus_module-81b1ad4589b0012f)
+
+running 1 test
+test terminal_runtime_tests::compiled_native_terminal_owns_initial_cancellation_panics_join_and_stale_context ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.43s
+
+Filename                                    Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+tinybus-macros/src/lib.rs                       205                20    90.24%           8                 0   100.00%         138                12    91.30%           0                 0         -
+tinybus-module/src/execution_context.rs         183                 5    97.27%          31                 1    96.77%         126                 1    99.21%           0                 0         -
+tinybus-module/src/lib.rs                      1449               102    92.96%         115                 7    93.91%        1201                84    93.01%           0                 0         -
+tinybus-module/src/terminal.rs                  954                61    93.61%          81                 4    95.06%         746                41    94.50%           0                 0         -
+tinybus/src/attest.rs                            35                 1    97.14%           4                 0   100.00%          18                 0   100.00%           0                 0         -
+tinybus/src/broker.rs                           928                74    92.03%          65                10    84.62%         600                26    95.67%           0                 0         -
+tinybus/src/build_info.rs                         8                 0   100.00%           1                 0   100.00%           8                 0   100.00%           0                 0         -
+tinybus/src/error.rs                            145                 2    98.62%          17                 0   100.00%         120                 2    98.33%           0                 0         -
+tinybus/src/events/mod.rs                       191                14    92.67%          21                 0   100.00%         128                 6    95.31%           0                 0         -
+tinybus/src/events/subscriber.rs                124                 7    94.35%          20                 0   100.00%          88                 5    94.32%           0                 0         -
+tinybus/src/global.rs                            87                 4    95.40%          16                 0   100.00%          61                 0   100.00%           0                 0         -
+tinybus/src/message/codec.rs                     36                 0   100.00%           4                 0   100.00%          29                 0   100.00%           0                 0         -
+tinybus/src/message/mod.rs                      203                13    93.60%          17                 2    88.24%         273                14    94.87%           0                 0         -
+tinybus/src/module/abi.rs                       113                 3    97.35%          10                 0   100.00%          92                 1    98.91%           0                 0         -
+tinybus/src/module/cache.rs                     464                42    90.95%          37                 4    89.19%         317                31    90.22%           0                 0         -
+tinybus/src/module/client.rs                    372                38    89.78%          47                 2    95.74%         281                18    93.59%           0                 0         -
+tinybus/src/module/failure.rs                    72                 2    97.22%           8                 0   100.00%          59                 1    98.31%           0                 0         -
+tinybus/src/module/first_admitted.rs            104                 0   100.00%           1                 0   100.00%          87                 0   100.00%           0                 0         -
+tinybus/src/module/hash.rs                       24                 0   100.00%           2                 0   100.00%          15                 0   100.00%           0                 0         -
+tinybus/src/module/host_callbacks.rs           1366                88    93.56%         156                14    91.03%        1153                75    93.50%           0                 0         -
+tinybus/src/module/loader.rs                    193                 8    95.85%          11                 0   100.00%         139                 8    94.24%           0                 0         -
+tinybus/src/module/manifest.rs                   24                 0   100.00%           6                 0   100.00%          25                 0   100.00%           0                 0         -
+tinybus/src/module/platform.rs                   83                 4    95.18%           4                 0   100.00%          52                 1    98.08%           0                 0         -
+tinybus/src/module/release.rs                    13                 0   100.00%           4                 0   100.00%          10                 0   100.00%           0                 0         -
+tinybus/src/module/remembered_hash.rs            83                 4    95.18%           9                 0   100.00%          41                 1    97.56%           0                 0         -
+tinybus/src/module/requirements.rs               55                 0   100.00%           6                 0   100.00%          68                 0   100.00%           0                 0         -
+tinybus/src/module/resolution.rs                163                15    90.80%          18                 7    61.11%         111                 7    93.69%           0                 0         -
+tinybus/src/module/resolve.rs                   846                63    92.55%          88                 8    90.91%         663                67    89.89%           0                 0         -
+tinybus/src/module/runtime.rs                   122                13    89.34%          15                 2    86.67%          87                 5    94.25%           0                 0         -
+tinybus/src/module/transport.rs                1608                90    94.40%         100                 6    94.00%        1111                70    93.70%           0                 0         -
+tinybus/src/module/windows_acl.rs                82                 7    91.46%          17                 2    88.24%          62                 4    93.55%           0                 0         -
+tinybus/src/name.rs                             222                 4    98.20%          23                 0   100.00%         181                 9    95.03%           0                 0         -
+tinybus/src/native.rs                           146                 8    94.52%          17                 0   100.00%         125                12    90.40%           0                 0         -
+tinybus/src/private.rs                           35                 1    97.14%           9                 0   100.00%          20                 0   100.00%           0                 0         -
+tinybus/src/proxy.rs                            175                11    93.71%          23                 0   100.00%         134                 0   100.00%           0                 0         -
+tinybus/src/router.rs                           643                58    90.98%          75                 9    88.00%         440                21    95.23%           0                 0         -
+tinybus/src/secret.rs                            84                 4    95.24%          11                 0   100.00%          63                 4    93.65%           0                 0         -
+tinybus/src/service/mod.rs                       39                 2    94.87%          11                 1    90.91%          29                 2    93.10%           0                 0         -
+tinybus/src/service/tree.rs                     140                 0   100.00%          21                 0   100.00%         122                 0   100.00%           0                 0         -
+tinybus/src/signal.rs                            59                 0   100.00%          13                 0   100.00%          63                 0   100.00%           0                 0         -
+tinybus/src/stream/base64.rs                    106                 0   100.00%           4                 0   100.00%          59                 0   100.00%           0                 0         -
+tinybus/src/stream/mod.rs                       711                24    96.62%          66                 3    95.45%         503                11    97.81%           0                 0         -
+tinybus/src/transport/memory.rs                 100                 2    98.00%          24                 1    95.83%          80                 1    98.75%           0                 0         -
+tinybus/src/transport/mod.rs                      7                 0   100.00%           1                 0   100.00%           8                 0   100.00%           0                 0         -
+tinybus/src/transport/unix.rs                    99                14    85.86%          19                 3    84.21%          70                 5    92.86%           0                 0         -
+tinybus/src/version.rs                          290                19    93.45%          36                 1    97.22%         222                10    95.50%           0                 0         -
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                         13191               827    93.73%        1292                87    93.27%       10028               555    94.47%           0                 0         -
