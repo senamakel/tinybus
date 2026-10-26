@@ -425,7 +425,10 @@ mod resolver {
         std::fs::copy(&source, &artifact).unwrap();
         std::fs::write(
             root.path().join("modules.toml"),
-            format!("{:?} = {hash:?}\n", source.file_name().unwrap().to_str().unwrap()),
+            format!(
+                "{:?} = {hash:?}\n",
+                source.file_name().unwrap().to_str().unwrap()
+            ),
         )
         .unwrap();
         let record = Box::leak(Box::new(ReleaseRecord {
@@ -481,10 +484,14 @@ mod resolver {
             .find(|info| info.manifest.bus_name.as_str() == record.bus_name)
             .expect("the requested registry identity should be loaded");
         assert_eq!(info.manifest.object_path.as_str(), record.object_path);
-        assert!(runtime
-            .host()
-            .retains_host_callback_binding(record.bus_name, &binding));
-        let peer = guard.module_peer().expect("the callback is bound to a peer");
+        assert!(
+            runtime
+                .host()
+                .retains_host_callback_binding(record.bus_name, &binding)
+        );
+        let peer = guard
+            .module_peer()
+            .expect("the callback is bound to a peer");
         assert!(guard.authorizes(&crate::CallContext::brokered(Some(&peer), true)));
 
         // Repeated resolution with this same retained capability is idempotent;
