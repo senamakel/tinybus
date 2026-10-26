@@ -196,7 +196,7 @@ mod resolver {
                 .await
                 .unwrap(),
         );
-        let mut f = fixture(
+        let f = fixture(
             record,
             true,
             HashMap::from([(

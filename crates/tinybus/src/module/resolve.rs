@@ -583,6 +583,12 @@ impl Resolver {
                 .iter()
                 .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
             {
+                if runtime
+                    .host()
+                    .retains_host_callback_binding(record.bus_name, binding)
+                {
+                    return Ok(());
+                }
                 return Err(LoadError::Failed(format!(
                     "module '{id}' is already loaded without this callback binding"
                 )));
