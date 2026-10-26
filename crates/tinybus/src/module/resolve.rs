@@ -35,7 +35,8 @@ use crate::module::platform::host_candidates;
 use crate::module::resolution::{self, Claim, Resolution, ResolutionState, Waited};
 use crate::module::runtime::ModuleRuntime;
 use crate::module::{
-    Availability, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord, SearchPathConfig,
+    Availability, HostCallbackBinding, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord,
+    SearchPathConfig,
     load_first_admitted, prune_stale_versions,
 };
 
@@ -458,7 +459,32 @@ impl Resolver {
     ///
     /// A message fit for a user or a model when the module cannot be loaded.
     pub async fn ensure_loaded(&self, id: &str) -> Result<(), String> {
-        self.ensure_loaded_within(id, None)
+        self.ensure_loaded_inner(id, None, None)
+            .await
+            .map_err(LoadError::into_message)
+    }
+
+    /// Resolve a local artifact while binding one prepared host callback set to
+    /// the exact registry identity before initialization. The capability is
+    /// retained by the admitted module for its lifetime. Linked, search-path,
+    /// and release-cache sources fail closed until their admission paths can
+    /// preserve the same identity binding.
+    ///
+    /// A callback load cannot join a generic in-flight or already-loaded
+    /// resolution. Its binding must belong to this resolver's host and all
+    /// declared endpoints must already be served.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe load error if the module is unavailable, the binding is
+    /// invalid, or the configured source cannot preserve callback identity.
+    pub async fn ensure_loaded_with_host_callbacks(
+        &self,
+        id: &str,
+        binding: Arc<HostCallbackBinding>,
+        module_config: serde_json::Value,
+    ) -> Result<(), String> {
+        self.ensure_loaded_inner(id, None, Some((binding, module_config)))
             .await
             .map_err(LoadError::into_message)
     }
@@ -501,6 +527,15 @@ impl Resolver {
         id: &str,
         within: Option<Duration>,
     ) -> Result<(), LoadError> {
+        self.ensure_loaded_inner(id, within, None).await
+    }
+
+    async fn ensure_loaded_inner(
+        &self,
+        id: &str,
+        within: Option<Duration>,
+        callbacks: Option<(Arc<HostCallbackBinding>, serde_json::Value)>,
+    ) -> Result<(), LoadError> {
         if !self.inner.enabled {
             if let Some(record) = self.find(id) {
                 self.report(record, Reason::Disabled);
@@ -521,8 +556,57 @@ impl Resolver {
             return Err(LoadError::Disabled(label));
         }
 
+        if let Some((binding, _)) = callbacks.as_ref() {
+            if !matches!(self.inner.sources.get(id), Some(ModuleSource::LocalFile { .. })) {
+                return Err(LoadError::Failed(format!(
+                    "module '{id}' host callbacks require a verified local-file source"
+                )));
+            }
+            let runtime = self.runtime().await.map_err(|_| {
+                LoadError::Failed(format!(
+                    "module '{id}' is unavailable: the module bus could not start"
+                ))
+            })?;
+            runtime
+                .host()
+                .validate_host_callback_binding(binding)
+                .map_err(|error| {
+                    LoadError::Failed(format!(
+                        "module '{id}' callback binding is invalid: {error}"
+                    ))
+                })?;
+            if runtime
+                .host()
+                .list()
+                .iter()
+                .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
+            {
+                return Err(LoadError::Failed(format!(
+                    "module '{id}' is already loaded without this callback binding"
+                )));
+            }
+        }
+
         let receiver = match resolution::global().claim(id) {
-            Claim::Done(Resolution::Ready) => return Ok(()),
+            Claim::Done(Resolution::Ready) => {
+                if let Some((binding, _)) = callbacks.as_ref() {
+                    let runtime = self.runtime().await.map_err(|_| {
+                        LoadError::Failed(format!(
+                            "module '{id}' is unavailable: the module bus could not start"
+                        ))
+                    })?;
+                    if runtime
+                        .host()
+                        .retains_host_callback_binding(record.bus_name, binding)
+                    {
+                        return Ok(());
+                    }
+                    return Err(LoadError::Failed(format!(
+                        "module '{id}' was loaded without the requested callback binding"
+                    )));
+                }
+                return Ok(());
+            }
             Claim::Done(Resolution::Failed(reason)) => {
                 // The original resolution may have completed before a reporting
                 // client was bound. Revisit reporting at the cached caller; the
@@ -530,7 +614,14 @@ impl Resolver {
                 self.report(record, Reason::ResolutionFailed);
                 return Err(LoadError::Failed(reason));
             }
-            Claim::Wait(receiver) => receiver,
+            Claim::Wait(receiver) => {
+                if callbacks.is_some() {
+                    return Err(LoadError::Failed(format!(
+                        "module '{id}' is already resolving without this callback binding"
+                    )));
+                }
+                receiver
+            }
             Claim::Run { sender, receiver } => {
                 // Runtime startup can itself be slow, and a task spawned on the
                 // caller's executor would be cancelled if that executor shuts
@@ -547,7 +638,11 @@ impl Resolver {
                             .build();
                         match startup_runtime {
                             Ok(runtime) => {
-                                runtime.block_on(resolver.start_resolution(record, task_sender));
+                        runtime.block_on(resolver.start_resolution(
+                            record,
+                            task_sender,
+                            callbacks,
+                        ));
                             }
                             Err(error) => {
                                 let reason = format!(
