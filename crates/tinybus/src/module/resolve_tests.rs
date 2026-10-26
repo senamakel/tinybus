@@ -170,7 +170,7 @@ fn two_modules_claiming_one_bus_name_are_both_reported_and_neither_is_initialize
 mod resolver {
     use super::super::test_support::{Recording, fixture, record, shared_runtime};
 
-    struct ResolverCallback;
+    struct ResolverCallback(crate::BusName);
 
     #[async_trait::async_trait]
     impl crate::Interface for ResolverCallback {
@@ -187,7 +187,7 @@ mod resolver {
             _: &crate::MemberName,
             _: serde_json::Value,
         ) -> crate::Result<serde_json::Value> {
-            Ok(serde_json::Value::Null)
+            Ok(serde_json::json!(self.0))
         }
     }
 
@@ -271,7 +271,10 @@ mod resolver {
                 .unwrap(),
         );
         binding
-            .serve_at("/callback".parse().unwrap(), ResolverCallback)
+            .serve_at(
+                "/callback".parse().unwrap(),
+                ResolverCallback("org.example.Callback".parse().unwrap()),
+            )
             .await
             .unwrap();
         let f = fixture(
@@ -350,7 +353,10 @@ mod resolver {
                 .unwrap(),
         );
         binding
-            .serve_at("/callback".parse().unwrap(), ResolverCallback)
+            .serve_at(
+                "/callback".parse().unwrap(),
+                ResolverCallback("org.example.Callback".parse().unwrap()),
+            )
             .await
             .unwrap();
         let mut manifest = super::module(record.id, &[], &[]);
@@ -399,6 +405,94 @@ mod resolver {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires TINYBUS_TEST_HOST_CALLBACK_MODULE to point at the built cdylib"]
+    async fn resolver_retains_the_callback_binding_for_its_exact_admitted_module() {
+        use crate::module::HostCallbackEndpoint;
+        use std::path::PathBuf;
+
+        let source = PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
+        let hash = crate::module::hash::file_hex(std::fs::File::open(&source).unwrap()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let artifact = root.path().join(source.file_name().unwrap());
+        std::fs::copy(&source, &artifact).unwrap();
+        std::fs::write(
+            root.path().join("modules.toml"),
+            format!("{:?} = {hash:?}\n", source.file_name().unwrap().to_str().unwrap()),
+        )
+        .unwrap();
+        let record = Box::leak(Box::new(ReleaseRecord {
+            id: "tinybus",
+            bus_name: "org.example.EagerCallback",
+            object_path: "/org/example/EagerCallback",
+            version: "0.0.0",
+            release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
+            assets: &[],
+        }));
+        let runtime = shared_runtime();
+        let binding = Arc::new(
+            runtime
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        let guard = binding.guard();
+        binding
+            .serve_at(
+                "/callback".parse().unwrap(),
+                ResolverCallback("org.example.Callback".parse().unwrap()),
+            )
+            .await
+            .unwrap();
+        let resolver = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: artifact.to_string_lossy().into_owned(),
+                },
+            )]),
+            None,
+        )
+        .resolver;
+        let config = serde_json::json!({ "host": binding.unique_name() });
+
+        resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding.clone(), config.clone())
+            .await
+            .unwrap();
+        let info = runtime
+            .host()
+            .list()
+            .into_iter()
+            .find(|info| info.manifest.bus_name.as_str() == record.bus_name)
+            .expect("the requested registry identity should be loaded");
+        assert_eq!(info.manifest.object_path.as_str(), record.object_path);
+        assert!(runtime
+            .host()
+            .retains_host_callback_binding(record.bus_name, &binding));
+        let peer = guard.module_peer().expect("the callback is bound to a peer");
+        assert!(guard.authorizes(&crate::CallContext::brokered(Some(&peer), true)));
+
+        // Repeated resolution with this same retained capability is idempotent;
+        // a different or ordinary load cannot borrow its authority.
+        resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, config)
+            .await
+            .unwrap();
     }
 
     fn admitted_info(record: &ReleaseRecord, state: ModuleState) -> ModuleInfo {
