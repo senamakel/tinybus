@@ -170,6 +170,61 @@ fn two_modules_claiming_one_bus_name_are_both_reported_and_neither_is_initialize
 mod resolver {
     use super::super::test_support::{Recording, fixture, record, shared_runtime};
 
+    #[tokio::test]
+    async fn callback_resolution_rejects_a_binding_from_another_host_without_claiming_the_slot() {
+        use crate::module::HostCallbackEndpoint;
+        use crate::module::runtime::{ModuleRuntime, RuntimeNames};
+
+        let record = record("resolver_foreign_callback_binding");
+        let runtime = shared_runtime();
+        let foreign_runtime = ModuleRuntime::start(
+            &RuntimeNames {
+                thread: "tinybus-test-foreign-callback".to_owned(),
+                worker: "tinybus-test-foreign-callback-worker".to_owned(),
+            },
+            None,
+        )
+        .unwrap();
+        let binding = Arc::new(
+            foreign_runtime
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        let mut f = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: "/unused/verified-module.so".to_owned(),
+                },
+            )]),
+            None,
+        );
+
+        let error = f
+            .resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(error.contains("another host"), "{error}");
+        assert_eq!(f.resolver.state_of(record.id), Availability::Available);
+
+        // A rejected capability cannot reserve the process-global slot or
+        // prevent the normal resolver path from deciding the module outcome.
+        f.resolver.ensure_loaded(record.id).await.unwrap_err();
+        assert_eq!(f.resolver.state_of(record.id), Availability::Failed);
+        assert_eq!(runtime.host().list().iter().filter(|info| {
+            info.manifest.bus_name.as_str() == record.bus_name
+        }).count(), 0);
+    }
+
     fn admitted_info(record: &ReleaseRecord, state: ModuleState) -> ModuleInfo {
         let mut manifest = super::module(record.id, &[], &[]);
         manifest.bus_name = crate::BusName::new(record.bus_name).unwrap();
