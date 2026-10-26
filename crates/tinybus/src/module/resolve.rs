@@ -39,6 +39,25 @@ use crate::module::{
     SearchPathConfig, load_first_admitted, prune_stale_versions,
 };
 
+type HostCallbackFactory = Arc<
+    dyn Fn(usize) -> Pin<
+            Box<
+                dyn Future<Output = Result<(Arc<HostCallbackBinding>, serde_json::Value), String>>
+                    + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
+enum CallbackLoad {
+    Single(Arc<HostCallbackBinding>, serde_json::Value),
+    PerAttempt {
+        factory: HostCallbackFactory,
+        selected: Arc<Mutex<Option<Arc<HostCallbackBinding>>>>,
+    },
+}
+
 fn recover_admission(
     result: Result<(), String>,
     modules: &[ModuleInfo],
@@ -483,9 +502,53 @@ impl Resolver {
         binding: Arc<HostCallbackBinding>,
         module_config: serde_json::Value,
     ) -> Result<(), String> {
-        self.ensure_loaded_inner(id, None, Some((binding, module_config)))
+        self.ensure_loaded_inner(id, None, Some(CallbackLoad::Single(binding, module_config)))
             .await
             .map_err(LoadError::into_message)
+    }
+
+    /// Resolve a pinned release while preparing a fresh callback binding for
+    /// each candidate artifact. Failed candidates consume and revoke only their
+    /// own binding; the returned capability is retained by the exact admitted
+    /// artifact. Linked, search-path and generic in-flight loads fail closed.
+    pub async fn ensure_loaded_with_host_callback_factory<F, Fut>(
+        &self,
+        id: &str,
+        factory: F,
+    ) -> Result<Arc<HostCallbackBinding>, String>
+    where
+        F: Fn(usize) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(Arc<HostCallbackBinding>, serde_json::Value), String>>
+            + Send
+            + 'static,
+    {
+        let selected = Arc::new(Mutex::new(None));
+        let factory: HostCallbackFactory = Arc::new(move |attempt| Box::pin(factory(attempt)));
+        self.ensure_loaded_inner(
+            id,
+            None,
+            Some(CallbackLoad::PerAttempt {
+                factory,
+                selected: Arc::clone(&selected),
+            }),
+        )
+        .await
+        .map_err(LoadError::into_message)?;
+
+        if let Some(binding) = selected.lock().expect("callback selection lock").clone() {
+            return Ok(binding);
+        }
+        let record = self
+            .find(id)
+            .ok_or_else(|| format!("unknown module '{id}'"))?;
+        let runtime = self
+            .runtime()
+            .await
+            .map_err(|_| format!("module '{id}' is unavailable: the module bus could not start"))?;
+        runtime
+            .host()
+            .retained_host_callback_binding(record.bus_name)
+            .ok_or_else(|| format!("module '{id}' has no retained callback binding"))
     }
 
     /// Resolve, initialize and wait for a module without sending a business
@@ -533,7 +596,7 @@ impl Resolver {
         &self,
         id: &str,
         within: Option<Duration>,
-        callbacks: Option<(Arc<HostCallbackBinding>, serde_json::Value)>,
+        callbacks: Option<CallbackLoad>,
     ) -> Result<(), LoadError> {
         if !self.inner.enabled {
             if let Some(record) = self.find(id) {
