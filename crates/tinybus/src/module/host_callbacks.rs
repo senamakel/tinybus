@@ -953,7 +953,7 @@ impl ModuleHost {
         config: serde_json::Value,
         binding: &HostCallbackBinding,
     ) -> Result<ModuleInfo> {
-        self.load_file_with_host_callbacks_checked(path, config, binding, None)
+        self.load_file_with_host_callbacks_checked(path, config, binding, None, None, None)
             .await
     }
 
@@ -973,6 +973,59 @@ impl ModuleHost {
             config,
             binding,
             Some((expected_bus_name, expected_object_path)),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Load a checksum-verified cached release with callbacks bound to the
+    /// exact registry identity before initialization.
+    pub(crate) async fn load_github_release_cached_with_host_callbacks(
+        &self,
+        release: &super::CachedRelease<'_>,
+        config: serde_json::Value,
+        binding: &Arc<HostCallbackBinding>,
+        expected_bus_name: &str,
+        expected_object_path: &str,
+    ) -> Result<ModuleInfo> {
+        let (module, archive_sha256) = crate::module::github::acquire_cached(release)?;
+        self.load_file_with_host_callbacks_checked(
+            module,
+            config,
+            binding,
+            Some((expected_bus_name, expected_object_path)),
+            Some(archive_sha256),
+            release.expected_library_sha256.map(str::to_ascii_lowercase),
+        )
+        .await
+    }
+
+    /// Load an installer-shipped digest marker with callbacks bound to the
+    /// exact registry identity before initialization.
+    pub(crate) async fn load_bundled_marked_with_host_callbacks(
+        &self,
+        directory: &Path,
+        asset_name: &str,
+        pin: &str,
+        config: serde_json::Value,
+        binding: &Arc<HostCallbackBinding>,
+        expected_bus_name: &str,
+        expected_object_path: &str,
+    ) -> Result<ModuleInfo> {
+        let hit = crate::module::cache::find_marked(directory, asset_name, pin).ok_or_else(|| {
+            Error::module_refused(
+                directory,
+                "bundled digest marker does not match the pin, or the extraction is unusable",
+            )
+        })?;
+        self.load_file_with_host_callbacks_checked(
+            hit.module,
+            config,
+            binding,
+            Some((expected_bus_name, expected_object_path)),
+            None,
+            None,
         )
         .await
     }
@@ -983,6 +1036,8 @@ impl ModuleHost {
         config: serde_json::Value,
         binding: &HostCallbackBinding,
         expected_identity: Option<(&str, &str)>,
+        pinned_sha256: Option<String>,
+        pinned_library_sha256: Option<String>,
     ) -> Result<ModuleInfo> {
         if !Arc::ptr_eq(&self.inner.broker.router, &binding.broker.router)
             || !binding
