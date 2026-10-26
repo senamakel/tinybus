@@ -1052,6 +1052,12 @@ impl Resolver {
         .await
         .unwrap_or(false);
         if found_on_search_path {
+            if callbacks.is_some() {
+                return Err(format!(
+                    "module '{}' was loaded from a search path without the requested callback binding",
+                    record.id
+                ));
+            }
             return Ok(());
         }
         // A direct host load can win admission while the search-path rung is
@@ -1062,6 +1068,12 @@ impl Resolver {
             .iter()
             .any(|info| is_live_match(info, record))
         {
+            if callbacks.is_some() {
+                return Err(format!(
+                    "module '{}' was loaded without the requested callback binding",
+                    record.id
+                ));
+            }
             return Ok(());
         }
 
@@ -1079,8 +1091,35 @@ impl Resolver {
         let module_config = (self.inner.module_config)(record.id);
         let cache_root = root.clone();
         let bundled = self.inner.bundled_dir.clone();
-        let result = self
-            .blocking(move || {
+        let result = if let Some(callbacks) = callbacks.as_ref() {
+            let selected = callbacks;
+            let assets: Vec<ReleaseAsset<'static>> = host_candidates()
+                .iter()
+                .filter_map(|key| record.asset_for(key))
+                .copied()
+                .collect();
+            let plan = ReleasePlan {
+                id: record.id,
+                version: record.version,
+                release_url: record.release_url,
+                assets: &assets,
+                install_root: &cache_root,
+                bundled_root: bundled.as_deref(),
+                allow_download,
+            };
+            let (info, binding) = crate::module::first_admitted::load_first_admitted_with_host_callbacks(
+                runtime.host(),
+                &plan,
+                |attempt| selected.prepare(attempt),
+                record.bus_name,
+                record.object_path,
+            )
+            .await?;
+            selected.retain_selected(binding);
+            let _ = info;
+            Ok(())
+        } else {
+            self.blocking(move || {
                 Self::load_cached(
                     runtime,
                     record,
@@ -1090,7 +1129,8 @@ impl Resolver {
                     bundled.as_deref(),
                 )
             })
-            .await;
+            .await
+        };
         if let Err(error) = result {
             return recover_admission(Err(error), &runtime.host().list(), record);
         }

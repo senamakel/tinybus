@@ -20,6 +20,7 @@
 //! to the same digest, in a directory this user owns.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use super::cache::{digest_marker_path, secure_release_cache};
 use super::host::is_placement_refusal;
