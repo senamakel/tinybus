@@ -702,6 +702,26 @@ impl ModuleHost {
             })
     }
 
+    /// Return the live host callback capability retained by the exact loaded
+    /// bus peer, if it was admitted with one.
+    pub(crate) fn retained_host_callback_binding(
+        &self,
+        bus_name: &str,
+    ) -> Option<Arc<HostCallbackBinding>> {
+        let binding = self
+            .inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .find(|module| module.info.manifest.bus_name.as_str() == bus_name)?
+            ._callback_binding
+            .as_ref()?
+            .clone();
+        self.retains_host_callback_binding(bus_name, &binding)
+            .then_some(binding)
+    }
+
     /// Retain the resolver-owned callback capability with its exact admitted
     /// module, after verifying that the module was initialized through it.
     pub(crate) fn retain_host_callback_binding(

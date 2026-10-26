@@ -58,6 +58,24 @@ enum CallbackLoad {
     },
 }
 
+impl CallbackLoad {
+    async fn prepare(
+        &self,
+        attempt: usize,
+    ) -> Result<(Arc<HostCallbackBinding>, serde_json::Value), String> {
+        match self {
+            Self::Single(binding, config) => Ok((Arc::clone(binding), config.clone())),
+            Self::PerAttempt { factory, .. } => factory(attempt).await,
+        }
+    }
+
+    fn retain_selected(&self, binding: Arc<HostCallbackBinding>) {
+        if let Self::PerAttempt { selected, .. } = self {
+            *selected.lock().expect("callback selection lock") = Some(binding);
+        }
+    }
+}
+
 fn recover_admission(
     result: Result<(), String>,
     modules: &[ModuleInfo],
@@ -860,7 +878,7 @@ impl Resolver {
         &self,
         record: &'static ReleaseRecord,
         sender: tokio::sync::watch::Sender<Option<Resolution>>,
-        callbacks: Option<(Arc<HostCallbackBinding>, serde_json::Value)>,
+        callbacks: Option<CallbackLoad>,
     ) {
         let this = self.clone();
         let id = record.id;
@@ -907,7 +925,7 @@ impl Resolver {
     async fn ladder(
         &self,
         record: &'static ReleaseRecord,
-        callbacks: Option<(Arc<HostCallbackBinding>, serde_json::Value)>,
+        callbacks: Option<CallbackLoad>,
     ) -> Result<(), String> {
         let runtime = self.runtime().await.map_err(|_| {
             format!(
@@ -944,10 +962,11 @@ impl Resolver {
         match self.inner.sources.get(record.id) {
             Some(ModuleSource::LocalFile { path }) => {
                 let path = PathBuf::from(path);
-                let result = if let Some((binding, module_config)) = callbacks.clone() {
+                let result = if let Some(callbacks) = callbacks.as_ref() {
+                    let (binding, module_config) = callbacks.prepare(0).await?;
                     let host = runtime.host();
                     let handle = tokio::runtime::Handle::current();
-                    tokio::task::spawn_blocking(move || {
+                    let result = tokio::task::spawn_blocking(move || {
                         handle.block_on(async move {
                             host.load_file_with_host_callbacks_for(
                                 path,
@@ -975,7 +994,11 @@ impl Resolver {
                             "module '{}' callback loader did not finish: {error}",
                             record.id
                         )
-                    })?
+                    })?;
+                    if result.is_ok() {
+                        callbacks.retain_selected(binding);
+                    }
+                    result
                 } else {
                     let module_config = (self.inner.module_config)(record.id);
                     self.blocking(move || {
