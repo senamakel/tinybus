@@ -206,6 +206,10 @@ async fn a_real_required_artifact_is_refused_then_admitted_and_serves_confidenti
     let host = ModuleHost::new(broker);
     let address = BusName::new("ai.tinyhumans.openhuman.Clock").unwrap();
     let path = ObjectPath::new("/ai/tinyhumans/openhuman/Clock").unwrap();
+    // The fixture module advertises the crate's own version; follow it so a
+    // version bump does not invalidate the requirement range.
+    let crate_major: u64 = env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap();
+    let crate_minor: u64 = env!("CARGO_PKG_VERSION_MINOR").parse().unwrap();
     let required_for = |method| {
         ModuleRequirements::new(
             "tinybus",
@@ -214,7 +218,10 @@ async fn a_real_required_artifact_is_refused_then_admitted_and_serves_confidenti
             vec![
                 RequiredInterface::new(
                     InterfaceName::new(address.as_str()).unwrap(),
-                    VersionRange::new(Version::new(0, 1, 0), Some(Version::new(0, 2, 0))),
+                    VersionRange::new(
+                        Version::new(crate_major, crate_minor, 0),
+                        Some(Version::new(crate_major, crate_minor + 1, 0)),
+                    ),
                     vec![MemberName::new(method).unwrap()],
                 )
                 .unwrap(),
