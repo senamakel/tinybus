@@ -201,10 +201,13 @@ pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
 where
     F: FnMut(usize) -> Fut,
     Fut: std::future::Future<
-            Output = Result<(
-                std::sync::Arc<crate::module::HostCallbackBinding>,
-                serde_json::Value,
-            )>,
+            Output = Result<
+                (
+                    std::sync::Arc<crate::module::HostCallbackBinding>,
+                    serde_json::Value,
+                ),
+                String,
+            >,
         >,
 {
     let id = plan.id;
