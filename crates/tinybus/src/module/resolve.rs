@@ -966,6 +966,7 @@ impl Resolver {
                     let (binding, module_config) = callbacks.prepare(0).await?;
                     let host = runtime.host();
                     let handle = tokio::runtime::Handle::current();
+                    let retained_binding = Arc::clone(&binding);
                     let result = tokio::task::spawn_blocking(move || {
                         handle.block_on(async move {
                             host.load_file_with_host_callbacks_for(
@@ -996,7 +997,7 @@ impl Resolver {
                         )
                     })?;
                     if result.is_ok() {
-                        callbacks.retain_selected(binding);
+                        callbacks.retain_selected(retained_binding);
                     }
                     result
                 } else {
