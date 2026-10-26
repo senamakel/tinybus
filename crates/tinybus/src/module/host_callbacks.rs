@@ -1010,8 +1010,7 @@ impl ModuleHost {
         pin: &str,
         config: serde_json::Value,
         binding: &Arc<HostCallbackBinding>,
-        expected_bus_name: &str,
-        expected_object_path: &str,
+        expected_identity: (&str, &str),
     ) -> Result<ModuleInfo> {
         let hit =
             crate::module::cache::find_marked(directory, asset_name, pin).ok_or_else(|| {
@@ -1024,7 +1023,7 @@ impl ModuleHost {
             hit.module,
             config,
             binding,
-            Some((expected_bus_name, expected_object_path)),
+            Some(expected_identity),
             None,
             None,
         )

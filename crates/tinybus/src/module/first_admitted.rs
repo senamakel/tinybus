@@ -262,8 +262,7 @@ where
                     asset.sha256,
                     config,
                     &binding,
-                    expected_bus_name,
-                    expected_object_path,
+                    (expected_bus_name, expected_object_path),
                 )
                 .await
                 .map(|info| (info, binding))
