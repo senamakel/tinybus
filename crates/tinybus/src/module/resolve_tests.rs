@@ -301,6 +301,70 @@ mod resolver {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_local_callback_module_is_admitted_with_its_single_binding() {
+        let Some(source) =
+            std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").map(std::path::PathBuf::from)
+        else {
+            return;
+        };
+        let record = Box::leak(Box::new(crate::module::ReleaseRecord {
+            id: "resolver_single_callback_success",
+            bus_name: "org.example.EagerCallback",
+            object_path: "/org/example/EagerCallback",
+            version: "0.0.0",
+            release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
+            assets: &[],
+        }));
+        let runtime = shared_runtime();
+        let binding = Arc::new(
+            runtime
+                .host()
+                .prepare_host_callbacks(vec![crate::module::HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        binding
+            .serve_at(
+                "/callback".parse().unwrap(),
+                ResolverCallback("org.example.Callback".parse().unwrap()),
+            )
+            .await
+            .unwrap();
+        let resolver = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: source.to_string_lossy().into_owned(),
+                },
+            )]),
+            None,
+        )
+        .resolver;
+
+        resolver
+            .ensure_loaded_with_host_callbacks(
+                record.id,
+                Arc::clone(&binding),
+                serde_json::json!({ "host": binding.unique_name().as_str() }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resolver.state_of(record.id), Availability::Ready);
+        assert!(
+            runtime
+                .host()
+                .retains_host_callback_binding(record.bus_name, &binding)
+        );
+    }
+
     #[tokio::test]
     async fn failed_local_callback_load_does_not_retain_its_binding() {
         use crate::module::HostCallbackEndpoint;
