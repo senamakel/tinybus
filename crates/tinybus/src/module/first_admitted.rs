@@ -194,6 +194,8 @@ type PreparedCallbacks = Result<
     ),
     String,
 >;
+type BoxedCallbackPreparer<'a> =
+    dyn FnMut(usize) -> Pin<Box<dyn Future<Output = PreparedCallbacks> + 'a>> + 'a;
 
 pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
     host: &ModuleHost,
@@ -228,7 +230,7 @@ where
 async fn load_first_admitted_with_host_callbacks_inner<'a>(
     host: &ModuleHost,
     plan: &ReleasePlan<'_>,
-    prepare: &mut (dyn FnMut(usize) -> Pin<Box<dyn Future<Output = PreparedCallbacks> + 'a>> + 'a,),
+    prepare: &'a mut BoxedCallbackPreparer<'a>,
     expected_bus_name: &str,
     expected_object_path: &str,
 ) -> Result<
