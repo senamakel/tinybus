@@ -240,6 +240,11 @@ mod resolver {
         }
     }
 
+    async fn callback_fixture_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        LOCK.lock().await
+    }
+
     #[tokio::test]
     async fn callback_resolution_rejects_a_binding_from_another_host_without_claiming_the_slot() {
         use crate::module::HostCallbackEndpoint;
@@ -303,6 +308,7 @@ mod resolver {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_local_callback_module_is_admitted_with_its_single_binding() {
+        let _fixture_guard = callback_fixture_lock().await;
         let Some(source) =
             std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").map(std::path::PathBuf::from)
         else {
@@ -601,6 +607,7 @@ mod resolver {
         use crate::module::HostCallbackEndpoint;
         use std::path::PathBuf;
 
+        let _fixture_guard = callback_fixture_lock().await;
         let Some(source) = std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").map(PathBuf::from)
         else {
             return;
