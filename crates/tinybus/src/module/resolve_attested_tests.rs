@@ -85,8 +85,7 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     // runtime under the same well-known bus name. Give this strict-call test
     // its own host so parallel test execution cannot race that admission.
     let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
-        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None)
-            .unwrap(),
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap(),
     ));
     let sink = Arc::new(super::test_support::Recording::default());
     let resolver = Resolver::new(ResolverInputs {
