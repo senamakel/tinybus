@@ -628,7 +628,8 @@ mod resolver {
                 panic!("a preloaded module without a binding must reject the factory")
             })
             .await
-            .unwrap_err();
+            .err()
+            .expect("the preloaded module must fail closed without its binding");
 
         assert!(
             error.contains("already loaded without a callback binding"),
