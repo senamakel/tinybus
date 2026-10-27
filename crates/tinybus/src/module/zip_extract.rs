@@ -18,7 +18,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::error::Result;
 use crate::module::refused;
-use crate::module::zip_deflate::{copy_bounded, StrictDeflate};
+use crate::module::zip_deflate::{StrictDeflate, copy_bounded};
 use crate::module::zip_descriptor::validate_data_descriptor;
 
 const MAX_ENTRY_COUNT: u64 = 100_000;

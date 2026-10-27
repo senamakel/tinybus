@@ -1,9 +1,9 @@
 use super::*;
 use std::sync::atomic::AtomicI32;
 
+use crate::Connection;
 use crate::broker::Broker;
 use crate::transport::memory::MemoryTransport;
-use crate::Connection;
 use crate::{BusName, InterfaceName, MemberName, ObjectPath};
 
 static DELIVERY_CODE: AtomicI32 = AtomicI32::new(TB_OK);
@@ -196,15 +196,17 @@ async fn an_older_vtable_loads_but_reports_reinitialization_as_unsupported() {
     assert!(!error.to_string().contains("never printed"));
 
     let (missing_callback, _) = ModuleTransport::new("missing-callback".to_string(), Vec::new());
-    assert!(missing_callback
-        .initialize(TbModuleVtable {
-            module_ctx: std::ptr::dangling_mut(),
-            deliver,
-            shutdown,
-            reinitialize: None,
-            ..TbModuleVtable::default()
-        })
-        .is_err());
+    assert!(
+        missing_callback
+            .initialize(TbModuleVtable {
+                module_ctx: std::ptr::dangling_mut(),
+                deliver,
+                shutdown,
+                reinitialize: None,
+                ..TbModuleVtable::default()
+            })
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -214,14 +216,16 @@ async fn reinitialization_maps_callback_failures_without_exposing_configuration(
         .lock()
         .await;
     let (uninitialized, _) = ModuleTransport::new("missing".to_string(), Vec::new());
-    assert!(uninitialized
-        .reinitialize(crate::Secret::new(
-            serde_json::to_vec(&serde_json::json!({})).unwrap()
-        ))
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("not initialized"));
+    assert!(
+        uninitialized
+            .reinitialize(crate::Secret::new(
+                serde_json::to_vec(&serde_json::json!({})).unwrap()
+            ))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not initialized")
+    );
 
     let (transport, host) = ModuleTransport::new("configured".to_string(), Vec::new());
     let mut module = TbModuleVtable::default();
@@ -285,14 +289,16 @@ async fn a_running_reinitialization_excludes_another_reinitialization_and_shutdo
     .await
     .unwrap();
 
-    assert!(tokio::time::timeout(
-        Duration::from_millis(20),
-        transport.reinitialize(crate::Secret::new(
-            serde_json::to_vec(&serde_json::json!({ "generation": 2 })).unwrap()
-        )),
-    )
-    .await
-    .is_err());
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(20),
+            transport.reinitialize(crate::Secret::new(
+                serde_json::to_vec(&serde_json::json!({ "generation": 2 })).unwrap()
+            )),
+        )
+        .await
+        .is_err()
+    );
     assert!(matches!(
         transport.clone().stop(Duration::from_millis(20)).await,
         Err(StopError::NotStarted(_))
@@ -423,9 +429,11 @@ async fn deferred_reinitialize_replaces_the_initializer_config_slice() {
         assert_eq!(config.as_slice(), replacement);
         assert_eq!(host.config.ptr, config.as_ptr());
         assert_eq!(host.config.len, config.len());
-        assert!(!config
-            .windows(b"old-sensitive-value".len())
-            .any(|window| window == b"old-sensitive-value"));
+        assert!(
+            !config
+                .windows(b"old-sensitive-value".len())
+                .any(|window| window == b"old-sensitive-value")
+        );
     }
 
     transport.ensure_initialized().await.unwrap();
@@ -2419,10 +2427,12 @@ async fn actual_native_reinitializer_fault_denies_before_c_returns_and_joins_onc
         .unwrap();
     wait_physical_cleanup(&transport).await;
     assert_eq!(unsafe { host_native_terminal_state(host.host_ctx) }, 14);
-    assert!(transport
-        .reinitialize(crate::Secret::new(vec![]))
-        .await
-        .is_err());
+    assert!(
+        transport
+            .reinitialize(crate::Secret::new(vec![]))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -3075,9 +3085,11 @@ async fn a_binding_absent_at_transport_creation_is_never_added_later() {
     drop(new_transport);
 
     let unrestricted = Broker::new();
-    assert!(unrestricted
-        .restricted_module_controller_binding()
-        .is_none());
+    assert!(
+        unrestricted
+            .restricted_module_controller_binding()
+            .is_none()
+    );
     let (unrestricted_transport, unrestricted_host) = ModuleTransport::new_with_controller_binding(
         "unrestricted".into(),
         vec![],
@@ -3157,12 +3169,14 @@ async fn trusted_host_callback_denies_a_poisoned_owner_without_unwinding_through
     transport.eager_initialize(initialize_ok, host).unwrap();
     let query = host.trusted_host_binding.unwrap();
     let context = transport.context;
-    assert!(std::thread::spawn(move || {
-        let _owner = context.owner.lock().unwrap();
-        panic!("poison the module owner lock for the callback test");
-    })
-    .join()
-    .is_err());
+    assert!(
+        std::thread::spawn(move || {
+            let _owner = context.owner.lock().unwrap();
+            panic!("poison the module owner lock for the callback test");
+        })
+        .join()
+        .is_err()
+    );
 
     let mut output = [0_u8; crate::name::MAX_NAME_LEN];
     let mut output_len = usize::MAX;

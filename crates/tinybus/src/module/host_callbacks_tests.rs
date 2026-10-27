@@ -1,7 +1,7 @@
 use super::*;
 use crate::message::Message;
 use crate::router::{MatchRule, Router};
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::{Arc, atomic::AtomicUsize};
 
 fn endpoint() -> HostCallbackEndpoint {
     HostCallbackEndpoint {
@@ -85,13 +85,15 @@ fn directed_signal_requires_a_live_module_recipient() {
         "org.example.Host".parse().unwrap(),
     );
     state.lifetime.lock().unwrap().module = None;
-    assert!(state
-        .signal_destination(
-            &"/callback".parse().unwrap(),
-            &"org.example.Callback".parse().unwrap(),
-            &"WatchChanged".parse().unwrap(),
-        )
-        .is_err());
+    assert!(
+        state
+            .signal_destination(
+                &"/callback".parse().unwrap(),
+                &"org.example.Callback".parse().unwrap(),
+                &"WatchChanged".parse().unwrap(),
+            )
+            .is_err()
+    );
 }
 fn state(source: BusName, destination: BusName) -> Arc<CallbackState> {
     Arc::new(CallbackState {
@@ -155,22 +157,30 @@ fn directed_signals_target_only_the_live_bound_module_and_declared_member() {
 
     let mut forged = message.clone();
     forged.header.destination = Some(outsider_peer.clone());
-    assert!(router
-        .directed_signal_target(&binding_peer, &outsider_peer, &forged.header)
-        .is_err());
-    assert!(router
-        .directed_signal_target(&outsider_peer, &module_peer, &message.header)
-        .is_err());
+    assert!(
+        router
+            .directed_signal_target(&binding_peer, &outsider_peer, &forged.header)
+            .is_err()
+    );
+    assert!(
+        router
+            .directed_signal_target(&outsider_peer, &module_peer, &message.header)
+            .is_err()
+    );
     let mut wrong_member = message.clone();
     wrong_member.header.member = Some("Other".parse().unwrap());
-    assert!(router
-        .directed_signal_target(&binding_peer, &module_peer, &wrong_member.header)
-        .is_err());
+    assert!(
+        router
+            .directed_signal_target(&binding_peer, &module_peer, &wrong_member.header)
+            .is_err()
+    );
 
     router.revoke_host_callbacks(&capability);
-    assert!(router
-        .directed_signal_target(&binding_peer, &module_peer, &message.header)
-        .is_err());
+    assert!(
+        router
+            .directed_signal_target(&binding_peer, &module_peer, &message.header)
+            .is_err()
+    );
     router.detach(binding_id);
     assert!(router.owner_of(&module_peer).is_some());
 }
@@ -369,35 +379,43 @@ async fn revoke_after_route_selection_blocks_dispatch_and_direct_unverified_disp
             guard: HostCallbackGuard(state.clone()),
         },
     };
-    assert!(guarded
-        .call(&endpoint().members[0], serde_json::json!([]))
-        .await
-        .is_err());
-    assert!(guarded
-        .call_with_context(
-            &endpoint().members[0],
-            serde_json::json!([]),
-            &CallContext::brokered(state.module_peer().as_ref(), false)
-        )
-        .await
-        .is_err());
-    assert!(guarded
-        .call_with_context(
-            &endpoint().members[0],
-            serde_json::json!([]),
-            &CallContext::default()
-        )
-        .await
-        .is_err());
+    assert!(
+        guarded
+            .call(&endpoint().members[0], serde_json::json!([]))
+            .await
+            .is_err()
+    );
+    assert!(
+        guarded
+            .call_with_context(
+                &endpoint().members[0],
+                serde_json::json!([]),
+                &CallContext::brokered(state.module_peer().as_ref(), false)
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        guarded
+            .call_with_context(
+                &endpoint().members[0],
+                serde_json::json!([]),
+                &CallContext::default()
+            )
+            .await
+            .is_err()
+    );
     router.revoke_host_callbacks(&state);
-    assert!(guarded
-        .call_with_context(
-            &endpoint().members[0],
-            serde_json::json!([]),
-            &CallContext::brokered(state.module_peer().as_ref(), true)
-        )
-        .await
-        .is_err());
+    assert!(
+        guarded
+            .call_with_context(
+                &endpoint().members[0],
+                serde_json::json!([]),
+                &CallContext::brokered(state.module_peer().as_ref(), true)
+            )
+            .await
+            .is_err()
+    );
     assert!(receiver.try_recv().is_err());
     assert_eq!(HostCallbackGuard(state).running(), 0);
 }
@@ -444,14 +462,16 @@ async fn revoke_during_await_preserves_running_charge_until_actual_completion() 
 async fn endpoint_declarations_registration_and_broker_ownership_are_checked() {
     let host = ModuleHost::new(Broker::new());
     assert!(host.prepare_host_callbacks(vec![]).await.is_err());
-    assert!(host
-        .prepare_host_callbacks(vec![endpoint(); 33])
-        .await
-        .is_err());
-    assert!(host
-        .prepare_host_callbacks(vec![endpoint(), endpoint()])
-        .await
-        .is_err());
+    assert!(
+        host.prepare_host_callbacks(vec![endpoint(); 33])
+            .await
+            .is_err()
+    );
+    assert!(
+        host.prepare_host_callbacks(vec![endpoint(), endpoint()])
+            .await
+            .is_err()
+    );
     let mut duplicate = endpoint();
     duplicate.members.push(duplicate.members[0].clone());
     assert!(host.prepare_host_callbacks(vec![duplicate]).await.is_err());
@@ -459,26 +479,32 @@ async fn endpoint_declarations_registration_and_broker_ownership_are_checked() {
     excessive.members = (0..65).map(|i| format!("M{i}").parse().unwrap()).collect();
     assert!(host.prepare_host_callbacks(vec![excessive]).await.is_err());
     let binding = host.prepare_host_callbacks(vec![endpoint()]).await.unwrap();
-    assert!(host
-        .load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
-        .await
-        .is_err());
+    assert!(
+        host.load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
+            .await
+            .is_err()
+    );
     let other_owner = ModuleHost::new(host.inner.broker.clone());
-    assert!(other_owner
-        .load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
-        .await
-        .is_err());
+    assert!(
+        other_owner
+            .load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
+            .await
+            .is_err()
+    );
     let other = ModuleHost::new(Broker::new());
-    assert!(other
-        .load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
-        .await
-        .is_err());
+    assert!(
+        other
+            .load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
+            .await
+            .is_err()
+    );
     binding.revoke();
     binding.revoke();
-    assert!(host
-        .load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
-        .await
-        .is_err());
+    assert!(
+        host.load_file_with_host_callbacks("unused", serde_json::json!({}), &binding)
+            .await
+            .is_err()
+    );
     binding.close().await.unwrap();
 }
 
@@ -500,14 +526,18 @@ async fn registration_is_exact_single_use_and_failed_load_detaches_the_local_pee
     let broker = Broker::new();
     let host = ModuleHost::new(broker.clone());
     let binding = host.prepare_host_callbacks(vec![endpoint()]).await.unwrap();
-    assert!(binding
-        .serve_at("/other".parse().unwrap(), EmptyCallback)
-        .await
-        .is_err());
-    assert!(binding
-        .serve_at(endpoint().path, EmptyCallback)
-        .await
-        .is_err());
+    assert!(
+        binding
+            .serve_at("/other".parse().unwrap(), EmptyCallback)
+            .await
+            .is_err()
+    );
+    assert!(
+        binding
+            .serve_at(endpoint().path, EmptyCallback)
+            .await
+            .is_err()
+    );
     let (entered, _) = tokio::sync::mpsc::channel(1);
     let callback = || BlockingCallback {
         entered: entered.clone(),
@@ -526,21 +556,25 @@ async fn registration_is_exact_single_use_and_failed_load_detaches_the_local_pee
             .owner_of(binding.unique_name())
             .unwrap()
     );
-    assert!(host
-        .load_file_with_host_callbacks("missing-fixture", serde_json::json!({}), &binding)
-        .await
-        .is_err());
-    assert!(broker
-        .router
-        .lock()
-        .unwrap()
-        .owner_of(binding.unique_name())
-        .is_none());
+    assert!(
+        host.load_file_with_host_callbacks("missing-fixture", serde_json::json!({}), &binding)
+            .await
+            .is_err()
+    );
+    assert!(
+        broker
+            .router
+            .lock()
+            .unwrap()
+            .owner_of(binding.unique_name())
+            .is_none()
+    );
     assert!(binding.serve_at(endpoint().path, callback()).await.is_err());
-    assert!(host
-        .load_file_with_host_callbacks("missing-fixture", serde_json::json!({}), &binding)
-        .await
-        .is_err());
+    assert!(
+        host.load_file_with_host_callbacks("missing-fixture", serde_json::json!({}), &binding)
+            .await
+            .is_err()
+    );
     let peer = binding.unique_name().clone();
     drop(binding);
     assert!(broker.router.lock().unwrap().owner_of(&peer).is_none());
@@ -556,8 +590,10 @@ async fn a_module_fault_revokes_dispatch_authority_before_peer_detach() {
         (host.fault)(host.host_ctx, std::ptr::null(), 0);
     }
     assert!(!state.matches(&call(&state).header));
-    assert!(!HostCallbackGuard(state.clone())
-        .authorizes(&CallContext::brokered(state.module_peer().as_ref(), true)));
+    assert!(
+        !HostCallbackGuard(state.clone())
+            .authorizes(&CallContext::brokered(state.module_peer().as_ref(), true))
+    );
     assert!(resolves(&router, &call(&state)).is_err());
 }
 
@@ -577,14 +613,18 @@ async fn restricted_outgoing_handle_preserves_typed_calls_and_metadata() {
     assert!(names.contains(binding.unique_name()));
     let streamed: Vec<BusName> = outgoing.call_streaming("ListNames", ()).await.unwrap();
     assert_eq!(names, streamed);
-    assert!(outgoing
-        .call_confidential::<serde_json::Value>("ListNames", ())
-        .await
-        .is_err());
-    assert!(outgoing
-        .call_sensitive::<serde_json::Value>("ListNames", ())
-        .await
-        .is_err());
+    assert!(
+        outgoing
+            .call_confidential::<serde_json::Value>("ListNames", ())
+            .await
+            .is_err()
+    );
+    assert!(
+        outgoing
+            .call_sensitive::<serde_json::Value>("ListNames", ())
+            .await
+            .is_err()
+    );
     assert!(outgoing.attestation().await.unwrap().is_none());
     assert!(!outgoing.is_available().await.unwrap());
     let _signals = outgoing.receive_signal("NameOwnerChanged").await.unwrap();
@@ -1575,15 +1615,19 @@ async fn host_stream_callbacks_are_bound_to_the_declared_module_peer() {
         state.module = Some(module_peer.clone());
     }
     let context = CallContext::brokered(Some(&module_peer), false);
-    assert!(binding
-        .authorized_stream_module(&CallContext::brokered(Some(&module_peer), true))
-        .is_err());
-    assert!(binding
-        .authorized_stream_module(&CallContext::brokered(
-            Some(&"org.example.Outsider".parse().unwrap()),
-            false,
-        ))
-        .is_err());
+    assert!(
+        binding
+            .authorized_stream_module(&CallContext::brokered(Some(&module_peer), true))
+            .is_err()
+    );
+    assert!(
+        binding
+            .authorized_stream_module(&CallContext::brokered(
+                Some(&"org.example.Outsider".parse().unwrap()),
+                false,
+            ))
+            .is_err()
+    );
     let proxy = module
         .proxy(binding.unique_name(), "/callback", "org.example.Callback")
         .unwrap();

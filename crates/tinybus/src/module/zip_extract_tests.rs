@@ -229,41 +229,47 @@ fn implicit_directory_case_collisions_and_file_directory_conflicts_are_refused()
 fn canonically_equivalent_unicode_components_are_refused_portably() {
     let mut trie = PathNode::default();
     let mut key_bytes = 0;
-    assert!(trie
-        .insert(
+    assert!(
+        trie.insert(
             Path::new("é/one"),
             false,
             &mut key_bytes,
             MAX_PATH_METADATA_BYTES
         )
-        .unwrap());
-    assert!(!trie
-        .insert(
-            Path::new("e\u{301}/two"),
-            false,
-            &mut key_bytes,
-            MAX_PATH_METADATA_BYTES,
-        )
-        .unwrap());
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("e\u{301}/two"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
 
     let mut trie = PathNode::default();
     let mut key_bytes = 0;
-    assert!(trie
-        .insert(
+    assert!(
+        trie.insert(
             Path::new("dir/café"),
             false,
             &mut key_bytes,
             MAX_PATH_METADATA_BYTES,
         )
-        .unwrap());
-    assert!(!trie
-        .insert(
-            Path::new("dir/cafe\u{301}"),
-            false,
-            &mut key_bytes,
-            MAX_PATH_METADATA_BYTES,
-        )
-        .unwrap());
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("dir/cafe\u{301}"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
 
     for fixture in [
         "canonical_parent_collision.zip",
@@ -281,22 +287,25 @@ fn canonically_equivalent_unicode_components_are_refused_portably() {
 fn full_unicode_casefold_aliases_are_refused_portably() {
     let mut trie = PathNode::default();
     let mut key_bytes = 0;
-    assert!(trie
-        .insert(
+    assert!(
+        trie.insert(
             Path::new("dir/Straße"),
             false,
             &mut key_bytes,
             MAX_PATH_METADATA_BYTES,
         )
-        .unwrap());
-    assert!(!trie
-        .insert(
-            Path::new("dir/STRASSE"),
-            false,
-            &mut key_bytes,
-            MAX_PATH_METADATA_BYTES,
-        )
-        .unwrap());
+        .unwrap()
+    );
+    assert!(
+        !trie
+            .insert(
+                Path::new("dir/STRASSE"),
+                false,
+                &mut key_bytes,
+                MAX_PATH_METADATA_BYTES,
+            )
+            .unwrap()
+    );
 
     let (_root, _destination, result) = extract_fixture("casefold_collision.zip");
     assert!(result.is_err());

@@ -6,8 +6,8 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::error::{Error, Result};
 use crate::module::abi::{
-    field_bytes, TbAbiDescriptor, TbModuleInit, TbSlice, ABI_MAGIC, ABI_REVISION,
-    DESCRIPTOR_PREFIX_SIZE, MAX_DESCRIPTOR_SIZE,
+    ABI_MAGIC, ABI_REVISION, DESCRIPTOR_PREFIX_SIZE, MAX_DESCRIPTOR_SIZE, TbAbiDescriptor,
+    TbModuleInit, TbSlice, field_bytes,
 };
 use crate::module::manifest::ModuleManifest;
 use crate::{build_info, version::Version};
@@ -217,7 +217,7 @@ pub(crate) fn gate_descriptor(
 
 #[cfg(unix)]
 mod platform {
-    use std::ffi::{c_char, c_int, c_void, CString};
+    use std::ffi::{CString, c_char, c_int, c_void};
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 

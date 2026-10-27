@@ -57,13 +57,14 @@ mod windows_acl;
 #[cfg(feature = "modules")]
 pub use cache::{artifact_dir, is_safe_path_component, prune_stale_versions};
 pub use client::{
-    classify, report_proxy_failure, wire_kind, AccessFuture, BoundModuleClient, ModuleAccess,
-    ModuleCallError, ModuleCallFailure, ModuleClient, ModuleObjectClient, PinnedModuleClient,
-    PinnedModuleObjectClient, ProxyFailure, ReadinessFailure, ReconfigureFailure, UnloadedAccess,
+    AccessFuture, BoundModuleClient, ModuleAccess, ModuleCallError, ModuleCallFailure,
+    ModuleClient, ModuleObjectClient, PinnedModuleClient, PinnedModuleObjectClient, ProxyFailure,
+    ReadinessFailure, ReconfigureFailure, UnloadedAccess, classify, report_proxy_failure,
+    wire_kind,
 };
 pub use failure::{FailureReport, FailureReporter, FailureSink, Reason};
 #[cfg(feature = "modules")]
-pub use first_admitted::{load_first_admitted, ReleasePlan};
+pub use first_admitted::{ReleasePlan, load_first_admitted};
 #[cfg(feature = "modules")]
 pub use github::CachedRelease;
 #[cfg(feature = "modules")]
@@ -81,9 +82,9 @@ pub use reconfigure::{ConfigFingerprint, ReconfigurableModule, Reconfigure, Reco
 pub use release::{ReleaseAsset, ReleaseRecord};
 #[cfg(feature = "modules")]
 pub use resolve::{
-    resolve_bundled_dir, set_bundled_releases_dir, AsyncModuleConfigProvider, LinkedFactory,
-    LinkedRegistry, LoadError, ModuleConfigProvider, ModuleGate, ModuleSource, ResolvedHook,
-    Resolver, ResolverInputs, RuntimeFuture, RuntimeProvider,
+    AsyncModuleConfigProvider, LinkedFactory, LinkedRegistry, LoadError, ModuleConfigProvider,
+    ModuleGate, ModuleSource, ResolvedHook, Resolver, ResolverInputs, RuntimeFuture,
+    RuntimeProvider, resolve_bundled_dir, set_bundled_releases_dir,
 };
 #[cfg(feature = "modules")]
 pub use runtime::{

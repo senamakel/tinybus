@@ -1,6 +1,6 @@
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 struct HostObjectValue(&'static str);
 
@@ -383,10 +383,12 @@ async fn a_name_collision_leaves_no_host_object_registration_behind() {
         .await
         .unwrap();
     assert!(owner.is_some());
-    assert!(runtime
-        .serve_host_object(name.clone(), path.clone(), HostObjectValue("must not leak"))
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path.clone(), HostObjectValue("must not leak"))
+            .await
+            .is_err()
+    );
     wait_for_owner(runtime.connection(), name.as_str(), owner).await;
     let proxy = runtime
         .connection()
@@ -582,10 +584,12 @@ async fn interface_name_panic_rolls_back_a_new_host_object_name_claim() {
         .unwrap();
     let path: crate::ObjectPath = "/runtime/panicking_name".parse().unwrap();
 
-    assert!(runtime
-        .serve_host_object(name.clone(), path, PanickingHostObjectName)
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path, PanickingHostObjectName)
+            .await
+            .is_err()
+    );
     assert_eq!(
         runtime
             .connection()
@@ -615,10 +619,12 @@ async fn failed_shared_registration_preserves_the_existing_host_object_guard() {
         .await
         .unwrap();
 
-    assert!(runtime
-        .serve_host_object(name.clone(), failed_path.clone(), PanickingHostObjectName)
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), failed_path.clone(), PanickingHostObjectName)
+            .await
+            .is_err()
+    );
     assert_eq!(
         runtime
             .connection()
@@ -667,10 +673,12 @@ async fn failed_registration_preserves_a_name_owned_before_the_helper() {
         .unwrap();
     let owner = runtime.connection().unique_name();
 
-    assert!(runtime
-        .serve_host_object(name.clone(), path, PanickingHostObjectName)
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path, PanickingHostObjectName)
+            .await
+            .is_err()
+    );
     assert_eq!(
         runtime
             .connection()
@@ -699,10 +707,12 @@ async fn a_closed_runtime_connection_refuses_host_object_registration() {
     let path: crate::ObjectPath = "/runtime/closed_connection".parse().unwrap();
     runtime.connection().close().await.unwrap();
 
-    assert!(runtime
-        .serve_host_object(name.clone(), path, HostObjectValue("unreachable"))
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .serve_host_object(name.clone(), path, HostObjectValue("unreachable"))
+            .await
+            .is_err()
+    );
     assert!(!runtime.host_objects.lock().await.names.contains_key(&name));
 }
 

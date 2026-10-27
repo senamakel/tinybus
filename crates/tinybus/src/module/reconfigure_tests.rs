@@ -1,9 +1,9 @@
 use super::*;
 use crate::broker::Broker;
-use crate::module::abi::{TbAbiDescriptor, TbHostVtable, TbModuleVtable, TB_BAD_ARGUMENT, TB_OK};
+use crate::module::abi::{TB_BAD_ARGUMENT, TB_OK, TbAbiDescriptor, TbHostVtable, TbModuleVtable};
 use crate::module::failure::{FailureReport, FailureReporter, FailureSink, Reason};
 use crate::module::host::ModuleHost;
-use crate::module::manifest::{ModuleIdentity, ModuleManifest, PanicPolicy, MANIFEST_SCHEMA};
+use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
 use crate::module::{AccessFuture, ModuleState, ReleaseRecord};
 use crate::name::{BusName, ObjectPath};
 use crate::transport::memory::MemoryBus;

@@ -491,14 +491,16 @@ async fn a_bound_stream_call_and_returned_object_stay_on_the_attested_peer() {
     assert!(events_b.lock().unwrap().is_empty());
 
     service_a.close().await.unwrap();
-    assert!(bound
-        .call_with_stream::<String, _, _>(
-            "Generate",
-            |stream| serde_json::json!([stream]),
-            b"after disconnect",
-        )
-        .await
-        .is_err());
+    assert!(
+        bound
+            .call_with_stream::<String, _, _>(
+                "Generate",
+                |stream| serde_json::json!([stream]),
+                b"after disconnect",
+            )
+            .await
+            .is_err()
+    );
     assert!(events_b.lock().unwrap().is_empty());
     assert!(received_b_rx.try_recv().is_err());
     broker_task.abort();
@@ -509,22 +511,24 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
     let (received_tx, _received_rx) = tokio::sync::mpsc::unbounded_channel();
     let fixture = fixture(Behavior::Consume(received_tx)).await;
     let builder_calls = Arc::new(AtomicUsize::new(0));
-    assert!(fixture
-        .client
-        .call_with_stream_detailed::<Value, _, _>(
-            "unknown",
-            "Upload",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    serde_json::json!([stream])
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .client
+            .call_with_stream_detailed::<Value, _, _>(
+                "unknown",
+                "Upload",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        serde_json::json!([stream])
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
 
     let proxy = fixture.client.fixture_proxy().unwrap();
     let disabled = ModuleClient::new(StreamAccess {
@@ -535,21 +539,23 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
         ready: true,
     })
     .with_fixture(proxy.clone());
-    assert!(disabled
-        .call_with_stream_detailed::<Value, _, _>(
-            RECORD.id,
-            "Upload",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    serde_json::json!([stream])
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        disabled
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "Upload",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        serde_json::json!([stream])
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
 
     let unready = ModuleClient::new(StreamAccess {
         record: &RECORD,
@@ -558,38 +564,42 @@ async fn invalid_or_unavailable_module_stream_calls_do_not_run_the_builder_or_op
         enabled: true,
         ready: false,
     });
-    assert!(unready
-        .call_with_stream_detailed::<Value, _, _>(
-            RECORD.id,
-            "Upload",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    serde_json::json!([stream])
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        unready
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "Upload",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        serde_json::json!([stream])
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
 
-    assert!(fixture
-        .client
-        .call_with_stream_detailed::<Value, _, _>(
-            RECORD.id,
-            "invalid/member",
-            {
-                let builder_calls = builder_calls.clone();
-                move |stream: &StreamRef| {
-                    builder_calls.fetch_add(1, Ordering::SeqCst);
-                    serde_json::json!([stream])
-                }
-            },
-            b"x",
-        )
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .client
+            .call_with_stream_detailed::<Value, _, _>(
+                RECORD.id,
+                "invalid/member",
+                {
+                    let builder_calls = builder_calls.clone();
+                    move |stream: &StreamRef| {
+                        builder_calls.fetch_add(1, Ordering::SeqCst);
+                        serde_json::json!([stream])
+                    }
+                },
+                b"x",
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.opens.load(Ordering::SeqCst), 0);
 }
@@ -641,9 +651,11 @@ async fn detailed_stream_failures_preserve_wire_input_errors_and_sanitize_render
         .unwrap_err();
     assert_eq!(sanitized_stream, ModuleCallError::ModuleFault);
     assert!(!format!("{sanitized_stream:?}").contains("secret document detail"));
-    assert!(!sanitized_stream
-        .to_string()
-        .contains("secret document detail"));
+    assert!(
+        !sanitized_stream
+            .to_string()
+            .contains("secret document detail")
+    );
     let unavailable_fixture = fixture(Behavior::Unavailable).await;
     let unavailable_object = unavailable_fixture
         .client
@@ -799,9 +811,11 @@ async fn a_refused_stream_write_aborts_the_opened_upload() {
         failure.wire_name,
         failure.message
     );
-    assert!(!fixture
-        .refuse_first_write
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        !fixture
+            .refuse_first_write
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
     tokio::time::timeout(Duration::from_secs(10), fixture.aborts.recv())
         .await
         .expect("write failure dropped the unfinished stream writer")

@@ -4,7 +4,7 @@ use crate::module::failure::{FailureReport, FailureReporter, FailureSink};
 use crate::ports::{Listener, Transport};
 use crate::transport::memory::{MemoryBus, MemoryTransport};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
+use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 
 #[derive(Default)]
 struct Recording(Mutex<Vec<(String, Reason)>>);
@@ -314,9 +314,11 @@ fn call_errors_render_the_already_reported_prefix() {
         ModuleCallError::TransportFailed,
         ModuleCallError::ModuleFault,
     ] {
-        assert!(error
-            .to_string()
-            .starts_with("MODULE_CALL_REPORTED: module "));
+        assert!(
+            error
+                .to_string()
+                .starts_with("MODULE_CALL_REPORTED: module ")
+        );
     }
 }
 
@@ -550,10 +552,12 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
             &[(RECORD.id.to_string(), reason)]
         );
     }
-    assert!(direct
-        .object_client(RECORD.id, "invalid path")
-        .await
-        .is_err());
+    assert!(
+        direct
+            .object_client(RECORD.id, "invalid path")
+            .await
+            .is_err()
+    );
     assert_eq!(
         direct_sink.0.lock().unwrap().as_slice(),
         &[(RECORD.id.to_string(), Reason::IncompatibleContract)]
@@ -565,12 +569,13 @@ async fn fixture_json_and_object_calls_preserve_deadlines_and_confidential_refus
     let reply: Result<serde_json::Value, _> =
         client.call_confidential_json(RECORD.id, "Json", ()).await;
     assert_eq!(reply, Err(ModuleCallError::TransportFailed));
-    assert!(sink
-        .0
-        .lock()
-        .unwrap()
-        .iter()
-        .all(|(_, reason)| *reason == Reason::TransportFailed));
+    assert!(
+        sink.0
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, reason)| *reason == Reason::TransportFailed)
+    );
 
     #[cfg(feature = "modules")]
     {
@@ -602,12 +607,13 @@ async fn unavailable_loads_and_explicit_reports_use_only_registered_identity() {
     client.report_malformed_reply("unknown");
     client.report_incompatible_contract("unknown");
     client.report_unavailable("unknown");
-    assert!(sink
-        .0
-        .lock()
-        .unwrap()
-        .iter()
-        .all(|(module, _)| module == RECORD.id));
+    assert!(
+        sink.0
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(module, _)| module == RECORD.id)
+    );
 }
 
 #[tokio::test]
