@@ -1407,8 +1407,14 @@ mod resolver {
             .await
             .expect_err("blocking work must not run without its runtime");
 
-        assert!(error.contains("module bus could not start: runtime startup refused"));
-        assert!(error.contains("This is terminal for the running process"));
+        assert!(
+            error.contains("module bus could not start: runtime startup refused"),
+            "{error}"
+        );
+        assert!(
+            error.contains("This is terminal for the running process"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
