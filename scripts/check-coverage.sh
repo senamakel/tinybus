@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-cargo build --locked --example module_clock --example module_clock_two --example module_wrong_target --example module_context --example module_context_configured --example module_context_factory --example module_context_eager --example module_trusted_migration --example module_host_callback --example module_controlled_init --example module_terminal --no-default-features --features modules,macros,__native-fixture-support
+cargo build --locked --example module_clock --example module_clock_two --example module_wrong_target --example module_context --example module_context_configured --example module_context_factory --example module_context_eager --example module_trusted_migration --example module_host_callback --example module_controlled_init --example module_terminal --no-default-features --features uds,modules,macros,__native-fixture-support
 set -euo pipefail
 target_dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_clock.so' -o -name 'libmodule_clock.dylib' \) -print -quit)

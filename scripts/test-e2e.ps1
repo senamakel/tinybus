@@ -63,7 +63,7 @@ $env:TINYBUS_TEST_MODULE = $module
 $env:TINYBUS_TEST_MODULE_TWO = $moduleTwo
 $env:TINYBUS_TEST_WRONG_TARGET = $wrongTarget
 $env:TINYBUS_TEST_MODULE_DIRECTORY = $mixed
-cargo test --locked --no-default-features --workspace --features modules,macros,test-support,__native-fixture-support -- --ignored --skip terminal_runtime_tests::compiled_native_
+cargo test --locked --no-default-features --workspace --features uds,modules,macros,test-support,__native-fixture-support -- --ignored --skip terminal_runtime_tests::compiled_native_
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 # Retained fixture owners require a fresh process for each SDK scenario.
 $testList = cargo test --locked -p tinybus-module --features __native-fixture-support,tinybus/macros -- --list --ignored
@@ -76,6 +76,6 @@ foreach ($line in $testList) {
 }
 # Directory admission against the real ACLs: a bundle Everyone can
 # write falls back to the verified release cache.
-cargo test --locked --no-default-features --features modules,macros admission_tests -- --include-ignored
+cargo test --locked --no-default-features --features uds,modules,macros admission_tests -- --include-ignored
 
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -415,10 +415,10 @@ mod resolver {
 
         let source = PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
         let hash = crate::module::hash::file_hex(std::fs::File::open(&source).unwrap()).unwrap();
-        let root = tempfile::tempdir().unwrap();
-        // macOS exposes `/tmp` through a symlink. ModuleHost deliberately
-        // rejects symlinked search-path components, so use the resolved
-        // temporary directory as the artifact root on every platform.
+        // Keep the artifact below the checkout: macOS's system temp path can
+        // include symlinked ancestors, which ModuleHost correctly refuses.
+        let working_dir = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        let root = tempfile::tempdir_in(working_dir).unwrap();
         let root_path = std::fs::canonicalize(root.path()).unwrap();
         #[cfg(unix)]
         {
