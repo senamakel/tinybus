@@ -84,7 +84,7 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     // Other ignored loader tests attach module_clock to a process-shared
     // runtime under the same well-known bus name. Give this strict-call test
     // its own host so parallel test execution cannot race that admission.
-    let runtime = Box::leak(Box::new(
+    let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
         crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None)
             .unwrap(),
     ));
