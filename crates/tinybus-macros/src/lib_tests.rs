@@ -112,6 +112,13 @@ fn attributes_and_interface_names_are_validated() {
         "ai.tinyhumans.Example"
     );
     assert!(interface_name(&args("other = \"value\"")).is_err());
+    assert_eq!(
+        interface_name(&args(
+            "name = PATH, name = 7, name = \"ai.tinyhumans.Valid\""
+        ))
+        .unwrap(),
+        "ai.tinyhumans.Valid"
+    );
 
     let declared = implementation(
         "impl Example { #[tinybus(skip, confidential, name = \"WireName\")] async fn call(&self) -> tinybus::Result<()> { Ok(()) } }",

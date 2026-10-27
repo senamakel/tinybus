@@ -494,25 +494,6 @@ mod resolver {
             assets: &[],
         }));
         let runtime = shared_runtime();
-        let binding = Arc::new(
-            runtime
-                .host()
-                .prepare_host_callbacks(vec![HostCallbackEndpoint {
-                    path: "/callback".parse().unwrap(),
-                    interface: "org.example.Callback".parse().unwrap(),
-                    members: vec!["Observe".parse().unwrap()],
-                }])
-                .await
-                .unwrap(),
-        );
-        let guard = binding.guard();
-        binding
-            .serve_at(
-                "/callback".parse().unwrap(),
-                ResolverCallback("org.example.Callback".parse().unwrap()),
-            )
-            .await
-            .unwrap();
         let resolver = fixture(
             record,
             true,
@@ -525,12 +506,40 @@ mod resolver {
             None,
         )
         .resolver;
-        let config = serde_json::json!({ "host": binding.unique_name() });
-
-        resolver
-            .ensure_loaded_with_host_callbacks(record.id, binding.clone(), config.clone())
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let prepare_attempts = Arc::clone(&attempts);
+        let binding = resolver
+            .ensure_loaded_with_host_callback_factory(record.id, move |_| {
+                let attempts = Arc::clone(&prepare_attempts);
+                async move {
+                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let binding = Arc::new(
+                        runtime
+                            .host()
+                            .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                                path: "/callback".parse().unwrap(),
+                                interface: "org.example.Callback".parse().unwrap(),
+                                members: vec!["Observe".parse().unwrap()],
+                            }])
+                            .await
+                            .map_err(|error| error.to_string())?,
+                    );
+                    binding
+                        .serve_at(
+                            "/callback".parse().unwrap(),
+                            ResolverCallback("org.example.Callback".parse().unwrap()),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let config = serde_json::json!({ "host": binding.unique_name() });
+                    Ok((binding, config))
+                }
+            })
             .await
             .unwrap();
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let guard = binding.guard();
+        let config = serde_json::json!({ "host": binding.unique_name() });
         let info = runtime
             .host()
             .list()

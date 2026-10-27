@@ -421,6 +421,40 @@ async fn callback_release_loader_skips_unbuildable_bundle_and_cache_paths() {
 }
 
 #[tokio::test]
+async fn callback_release_loader_skips_bundle_candidates_without_an_archive_or_marker() {
+    let runtime = crate::module::ModuleRuntime::start(
+        &crate::module::RuntimeNames {
+            thread: "callback-empty-bundle-candidate-test".into(),
+            worker: "callback-empty-bundle-candidate-worker".into(),
+        },
+        None,
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let assets = [ASSET];
+    let plan = plan(&assets, cache.path(), Some(bundle.path()));
+    let mut attempts = 0;
+    let Err(error) = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        |_| {
+            attempts += 1;
+            async { Err("an absent bundle must not prepare a callback".into()) }
+        },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    else {
+        panic!("an uncached candidate should not be admitted");
+    };
+
+    assert!(error.contains("downloads are disabled"), "{error}");
+    assert_eq!(attempts, 0);
+}
+
+#[tokio::test]
 async fn callback_release_loader_refuses_a_present_bundle_with_an_invalid_marker() {
     use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
     use std::sync::Arc;
