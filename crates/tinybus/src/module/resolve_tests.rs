@@ -658,6 +658,27 @@ mod resolver {
             .await
             .unwrap();
         assert!(Arc::ptr_eq(&binding, &repeated));
+
+        let direct_resolver = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: source.to_string_lossy().into_owned(),
+                },
+            )]),
+            None,
+        )
+        .resolver;
+        direct_resolver
+            .ensure_loaded_with_host_callbacks(
+                record.id,
+                Arc::clone(&binding),
+                serde_json::json!({}),
+            )
+            .await
+            .expect("the direct callback API reuses the retained binding");
     }
 
     fn admitted_info(record: &ReleaseRecord, state: ModuleState) -> ModuleInfo {
