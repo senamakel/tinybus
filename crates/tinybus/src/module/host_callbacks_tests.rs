@@ -1,7 +1,7 @@
 use super::*;
 use crate::message::Message;
 use crate::router::{MatchRule, Router};
-use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, atomic::AtomicUsize};
 
 fn endpoint() -> HostCallbackEndpoint {
     HostCallbackEndpoint {
@@ -23,6 +23,27 @@ fn stream_endpoint() -> HostStreamCallbackEndpoint {
         interface: "org.example.Callback".parse().unwrap(),
         members: vec!["Transfer".parse().unwrap()],
     }
+}
+
+#[tokio::test]
+async fn bundled_callback_loader_rejects_missing_or_wrong_digest_marker() {
+    let host = ModuleHost::new(Broker::new());
+    let binding = Arc::new(host.prepare_host_callbacks(vec![endpoint()]).await.unwrap());
+    let directory = tempfile::tempdir().unwrap();
+
+    let error = host
+        .load_bundled_marked_with_host_callbacks(
+            directory.path(),
+            "demo.tar.gz",
+            &"a".repeat(64),
+            serde_json::json!({}),
+            &binding,
+            ("org.example.Demo", "/org/example/Demo"),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("digest marker"), "{error}");
 }
 
 #[derive(Clone)]
