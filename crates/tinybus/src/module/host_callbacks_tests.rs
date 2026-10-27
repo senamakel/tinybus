@@ -1615,7 +1615,7 @@ async fn host_stream_callbacks_are_bound_to_the_declared_module_peer() {
             .call::<serde_json::Value>("Transfer", serde_json::json!({ "ok": true }))
             .await
             .unwrap(),
-        serde_json::json!({ "ok": true })
+        serde_json::json!([{ "ok": true }])
     );
 
     let mut module_to_host = module
