@@ -11,10 +11,13 @@ async fn a_local_artifact_is_loaded_and_reported_ready() {
     Resolver::load_local(&runtime, &artifact, "clock", serde_json::Value::Null).unwrap();
 
     let loaded = runtime.host().list();
-    assert!(loaded.iter().any(|info| {
-        info.manifest.bus_name.as_str() == "ai.tinyhumans.openhuman.Clock"
-            && info.manifest.object_path.as_str() == "/ai/tinyhumans/openhuman/Clock"
-    }), "loaded modules: {loaded:#?}");
+    assert!(
+        loaded.iter().any(|info| {
+            info.manifest.bus_name.as_str() == "ai.tinyhumans.openhuman.Clock"
+                && info.manifest.object_path.as_str() == "/ai/tinyhumans/openhuman/Clock"
+        }),
+        "loaded modules: {loaded:#?}"
+    );
 }
 
 #[cfg(unix)]
