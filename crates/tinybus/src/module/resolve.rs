@@ -115,17 +115,22 @@ pub(crate) fn resolve(
     manifests: &[ModuleManifest],
     initially_available: &HashSet<String>,
 ) -> LoadOrder {
-    let duplicate_modules = duplicates(manifests.iter().map(|manifest| &manifest.module.name));
-    let duplicate_bus_names = duplicates(manifests.iter().map(|manifest| &manifest.bus_name));
+    let duplicate_modules = duplicates(
+        manifests
+            .iter()
+            .map(|manifest| manifest.module.name.as_str()),
+    );
+    let duplicate_bus_names =
+        duplicates(manifests.iter().map(|manifest| manifest.bus_name.as_str()));
     let mut unresolved = Vec::new();
     let mut pending = Vec::new();
     for (index, manifest) in manifests.iter().enumerate() {
-        if duplicate_modules.contains(&manifest.module.name) {
+        if duplicate_modules.contains(manifest.module.name.as_str()) {
             unresolved.push((
                 index,
                 "two artifacts declare the same module name".to_string(),
             ));
-        } else if duplicate_bus_names.contains(&manifest.bus_name) {
+        } else if duplicate_bus_names.contains(manifest.bus_name.as_str()) {
             unresolved.push((index, "two modules claim the same bus name".to_string()));
         } else {
             pending.push(index);
@@ -199,7 +204,7 @@ pub(crate) fn resolve(
     LoadOrder { order, unresolved }
 }
 
-fn duplicates<T: Eq + std::hash::Hash>(values: impl Iterator<Item = T>) -> HashSet<T> {
+fn duplicates<'a>(values: impl Iterator<Item = &'a str>) -> HashSet<&'a str> {
     let mut counts = HashMap::new();
     for value in values {
         *counts.entry(value).or_insert(0usize) += 1;
