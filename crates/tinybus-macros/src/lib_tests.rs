@@ -67,6 +67,30 @@ fn expansion_generates_dispatch_members_and_strips_helper_attributes() {
 }
 
 #[test]
+fn expansion_skips_nonmethods_and_tracks_confidential_wildcard_arguments() {
+    let expanded = expand(
+        args("name = PATH, name = 7, name = \"ai.tinyhumans.Example\""),
+        implementation(
+            r#"
+                impl Example {
+                    const VERSION: u32 = 1;
+                    #[allow(dead_code)]
+                    fn constructor() -> Self { Self }
+                    #[tinybus(confidential)]
+                    async fn inspect(&self, _: u32) -> tinybus::Result<()> { Ok(()) }
+                }
+                "#,
+        ),
+    )
+    .unwrap()
+    .to_string();
+
+    assert!(expanded.contains("__arg0"));
+    assert!(expanded.contains("matches"));
+    assert!(expanded.contains("Inspect"));
+}
+
+#[test]
 fn expansion_rejects_invalid_interface_method_signatures() {
     let name = args("name = \"ai.tinyhumans.Example\"");
     for source in [
