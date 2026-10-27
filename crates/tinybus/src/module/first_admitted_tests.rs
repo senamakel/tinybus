@@ -347,7 +347,7 @@ async fn callback_release_loader_reports_empty_candidates_without_preparing_auth
         ..plan(&[], std::path::Path::new("."), None)
     };
     let mut attempts = 0;
-    let error = super::load_first_admitted_with_host_callbacks(
+    let Err(error) = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &plan,
         |_| {
@@ -397,14 +397,16 @@ async fn callback_release_loader_skips_unbuildable_bundle_and_cache_paths() {
         "/org/example/Demo",
     )
     .await
-    .unwrap_err();
+    else {
+        panic!("unbuildable candidates should be rejected");
+    };
 
     assert!(error.contains("downloads are disabled"), "{error}");
     assert_eq!(attempts, 0);
 
     let mut downloadable = plan;
     downloadable.allow_download = true;
-    let error = super::load_first_admitted_with_host_callbacks(
+    let Err(error) = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &downloadable,
         |_| async { Err("unbuildable paths must skip the factory".into()) },
@@ -412,7 +414,9 @@ async fn callback_release_loader_skips_unbuildable_bundle_and_cache_paths() {
         "/org/example/Demo",
     )
     .await
-    .unwrap_err();
+    else {
+        panic!("invalid installer marker should be rejected");
+    };
     assert!(error.contains("restart the app"), "{error}");
 }
 
