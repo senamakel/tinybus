@@ -1212,6 +1212,52 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn a_blocking_loader_runtime_failure_is_terminal_and_retryable_only_after_restart() {
+        let record = record("resolver_blocking_runtime_failure");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let runtime_calls = Arc::clone(&calls);
+        let resolver = Resolver::new(ResolverInputs {
+            enabled: true,
+            install_dir: None,
+            allow_download: false,
+            bundled_dir: None,
+            sources: HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: "/unused/blocked-module.so".to_owned(),
+                },
+            )]),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
+            search_skip: Vec::new(),
+            gate: None,
+            on_resolved: None,
+            records: vec![record],
+            terminal_marker: "This is terminal for the running process".to_owned(),
+            runtime: Arc::new(move || {
+                let calls = Arc::clone(&runtime_calls);
+                Box::pin(async move {
+                    if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        Ok(shared_runtime())
+                    } else {
+                        Err(crate::Error::failed("runtime temporarily unavailable"))
+                    }
+                })
+            }),
+            module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
+            reporter: Arc::new(FailureReporter::new(Arc::new(Recording::default()))),
+        });
+
+        let error = resolver.ensure_loaded(record.id).await.unwrap_err();
+
+        assert!(error.contains("the module bus could not start"), "{error}");
+        assert!(error.contains("restart the app to try again"), "{error}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
+    }
+
+    #[tokio::test]
     async fn ensure_loaded_rechecks_host_after_search_before_touching_the_release_cache() {
         let record = record("resolver_search_raced_module");
         let dir = tempfile::tempdir().unwrap();
