@@ -434,23 +434,27 @@ async fn callback_release_loader_skips_bundle_candidates_without_an_archive_or_m
     let cache = tempfile::tempdir().unwrap();
     let assets = [ASSET];
     let plan = plan(&assets, cache.path(), Some(bundle.path()));
-    let mut attempts = 0;
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let prepare_attempts = std::sync::Arc::clone(&attempts);
     let host = runtime.host();
     let Err(error) = super::load_first_admitted_with_host_callbacks(
         host,
         &plan,
-        |_| async {
-            attempts += 1;
-            let binding = std::sync::Arc::new(
-                host.prepare_host_callbacks(vec![crate::module::HostCallbackEndpoint {
-                    path: "/callback".parse().unwrap(),
-                    interface: "org.example.Callback".parse().unwrap(),
-                    members: vec!["Observe".parse().unwrap()],
-                }])
-                .await
-                .unwrap(),
-            );
-            Ok((binding, serde_json::json!({})))
+        move |_| {
+            let attempts = std::sync::Arc::clone(&prepare_attempts);
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let binding = std::sync::Arc::new(
+                    host.prepare_host_callbacks(vec![crate::module::HostCallbackEndpoint {
+                        path: "/callback".parse().unwrap(),
+                        interface: "org.example.Callback".parse().unwrap(),
+                        members: vec!["Observe".parse().unwrap()],
+                    }])
+                    .await
+                    .unwrap(),
+                );
+                Ok((binding, serde_json::json!({})))
+            }
         },
         "org.example.Demo",
         "/org/example/Demo",
@@ -462,7 +466,7 @@ async fn callback_release_loader_skips_bundle_candidates_without_an_archive_or_m
 
     assert!(error.contains("downloads are disabled"), "{error}");
     assert!(!error.contains("installer bundle"), "{error}");
-    assert_eq!(attempts, 1);
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
