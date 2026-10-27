@@ -593,8 +593,6 @@ mod resolver {
 
     #[tokio::test]
     async fn callback_load_rejects_a_preloaded_module_without_its_binding() {
-        use crate::module::HostCallbackEndpoint;
-
         let record = record("resolver_callback_preloaded_without_binding");
         let runtime = shared_runtime();
         let mut manifest = super::module(record.id, &[], &[]);
@@ -612,17 +610,6 @@ mod resolver {
                 serde_json::Value::Null,
             )
             .unwrap();
-        let binding = Arc::new(
-            runtime
-                .host()
-                .prepare_host_callbacks(vec![HostCallbackEndpoint {
-                    path: "/callback".parse().unwrap(),
-                    interface: "org.example.Callback".parse().unwrap(),
-                    members: vec!["Observe".parse().unwrap()],
-                }])
-                .await
-                .unwrap(),
-        );
         let f = fixture(
             record,
             true,
@@ -637,7 +624,9 @@ mod resolver {
 
         let error = f
             .resolver
-            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::Value::Null)
+            .ensure_loaded_with_host_callback_factory(record.id, |_| async {
+                panic!("a preloaded module without a binding must reject the factory")
+            })
             .await
             .unwrap_err();
 
