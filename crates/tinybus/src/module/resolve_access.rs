@@ -1,13 +1,13 @@
 //! Adapter from the module resolver to configuration-aware module access.
 
 use super::Resolver;
-use crate::Proxy;
-use crate::module::ReleaseRecord;
 use crate::module::client::{
     AccessFuture, ModuleAccess, ProxyFailure, ReadinessFailure, ReconfigureFailure,
 };
 use crate::module::failure::FailureReporter;
 use crate::module::resolution;
+use crate::module::ReleaseRecord;
+use crate::Proxy;
 
 pub(in crate::module) fn reconfigure_failure(error: &crate::Error) -> ReconfigureFailure {
     match error {

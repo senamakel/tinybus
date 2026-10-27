@@ -1,6 +1,6 @@
-use super::{ReleaseAsset, ReleasePlan, load_first_admitted};
+use super::{load_first_admitted, ReleaseAsset, ReleasePlan};
 use crate::broker::Broker;
-use crate::module::{ModuleHost, artifact_dir};
+use crate::module::{artifact_dir, ModuleHost};
 
 const ASSET: ReleaseAsset<'static> = ReleaseAsset {
     host_key: "ubuntu-24.04-x86_64",
@@ -581,19 +581,17 @@ async fn callback_release_loader_admits_a_pinned_installer_module_and_retains_it
     .unwrap();
 
     assert_eq!(info.manifest.bus_name.as_str(), "org.example.EagerCallback");
-    assert!(
-        runtime
-            .host()
-            .retains_host_callback_binding("org.example.EagerCallback", &selected)
-    );
+    assert!(runtime
+        .host()
+        .retains_host_callback_binding("org.example.EagerCallback", &selected));
 }
 
 #[tokio::test]
 async fn callback_release_loader_reports_uncached_candidate_when_downloads_are_disabled() {
     use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
     use std::sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     };
 
     #[derive(Clone)]

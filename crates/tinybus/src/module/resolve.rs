@@ -35,8 +35,8 @@ use crate::module::platform::host_candidates;
 use crate::module::resolution::{self, Claim, Resolution, ResolutionState, Waited};
 use crate::module::runtime::ModuleRuntime;
 use crate::module::{
-    Availability, HostCallbackBinding, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord,
-    SearchPathConfig, load_first_admitted, prune_stale_versions,
+    load_first_admitted, prune_stale_versions, Availability, HostCallbackBinding, LinkedModule,
+    ReleaseAsset, ReleasePlan, ReleaseRecord, SearchPathConfig,
 };
 
 type HostCallbackFactory = Arc<

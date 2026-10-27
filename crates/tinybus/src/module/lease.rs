@@ -8,11 +8,11 @@ use super::runtime::ModuleRuntime;
 use std::{
     any::Any,
     future::Future,
-    panic::{AssertUnwindSafe, catch_unwind},
+    panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
     sync::{
-        Mutex,
         atomic::{AtomicUsize, Ordering},
+        Mutex,
     },
 };
 #[cfg(feature = "modules")]
@@ -487,8 +487,8 @@ impl ModuleRuntime {
         policy: RetryPolicy,
         reporter: R,
     ) -> impl Future<Output = Result<RuntimeLease<D::Object, D::Error>, LeaseError<D::Error>>>
-    + Send
-    + 'static
+           + Send
+           + 'static
     where
         D: RuntimeLeaseDriver,
         F: FnOnce(&D::Reservation, &D::Object) -> Result<I, D::Error> + Send + 'static,

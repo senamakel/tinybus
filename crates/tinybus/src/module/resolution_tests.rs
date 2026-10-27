@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use super::{Claim, Resolution, ResolutionState, ResolutionTable, Waited, global};
+use super::{global, Claim, Resolution, ResolutionState, ResolutionTable, Waited};
 
 fn run_claim(
     table: &ResolutionTable,

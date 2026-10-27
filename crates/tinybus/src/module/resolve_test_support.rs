@@ -1,8 +1,8 @@
 //! Shared fixtures for resolver tests.
 
 use super::*;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use crate::module::failure::{FailureReport, FailureSink};
 use crate::module::runtime::RuntimeNames;

@@ -1,6 +1,6 @@
 //! Native SDK reload lifecycle regressions using the real compiled clock fixture.
 use super::*;
-use crate::{Connection, transport::memory::MemoryBus};
+use crate::{transport::memory::MemoryBus, Connection};
 
 #[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -139,19 +139,15 @@ async fn native_replacement_logs_and_sanitized_panics_use_only_its_original_host
         .unwrap();
     let first = ModuleHost::new(broker.clone());
     let first_key = observed_native(&first, &artifact, "first:");
-    assert!(
-        proxy
-            .call::<String>("Now", ())
-            .await
-            .unwrap()
-            .starts_with("first:")
-    );
+    assert!(proxy
+        .call::<String>("Now", ())
+        .await
+        .unwrap()
+        .starts_with("first:"));
     let first_lines = recorded_lines(first_key);
-    assert!(
-        first_lines
-            .iter()
-            .any(|line| line.contains("clock fixture served"))
-    );
+    assert!(first_lines
+        .iter()
+        .any(|line| line.contains("clock fixture served")));
     first.shutdown(Duration::from_secs(3)).await;
     tokio::time::timeout(Duration::from_secs(3), async {
         while caller
@@ -171,13 +167,11 @@ async fn native_replacement_logs_and_sanitized_panics_use_only_its_original_host
     let second = ModuleHost::new(broker);
     let second_key = observed_native(&second, &artifact, "second:");
     assert_ne!(first_key, second_key);
-    assert!(
-        proxy
-            .call::<String>("Now", ())
-            .await
-            .unwrap()
-            .starts_with("second:")
-    );
+    assert!(proxy
+        .call::<String>("Now", ())
+        .await
+        .unwrap()
+        .starts_with("second:"));
     assert!(proxy.call::<serde_json::Value>("Panic", ()).await.is_err());
     let first_lines = recorded_lines(first_key);
     let second_lines = recorded_lines(second_key);
@@ -188,21 +182,15 @@ async fn native_replacement_logs_and_sanitized_panics_use_only_its_original_host
         first_count,
         "B must not call A's original logging callback"
     );
-    assert!(
-        second_lines
-            .iter()
-            .any(|line| line.contains("clock fixture served"))
-    );
-    assert!(
-        second_lines
-            .iter()
-            .any(|line| line.contains("module panicked at"))
-    );
-    assert!(
-        second_lines
-            .iter()
-            .all(|line| !line.contains("secret-token"))
-    );
+    assert!(second_lines
+        .iter()
+        .any(|line| line.contains("clock fixture served")));
+    assert!(second_lines
+        .iter()
+        .any(|line| line.contains("module panicked at")));
+    assert!(second_lines
+        .iter()
+        .all(|line| !line.contains("secret-token")));
 }
 
 #[test]

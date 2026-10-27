@@ -275,7 +275,7 @@ unsafe extern "C" fn linked_ordinary_init(
 
 #[cfg(feature = "modules")]
 fn linked_ordinary_factory() -> crate::Result<crate::module::LinkedModule> {
-    use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, PanicPolicy};
+    use crate::module::manifest::{ModuleIdentity, PanicPolicy, MANIFEST_SCHEMA};
     use crate::{BusName, ObjectPath, Version};
 
     Ok(crate::module::LinkedModule {
@@ -400,7 +400,7 @@ unsafe extern "C" fn resolver_linked_init(
 
 #[cfg(feature = "modules")]
 fn resolver_linked_factory() -> crate::Result<crate::module::LinkedModule> {
-    use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, PanicPolicy};
+    use crate::module::manifest::{ModuleIdentity, PanicPolicy, MANIFEST_SCHEMA};
     use crate::{BusName, ObjectPath, Version};
 
     RESOLVER_LINKED_FACTORY_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -437,8 +437,8 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     use crate::module::runtime::{ModuleRuntime, RuntimeNames};
     use crate::module::{Availability, LinkedRegistry, ModuleSource, Resolver, ResolverInputs};
     use std::collections::HashMap;
-    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::OnceLock;
 
     // Warm the executable digest through a real linked admission on a distinct
     // record. The resolver case below is about preserving cold ModuleRuntime
@@ -1033,8 +1033,8 @@ async fn ordinary_binding_refuses_an_unsupported_resolver_without_proxy_or_busin
     use crate::module::runtime::{ModuleRuntime, RuntimeNames};
     use crate::module::{Availability, LinkedRegistry, Resolver, ResolverInputs};
     use std::collections::HashMap;
-    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::OnceLock;
 
     static RECORD: ReleaseRecord = ReleaseRecord {
         id: "ordinary-binding-unsupported",

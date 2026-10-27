@@ -3,8 +3,8 @@ use super::*;
 // RuntimeLease lifecycle and callback ownership behavior tests.
 
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -93,12 +93,12 @@ impl RuntimeLeaseDriver for ControlledDriver {
         if self.address_error.load(Ordering::Acquire) {
             return Err(DriverError("private address error detail"));
         }
-        assert!(Arc::ptr_eq(&self.identity.0, &reservation.0.0));
+        assert!(Arc::ptr_eq(&self.identity.0, &reservation.0 .0));
         Ok((
             CALLBACK_NAME.parse().unwrap(),
             format!(
                 "/ai/tinyhumans/tinybus/tests/RuntimeLease{}",
-                reservation.0.1
+                reservation.0 .1
             )
             .parse()
             .unwrap(),
@@ -285,10 +285,10 @@ impl Harness {
     ) -> impl std::future::Future<
         Output = Result<RuntimeLease<Object, DriverError>, LeaseError<DriverError>>,
     > + Send
-    + 'static {
+           + 'static {
         let calls = self.callback_calls.clone();
         self.open_with(move |reservation, object| {
-            if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
+            if !Arc::ptr_eq(&reservation.0 .0, &object.0 .0) {
                 return Err(DriverError("reservation/object mismatch"));
             }
             Ok(Callback(calls))
@@ -301,7 +301,7 @@ impl Harness {
     ) -> impl std::future::Future<
         Output = Result<RuntimeLease<Object, DriverError>, LeaseError<DriverError>>,
     > + Send
-    + 'static
+           + 'static
     where
         F: FnOnce(&Reservation, &Object) -> Result<Callback, DriverError> + Send + 'static,
     {
@@ -320,7 +320,7 @@ impl Harness {
     ) -> impl std::future::Future<
         Output = Result<RuntimeLease<Object, DriverError>, LeaseError<DriverError>>,
     > + Send
-    + 'static
+           + 'static
     where
         F: FnOnce(&Reservation, &Object) -> Result<Callback, DriverError> + Send + 'static,
     {
@@ -338,7 +338,7 @@ impl Harness {
     ) -> impl std::future::Future<
         Output = Result<RuntimeLease<Object, DriverError>, LeaseError<DriverError>>,
     > + Send
-    + 'static
+           + 'static
     where
         F: FnOnce(&Reservation, &Object) -> Result<Callback, DriverError> + Send + 'static,
         R: Fn(LeaseReport) + Send + Sync + 'static,
@@ -365,7 +365,7 @@ impl Harness {
         let calls = self.callback_calls.clone();
         let opening = tokio::spawn(self.open_with_policy(
             move |reservation, object| {
-                if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
+                if !Arc::ptr_eq(&reservation.0 .0, &object.0 .0) {
                     return Err(DriverError("reservation/object mismatch"));
                 }
                 Ok(Callback(calls))
@@ -477,7 +477,7 @@ async fn acknowledged_close_removes_only_its_exact_callback_registration() {
     let opening = tokio::spawn(harness.runtime.lease(
         second_driver.clone(),
         move |reservation: &Reservation, object: &Object| {
-            if !Arc::ptr_eq(&reservation.0.0, &object.0.0) {
+            if !Arc::ptr_eq(&reservation.0 .0, &object.0 .0) {
                 return Err(DriverError("reservation/object mismatch"));
             }
             Ok(Callback(callback_calls))
@@ -969,11 +969,9 @@ async fn callback_factory_error_rolls_back_before_start_or_export() {
         error.driver_error().unwrap().0,
         "private callback factory detail"
     );
-    assert!(
-        !error
-            .to_string()
-            .contains("private callback factory detail")
-    );
+    assert!(!error
+        .to_string()
+        .contains("private callback factory detail"));
     assert!(harness.calls.try_recv().is_err());
     assert!(harness.callback().await.is_err());
 }
@@ -1147,7 +1145,7 @@ async fn reporter_panic_cannot_interrupt_acknowledged_callback_withdrawal() {
     let opening = tokio::spawn(
         harness.open_with_policy_and_reporter(
             move |reservation, object| {
-                assert!(Arc::ptr_eq(&reservation.0.0, &object.0.0));
+                assert!(Arc::ptr_eq(&reservation.0 .0, &object.0 .0));
                 Ok(Callback(calls))
             },
             RetryPolicy::new(
@@ -1306,7 +1304,7 @@ async fn callback_destructor_panic_does_not_interrupt_acknowledged_withdrawal() 
 async fn acknowledged_stop_is_the_only_event_that_withdraws_the_callback() {
     let mut harness = Harness::new();
     let lease = harness.opened().await;
-    assert_eq!(lease.object().0.1, 1);
+    assert_eq!(lease.object().0 .1, 1);
     assert_eq!(harness.callback().await.unwrap(), serde_json::json!(1));
 
     let closing = tokio::spawn(async move { lease.close().await });

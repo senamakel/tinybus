@@ -1,10 +1,10 @@
 //! Host module tests, including raw-vtable fixtures and real-loader cases.
 
 use super::*;
-use crate::Connection;
 use crate::module::abi::TbAbiDescriptor;
 use crate::module::runtime::{ModuleRuntime, RuntimeNames};
 use crate::transport::memory::{MemoryBus, MemoryTransport};
+use crate::Connection;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
@@ -185,12 +185,11 @@ async fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
 
     host.set_pre_ready_confidential_routes(vec![route.clone()])
         .expect("one exact route is valid");
-    assert!(
-        host.set_pre_ready_confidential_routes(vec![route.clone(), route.clone()])
-            .is_err()
-    );
-    assert!(
-        host.set_pre_ready_confidential_routes(
+    assert!(host
+        .set_pre_ready_confidential_routes(vec![route.clone(), route.clone()])
+        .is_err());
+    assert!(host
+        .set_pre_ready_confidential_routes(
             (0..=MAX_PRE_READY_CONFIDENTIAL_ROUTES)
                 .map(|index| PreReadyConfidentialRoute {
                     path: ObjectPath::new(format!("/ai/tinyhumans/storage/item{index}")).unwrap(),
@@ -199,8 +198,7 @@ async fn pre_ready_route_policy_is_bounded_unique_and_fixed_before_admission() {
                 })
                 .collect(),
         )
-        .is_err()
-    );
+        .is_err());
 
     host.attach_linked_with_config(
         LinkedModule {
@@ -278,10 +276,9 @@ async fn linked_module_is_admitted_without_a_library_file_and_attested_as_host_c
         Some("clock")
     );
     assert!(host.module_for_sender(&info.manifest.bus_name).is_none());
-    assert!(
-        host.sender_for_module("ai.tinyhumans.module.Clock")
-            .is_none()
-    );
+    assert!(host
+        .sender_for_module("ai.tinyhumans.module.Clock")
+        .is_none());
     assert!(lookup.module_for_sender(&info.manifest.bus_name).is_none());
 
     let connection = Connection::connect(bus.connect().await.unwrap())
@@ -372,11 +369,9 @@ fn linked_module_with_an_unmet_required_interface_is_refused_before_init() {
             serde_json::json!({}),
         )
         .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("required interface has no provider")
-    );
+    assert!(error
+        .to_string()
+        .contains("required interface has no provider"));
     assert!(host.list().is_empty());
 }
 
@@ -697,7 +692,7 @@ async fn a_lazy_manifest_registers_an_unmapped_library_and_the_first_call_loads_
 #[cfg(not(windows))]
 #[tokio::test]
 async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_pin_differs() {
-    use crate::module::{ReleaseAsset, ReleasePlan, artifact_dir, load_first_admitted};
+    use crate::module::{artifact_dir, load_first_admitted, ReleaseAsset, ReleasePlan};
 
     let bundled = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let user_cache = tempfile::tempdir().unwrap();
@@ -781,7 +776,7 @@ async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_p
 #[cfg(not(windows))]
 #[tokio::test]
 async fn a_bundle_marker_without_an_allowlist_is_refused_rather_than_loaded_unhashed() {
-    use crate::module::{ReleaseAsset, ReleasePlan, artifact_dir, load_first_admitted};
+    use crate::module::{artifact_dir, load_first_admitted, ReleaseAsset, ReleasePlan};
 
     let bundled = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let user_cache = tempfile::tempdir().unwrap();
@@ -1275,19 +1270,17 @@ async fn admission_rejects_duplicate_names_bad_initializers_collisions_and_missi
     let host = ModuleHost::new(Broker::new());
     let descriptor = TbAbiDescriptor::current("clock", "0.1.0");
     unsafe { host.attach_raw("clock.so", descriptor, manifest(), lazy_echo_init) }.unwrap();
-    assert!(
-        unsafe {
-            host.attach_raw(
-                "again.so",
-                TbAbiDescriptor::current("clock", "0.1.0"),
-                manifest(),
-                lazy_echo_init,
-            )
-        }
-        .unwrap_err()
-        .to_string()
-        .contains("already loaded")
-    );
+    assert!(unsafe {
+        host.attach_raw(
+            "again.so",
+            TbAbiDescriptor::current("clock", "0.1.0"),
+            manifest(),
+            lazy_echo_init,
+        )
+    }
+    .unwrap_err()
+    .to_string()
+    .contains("already loaded"));
 
     let failed = unsafe {
         host.attach_raw(
@@ -1334,12 +1327,11 @@ async fn admission_rejects_duplicate_names_bad_initializers_collisions_and_missi
             optional: false,
             reason: String::new(),
         });
-    assert!(
-        host.ensure_dependencies(&dependency, Path::new("dependent.so"))
-            .unwrap_err()
-            .to_string()
-            .contains("no provider")
-    );
+    assert!(host
+        .ensure_dependencies(&dependency, Path::new("dependent.so"))
+        .unwrap_err()
+        .to_string()
+        .contains("no provider"));
 }
 
 #[test]
@@ -1383,15 +1375,13 @@ fn a_descriptor_smaller_than_the_host_expects_is_refused_and_a_larger_one_is_acc
     let host = ModuleHost::new(Broker::new());
     let mut descriptor = TbAbiDescriptor::current("clock", "0.1.0");
     descriptor.descriptor_size = size_of::<TbAbiDescriptor>() as u32 - 1;
-    assert!(
-        host.validate(Path::new("clock.so"), &descriptor, &manifest())
-            .is_err()
-    );
+    assert!(host
+        .validate(Path::new("clock.so"), &descriptor, &manifest())
+        .is_err());
     descriptor.descriptor_size = size_of::<TbAbiDescriptor>() as u32 + 64;
-    assert!(
-        host.validate(Path::new("clock.so"), &descriptor, &manifest())
-            .is_ok()
-    );
+    assert!(host
+        .validate(Path::new("clock.so"), &descriptor, &manifest())
+        .is_ok());
 }
 
 #[test]
@@ -1458,18 +1448,14 @@ fn a_module_built_by_a_different_rustc_is_refused_in_strict_mode_and_only_warned
     let mut descriptor = TbAbiDescriptor::current("clock", "0.1.0");
     descriptor.rustc_version = [0; 48];
     descriptor.rustc_version[..5].copy_from_slice(b"0.0.0");
-    assert!(
-        permissive
-            .validate(Path::new("clock.so"), &descriptor, &manifest())
-            .is_ok()
-    );
-    assert!(
-        strict
-            .validate(Path::new("clock.so"), &descriptor, &manifest())
-            .unwrap_err()
-            .to_string()
-            .contains("strict mode")
-    );
+    assert!(permissive
+        .validate(Path::new("clock.so"), &descriptor, &manifest())
+        .is_ok());
+    assert!(strict
+        .validate(Path::new("clock.so"), &descriptor, &manifest())
+        .unwrap_err()
+        .to_string()
+        .contains("strict mode"));
 }
 
 #[test]
@@ -1486,11 +1472,9 @@ fn a_refusal_names_the_file_but_never_the_path_or_the_descriptor_bytes() {
     std::fs::write(&path, b"not a dynamic library").unwrap();
     let host = ModuleHost::new(Broker::new());
     let error = host.load_file(&path).unwrap_err();
-    assert!(
-        !error
-            .to_string()
-            .contains(&directory.path().display().to_string())
-    );
+    assert!(!error
+        .to_string()
+        .contains(&directory.path().display().to_string()));
     let listed = host.list();
     assert_eq!(listed.len(), 1);
     assert!(matches!(
@@ -1609,12 +1593,10 @@ fn a_module_file_writable_by_everyone_is_refused() {
         .output()
         .expect("icacls is installed on Windows");
     assert!(output.status.success(), "icacls failed: {output:?}");
-    assert!(
-        check_file(&path)
-            .unwrap_err()
-            .to_string()
-            .contains("artifact is writable by another user")
-    );
+    assert!(check_file(&path)
+        .unwrap_err()
+        .to_string()
+        .contains("artifact is writable by another user"));
 }
 
 #[cfg(unix)]
@@ -2011,26 +1993,20 @@ fn module_host_helpers_preserve_safe_names_states_and_allowlist_decisions() {
     assert!(check_file(&module).is_ok());
     let text = directory.join("clock.txt");
     std::fs::write(&text, b"module bytes").unwrap();
-    assert!(
-        check_file(&text)
-            .unwrap_err()
-            .to_string()
-            .contains("extension is not loadable")
-    );
+    assert!(check_file(&text)
+        .unwrap_err()
+        .to_string()
+        .contains("extension is not loadable"));
     std::fs::write(directory.join("modules.toml"), "other = \"00\"\n").unwrap();
-    assert!(
-        check_file(&module)
-            .unwrap_err()
-            .to_string()
-            .contains("absent")
-    );
+    assert!(check_file(&module)
+        .unwrap_err()
+        .to_string()
+        .contains("absent"));
     std::fs::write(directory.join("modules.toml"), "clock = \"not-a-hash\"\n").unwrap();
-    assert!(
-        check_file(&module)
-            .unwrap_err()
-            .to_string()
-            .contains("invalid hash")
-    );
+    assert!(check_file(&module)
+        .unwrap_err()
+        .to_string()
+        .contains("invalid hash"));
     let refused = Error::module_refused(&module, "nope");
     let info = rejection_info(&refused);
     assert!(matches!(info.state, ModuleState::Rejected { .. }));
@@ -2235,11 +2211,9 @@ async fn duplicate_module_declarations_are_reported_without_attaching_either_cop
     let host = ModuleHost::new(Broker::new());
     let scanned = host.scan_dir(directory.path()).unwrap();
     assert_eq!(scanned.len(), 2);
-    assert!(
-        scanned
-            .iter()
-            .all(|info| matches!(info.state, ModuleState::Unresolved { .. }))
-    );
+    assert!(scanned
+        .iter()
+        .all(|info| matches!(info.state, ModuleState::Unresolved { .. })));
     let loaded = host.load_dir(directory.path()).unwrap();
     assert_eq!(loaded.len(), 2);
     assert!(loaded.iter().all(Result::is_err));
@@ -2500,11 +2474,9 @@ impl crate::Interface for NativeContextCallback {
         context: &crate::CallContext,
     ) -> crate::Result<serde_json::Value> {
         assert_eq!(args, serde_json::json!([]));
-        Ok(serde_json::json!(
-            context
-                .authenticated_sender()
-                .expect("native callback is broker routed")
-        ))
+        Ok(serde_json::json!(context
+            .authenticated_sender()
+            .expect("native callback is broker routed")))
     }
 }
 
@@ -2736,12 +2708,10 @@ async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_con
     );
     assert_eq!(module_name, second_module_name);
     assert!(first_proxy.attestation().await.unwrap().is_some());
-    assert!(
-        first_proxy
-            .call::<serde_json::Value>("Inspect", ())
-            .await
-            .is_err()
-    );
+    assert!(first_proxy
+        .call::<serde_json::Value>("Inspect", ())
+        .await
+        .is_err());
     let first_initial: serde_json::Value =
         first_proxy.call_confidential("Inspect", ()).await.unwrap();
     assert_eq!(first_initial["restricted"], true);
@@ -2769,20 +2739,16 @@ async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_con
         .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
         .await
         .unwrap_err();
-    assert!(
-        denied
-            .to_string()
-            .contains("factory context authority unavailable")
-    );
+    assert!(denied
+        .to_string()
+        .contains("factory context authority unavailable"));
     let selected_malformed = first_proxy
         .call_confidential::<serde_json::Value>("Inspect", serde_json::json!("malformed"))
         .await
         .unwrap_err();
-    assert!(
-        selected_malformed
-            .to_string()
-            .contains("expected no arguments")
-    );
+    assert!(selected_malformed
+        .to_string()
+        .contains("expected no arguments"));
 
     first
         .reinitialize(&module_name, serde_json::json!({"restricted":true}))
@@ -2797,12 +2763,10 @@ async fn a_context_factory_cdylib_keeps_instance_state_and_refreshes_trusted_con
         first_initial["factory_id"]
     );
 
-    assert!(
-        first
-            .reinitialize(&module_name, serde_json::json!({"restricted":false}))
-            .await
-            .is_err()
-    );
+    assert!(first
+        .reinitialize(&module_name, serde_json::json!({"restricted":false}))
+        .await
+        .is_err());
     let after_refusal: serde_json::Value =
         first_proxy.call_confidential("Inspect", ()).await.unwrap();
     assert_eq!(after_refusal, after_reinitialize);
@@ -3016,11 +2980,10 @@ async fn fixed_unique_module_calls_are_refused_in_terminal_states_before_detach(
         // Keep the real transport attached while setting its terminal state:
         // this probes the pre-detach window without racing the reader task.
         host.inner.loaded.lock().unwrap()[0].info.state = state;
-        assert!(
-            host.inner
-                .unavailable_for(&client.unique_name().unwrap())
-                .is_none()
-        );
+        assert!(host
+            .inner
+            .unavailable_for(&client.unique_name().unwrap())
+            .is_none());
         assert!(
             matches!(host.inner.unavailable_for(&unique), Some(Error::ModuleUnavailable { state, .. }) if state == expected)
         );
@@ -3108,12 +3071,10 @@ async fn a_verified_cdylib_can_deliver_a_confidential_host_callback() {
     );
     forged.header.sender = Some(module.clone());
     forged.header.confidential = true;
-    assert!(
-        attacker
-            .call_raw(forged, Duration::from_secs(2))
-            .await
-            .is_err()
-    );
+    assert!(attacker
+        .call_raw(forged, Duration::from_secs(2))
+        .await
+        .is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     binding.revoke();
     let revoked = binding
@@ -3281,15 +3242,13 @@ async fn eager_native_setup_callbacks_are_bound_before_ready_and_failures_rollba
                     .unwrap()
                     .owner_of(binding.unique_name())
             );
-            assert!(
-                modules
-                    .reinitialize(
-                        &info.name,
-                        serde_json::json!({"host": ":1.999", "fail": false})
-                    )
-                    .await
-                    .is_err()
-            );
+            assert!(modules
+                .reinitialize(
+                    &info.name,
+                    serde_json::json!({"host": ":1.999", "fail": false})
+                )
+                .await
+                .is_err());
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             let retains_plaintext = {
                 let loaded = modules.inner.loaded.lock().unwrap();

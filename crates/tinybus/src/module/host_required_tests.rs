@@ -21,14 +21,12 @@ fn required() -> ModuleRequirements {
         "clock",
         BusName::new("ai.tinyhumans.module.Clock").unwrap(),
         ObjectPath::new("/ai/tinyhumans/module/Clock").unwrap(),
-        vec![
-            RequiredInterface::new(
-                InterfaceName::new("ai.tinyhumans.module.Clock").unwrap(),
-                VersionRange::new(Version::new(1, 15, 0), Some(Version::new(2, 0, 0))),
-                vec![MemberName::new("RoutedRead").unwrap()],
-            )
-            .unwrap(),
-        ],
+        vec![RequiredInterface::new(
+            InterfaceName::new("ai.tinyhumans.module.Clock").unwrap(),
+            VersionRange::new(Version::new(1, 15, 0), Some(Version::new(2, 0, 0))),
+            vec![MemberName::new("RoutedRead").unwrap()],
+        )
+        .unwrap()],
     )
     .unwrap()
 }
@@ -44,15 +42,14 @@ fn an_unsupported_actual_manifest_is_refused_before_setup() {
         init: counted_setup,
         library_sha256: None,
     };
-    assert!(
-        host.activate_required(
+    assert!(host
+        .activate_required(
             Path::new("clock.so"),
             artifact,
             serde_json::json!({}),
             &required()
         )
-        .is_err()
-    );
+        .is_err());
     assert_eq!(
         SETUPS.load(Ordering::SeqCst),
         0,
@@ -170,21 +167,19 @@ fn invalid_requirements_are_refused_without_echoing_input() {
     assert!(
         ModuleRequirements::new("clock", BusName::new(":1.42").unwrap(), path, vec![]).is_err()
     );
-    assert!(
-        RequiredInterface::new(
-            InterfaceName::new("ai.tinyhumans.module.Clock").unwrap(),
-            VersionRange::new(Version::new(2, 0, 0), Some(Version::new(1, 0, 0))),
-            vec![]
-        )
-        .is_err()
-    );
+    assert!(RequiredInterface::new(
+        InterfaceName::new("ai.tinyhumans.module.Clock").unwrap(),
+        VersionRange::new(Version::new(2, 0, 0), Some(Version::new(1, 0, 0))),
+        vec![]
+    )
+    .is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires TINYBUS_TEST_MODULE to point at the built cdylib"]
 async fn a_real_required_artifact_is_refused_then_admitted_and_serves_confidentially() {
-    use crate::Connection;
     use crate::transport::memory::MemoryBus;
+    use crate::Connection;
     let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
     // Windows CI supplies an owner-only TEMP; the checkout can inherit group
     // write permissions. Canonicalize Unix TEMP to avoid macOS /var symlinks.
@@ -216,21 +211,18 @@ async fn a_real_required_artifact_is_refused_then_admitted_and_serves_confidenti
             "tinybus",
             address.clone(),
             path.clone(),
-            vec![
-                RequiredInterface::new(
-                    InterfaceName::new(address.as_str()).unwrap(),
-                    accepted_interface_versions.clone(),
-                    vec![MemberName::new(method).unwrap()],
-                )
-                .unwrap(),
-            ],
+            vec![RequiredInterface::new(
+                InterfaceName::new(address.as_str()).unwrap(),
+                accepted_interface_versions.clone(),
+                vec![MemberName::new(method).unwrap()],
+            )
+            .unwrap()],
         )
         .unwrap()
     };
-    assert!(
-        host.load_file_with_requirements(&staged, serde_json::json!({}), &required_for("Missing"))
-            .is_err()
-    );
+    assert!(host
+        .load_file_with_requirements(&staged, serde_json::json!({}), &required_for("Missing"))
+        .is_err());
     assert!(host.list().is_empty());
     host.load_file_with_requirements(
         &staged,

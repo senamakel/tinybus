@@ -7,7 +7,7 @@
 //! and run in CI's `modules` job on Linux, macOS and Windows.
 
 use super::*;
-use crate::module::{ReleaseAsset, ReleasePlan, artifact_dir, load_first_admitted};
+use crate::module::{artifact_dir, load_first_admitted, ReleaseAsset, ReleasePlan};
 
 /// A temporary directory's real path. macOS reaches `$TMPDIR` through the
 /// `/var` symlink, which the gate refuses as a non-directory component.

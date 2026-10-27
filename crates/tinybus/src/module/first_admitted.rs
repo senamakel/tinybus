@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use super::cache::{digest_marker_path, secure_release_cache};
 use super::host::is_placement_refusal;
-use super::{CachedRelease, ModuleHost, ModuleInfo, ReleaseAsset, artifact_dir};
+use super::{artifact_dir, CachedRelease, ModuleHost, ModuleInfo, ReleaseAsset};
 
 /// The pinned release and where its artifacts live on this machine.
 #[derive(Debug, Clone, Copy)]
@@ -201,14 +201,14 @@ pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
 where
     F: FnMut(usize) -> Fut,
     Fut: std::future::Future<
-            Output = Result<
-                (
-                    std::sync::Arc<crate::module::HostCallbackBinding>,
-                    serde_json::Value,
-                ),
-                String,
-            >,
+        Output = Result<
+            (
+                std::sync::Arc<crate::module::HostCallbackBinding>,
+                serde_json::Value,
+            ),
+            String,
         >,
+    >,
 {
     let id = plan.id;
     if plan.assets.is_empty() {

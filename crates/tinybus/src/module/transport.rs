@@ -7,16 +7,16 @@ use std::sync::{Arc, Condvar, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{mpsc, Mutex, Notify};
 
 use crate::broker::RestrictedModuleControllerBinding;
 use crate::error::{Error, Result};
 use crate::message::codec::MAX_FRAME_LEN;
 use crate::message::{Message, MessageKind};
 use crate::module::abi::{
-    TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL, TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE,
-    TB_NATIVE_TERMINAL_LIVE, TB_OK, TB_PANICKED, TB_TIMEOUT, TB_UNSUPPORTED, TbHostVtable,
-    TbModuleVtable, TbSlice,
+    TbHostVtable, TbModuleVtable, TbSlice, TB_BACKPRESSURE, TB_BAD_ARGUMENT, TB_BUFFER_TOO_SMALL,
+    TB_CLOSED, TB_MODULE_VTABLE_BASE_SIZE, TB_NATIVE_TERMINAL_LIVE, TB_OK, TB_PANICKED, TB_TIMEOUT,
+    TB_UNSUPPORTED,
 };
 use crate::module::host::PreReadyConfidentialRoute;
 use crate::ports::Transport;

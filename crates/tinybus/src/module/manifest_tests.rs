@@ -74,14 +74,10 @@ fn defaults_make_a_minimal_manifest_safe_to_load() {
 fn peer_manifest_and_interface_lookup_follow_the_declaration() {
     let manifest = manifest();
     assert_eq!(manifest.peer_manifest().name, "example");
-    assert!(
-        manifest
-            .provided(&InterfaceName::new("ai.tinyhumans.Example").unwrap())
-            .is_some()
-    );
-    assert!(
-        manifest
-            .provided(&InterfaceName::new("ai.tinyhumans.Missing").unwrap())
-            .is_none()
-    );
+    assert!(manifest
+        .provided(&InterfaceName::new("ai.tinyhumans.Example").unwrap())
+        .is_some());
+    assert!(manifest
+        .provided(&InterfaceName::new("ai.tinyhumans.Missing").unwrap())
+        .is_none());
 }

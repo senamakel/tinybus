@@ -4,7 +4,7 @@ use crate::ports::{Listener, Transport};
 use crate::transport::memory::MemoryTransport;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
+use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
 
 #[derive(Clone)]
 struct HeldMetadataBus {

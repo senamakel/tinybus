@@ -11,12 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::broker::Broker;
 use crate::build_info;
-use crate::error::{Error, Result, sanitize_untrusted};
-use crate::module::abi::{TB_OK, TbAbiDescriptor, TbModuleInit, TbModuleVtable, field_bytes};
+use crate::error::{sanitize_untrusted, Error, Result};
+use crate::module::abi::{field_bytes, TbAbiDescriptor, TbModuleInit, TbModuleVtable, TB_OK};
 use crate::module::github::CachedRelease;
 use crate::module::host::callbacks::HostCallbackBinding;
 use crate::module::loader::{self, LoadedArtifact};
-use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
+use crate::module::manifest::{ModuleIdentity, ModuleManifest, PanicPolicy, MANIFEST_SCHEMA};
 use crate::module::transport::{ModuleTransport, StopError};
 use crate::module::{LinkedModule, LinkedModuleInitWithSetup, LinkedSetup, ModuleId};
 use crate::name::{BusName, InterfaceName, MemberName, ObjectPath};

@@ -319,7 +319,7 @@ async fn a_short_client_deadline_bounds_readiness_before_argument_serialization(
 #[tokio::test]
 async fn a_lazy_module_that_never_announces_ready_fails_before_serializing_arguments() {
     use crate::module::manifest::{
-        MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy, ProvidedInterface,
+        ModuleIdentity, ModuleManifest, PanicPolicy, ProvidedInterface, MANIFEST_SCHEMA,
     };
     use crate::version::{InterfaceVersion, Version};
 
@@ -496,11 +496,9 @@ async fn strict_attested_detailed_calls_preserve_remote_input_refusals() {
     assert!(!failure.to_string().contains("wallet address secret"));
     let reports = sink.0.lock().unwrap();
     assert_eq!(reports.len(), 2);
-    assert!(
-        reports
-            .iter()
-            .all(|(_, reason)| *reason == Reason::ModuleFault)
-    );
+    assert!(reports
+        .iter()
+        .all(|(_, reason)| *reason == Reason::ModuleFault));
     assert!(!format!("{reports:?}").contains("wallet address secret"));
 }
 
@@ -524,11 +522,9 @@ async fn strict_attested_detailed_calls_preserve_remote_chain_refusals() {
     assert!(!failure.to_string().contains("private configured chain"));
     let reports = sink.0.lock().unwrap();
     assert_eq!(reports.len(), 2);
-    assert!(
-        reports
-            .iter()
-            .all(|(_, reason)| *reason == Reason::ModuleFault)
-    );
+    assert!(reports
+        .iter()
+        .all(|(_, reason)| *reason == Reason::ModuleFault));
     assert!(!format!("{reports:?}").contains("private configured chain"));
 }
 
