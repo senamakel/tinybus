@@ -232,6 +232,10 @@ pub struct ModuleHost {
 
 struct ModuleHostInner {
     broker: Broker,
+    // Callback bindings identify their owning host through this separate
+    // token. Keeping the back-reference out of `ModuleHostInner` avoids a
+    // recursive auto-trait proof through `loaded` bindings.
+    callback_owner: Arc<()>,
     strict: AtomicBool,
     // Admission spans duplicate validation through final insertion; a narrower
     // lock lets two concurrent loads both pass the name check.
@@ -484,6 +488,7 @@ impl ModuleHost {
     pub fn new(broker: Broker) -> Self {
         let inner = Arc::new(ModuleHostInner {
             broker: broker.clone(),
+            callback_owner: Arc::new(()),
             strict: AtomicBool::new(false),
             admission: Mutex::new(()),
             loaded: Mutex::new(Vec::new()),
