@@ -516,7 +516,8 @@ mod resolver {
             .err()
             .expect("the callback factory refusal should fail resolution");
 
-        assert_eq!(error, "callback setup was refused");
+        assert!(error.starts_with("callback setup was refused"), "{error}");
+        assert!(error.contains("restart the app to try again"), "{error}");
         assert_eq!(resolver.state_of(record.id), Availability::Failed);
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
         let cached_error = resolver
