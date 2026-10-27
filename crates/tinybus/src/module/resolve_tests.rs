@@ -718,6 +718,13 @@ mod resolver {
                 .await
                 .unwrap(),
         );
+        binding
+            .serve_at(
+                "/callback".parse().unwrap(),
+                ResolverCallback("org.example.Callback".parse().unwrap()),
+            )
+            .await
+            .unwrap();
         let resolver = fixture(
             record,
             true,
