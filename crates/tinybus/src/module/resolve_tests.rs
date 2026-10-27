@@ -693,6 +693,51 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn cached_ready_callback_resolution_requires_its_retained_binding() {
+        use crate::module::HostCallbackEndpoint;
+
+        let record = record("resolver_cached_callback_without_binding");
+        match resolution::global().claim(record.id) {
+            Claim::Run { sender, .. } => {
+                resolution::global().complete(record.id, Resolution::Ready, sender);
+            }
+            _ => panic!("test id unexpectedly had a resolution"),
+        }
+        let runtime = shared_runtime();
+        let binding = Arc::new(
+            runtime
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        let resolver = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: "/unused/cached-callback-module.so".to_owned(),
+                },
+            )]),
+            None,
+        )
+        .resolver;
+
+        let error = resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::Value::Null)
+            .await
+            .err()
+            .expect("a cached ready slot cannot substitute for its callback binding");
+
+        assert!(error.contains("was loaded without the requested callback binding"));
+    }
+
+    #[tokio::test]
     async fn callback_apis_hide_runtime_startup_details_and_do_not_claim_resolution() {
         use crate::module::HostCallbackEndpoint;
 
