@@ -251,7 +251,16 @@ mod resolver {
         use crate::module::runtime::{ModuleRuntime, RuntimeNames};
 
         let record = record("resolver_foreign_callback_binding");
-        let runtime = shared_runtime();
+        let runtime = Box::leak(Box::new(
+            crate::module::ModuleRuntime::start(
+                &crate::module::RuntimeNames {
+                    thread: "single-callback-local-test".into(),
+                    worker: "single-callback-local-worker".into(),
+                },
+                None,
+            )
+            .unwrap(),
+        ));
         let foreign_runtime = ModuleRuntime::start(
             &RuntimeNames {
                 thread: "tinybus-test-foreign-callback".to_owned(),
@@ -362,18 +371,29 @@ mod resolver {
             )
             .await
             .unwrap();
-        let resolver = fixture(
-            record,
-            true,
-            HashMap::from([(
+        let resolver = Resolver::new(ResolverInputs {
+            enabled: true,
+            install_dir: None,
+            allow_download: false,
+            bundled_dir: None,
+            sources: HashMap::from([(
                 record.id.to_string(),
                 ModuleSource::LocalFile {
                     path: artifact.to_string_lossy().into_owned(),
                 },
             )]),
-            None,
-        )
-        .resolver;
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
+            search_skip: Vec::new(),
+            gate: None,
+            on_resolved: None,
+            records: vec![record],
+            terminal_marker: String::new(),
+            runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+            module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
+            reporter: Arc::new(FailureReporter::new(Arc::new(Recording::default()))),
+        });
 
         resolver
             .ensure_loaded_with_host_callbacks(
