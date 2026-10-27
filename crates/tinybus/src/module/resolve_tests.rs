@@ -513,7 +513,8 @@ mod resolver {
                 }
             })
             .await
-            .unwrap_err();
+            .err()
+            .expect("the callback factory refusal should fail resolution");
 
         assert_eq!(error, "callback setup was refused");
         assert_eq!(resolver.state_of(record.id), Availability::Failed);
@@ -523,7 +524,8 @@ mod resolver {
                 panic!("a cached callback failure must not rerun its factory")
             })
             .await
-            .unwrap_err();
+            .err()
+            .expect("the cached callback refusal should remain a failure");
         assert_eq!(cached_error, error);
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(
