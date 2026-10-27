@@ -195,7 +195,7 @@ type PreparedCallbacks = Result<
     String,
 >;
 type BoxedCallbackPreparer<'a> =
-    dyn FnMut(usize) -> Pin<Box<dyn Future<Output = PreparedCallbacks> + 'a>> + 'a;
+    dyn FnMut(usize) -> Pin<Box<dyn Future<Output = PreparedCallbacks> + Send + 'a>> + Send + 'a;
 
 pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
     host: &ModuleHost,
@@ -211,11 +211,11 @@ pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
     String,
 >
 where
-    F: FnMut(usize) -> Fut,
-    Fut: std::future::Future<Output = PreparedCallbacks>,
+    F: FnMut(usize) -> Fut + Send,
+    Fut: std::future::Future<Output = PreparedCallbacks> + Send,
 {
     let mut boxed_prepare = |attempt| {
-        Box::pin(prepare(attempt)) as Pin<Box<dyn Future<Output = PreparedCallbacks> + '_>>
+        Box::pin(prepare(attempt)) as Pin<Box<dyn Future<Output = PreparedCallbacks> + Send + '_>>
     };
     load_first_admitted_with_host_callbacks_inner(
         host,
