@@ -433,7 +433,7 @@ mod resolver {
         let artifact = module_dir.join(source.file_name().unwrap());
         std::fs::copy(&source, &artifact).unwrap();
         std::fs::write(
-            root_path.join("modules.toml"),
+            module_dir.join("modules.toml"),
             format!(
                 "{:?} = {hash:?}\n",
                 source.file_name().unwrap().to_str().unwrap()
