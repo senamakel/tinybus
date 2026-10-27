@@ -82,7 +82,8 @@ pub use reconfigure::{ConfigFingerprint, ReconfigurableModule, Reconfigure, Reco
 pub use release::{ReleaseAsset, ReleaseRecord};
 #[cfg(feature = "modules")]
 pub use resolve::{
-    LinkedFactory, LinkedRegistry, LoadError, ModuleConfigProvider, ModuleGate, ModuleSource,
+    AsyncModuleConfigProvider, LinkedFactory, LinkedRegistry, LoadError, ModuleConfigProvider,
+    ModuleGate, ModuleSource,
     ResolvedHook, Resolver, ResolverInputs, RuntimeFuture, RuntimeProvider, resolve_bundled_dir,
     set_bundled_releases_dir,
 };
