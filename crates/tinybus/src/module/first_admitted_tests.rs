@@ -364,7 +364,10 @@ async fn callback_release_loader_reports_empty_candidates_without_preparing_auth
 #[tokio::test]
 async fn callback_release_loader_reports_uncached_candidate_when_downloads_are_disabled() {
     use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[derive(Clone)]
     struct Callback;
