@@ -1379,6 +1379,39 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn blocking_work_marks_runtime_startup_errors_as_terminal() {
+        let record = record("resolver_blocking_runtime_provider_failure");
+        let resolver = Resolver::new(ResolverInputs {
+            enabled: true,
+            install_dir: None,
+            allow_download: false,
+            bundled_dir: None,
+            sources: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
+            search_skip: Vec::new(),
+            gate: None,
+            on_resolved: None,
+            records: vec![record],
+            terminal_marker: "This is terminal for the running process".to_owned(),
+            runtime: Arc::new(|| {
+                Box::pin(async { Err(crate::Error::failed("runtime startup refused")) })
+            }),
+            module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
+            reporter: Arc::new(FailureReporter::new(Arc::new(Recording::default()))),
+        });
+
+        let error = resolver
+            .blocking(|| Ok(()))
+            .await
+            .expect_err("blocking work must not run without its runtime");
+
+        assert!(error.contains("module bus could not start: runtime startup refused"));
+        assert!(error.contains("This is terminal for the running process"));
+    }
+
+    #[tokio::test]
     async fn ensure_loaded_rechecks_host_after_search_before_touching_the_release_cache() {
         let record = record("resolver_search_raced_module");
         let dir = tempfile::tempdir().unwrap();
