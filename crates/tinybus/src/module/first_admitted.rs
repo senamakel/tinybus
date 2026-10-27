@@ -172,8 +172,8 @@ pub fn load_first_admitted(
             "[modules] '{id}' release cache miss with downloads disabled: {last_error}"
         );
         return Err(format!(
-            "module '{id}' is unavailable: no local artifact is installed and downloads are \
-             disabled in configuration"
+            "module '{id}' is unavailable: no usable local artifact is installed and downloads are \
+             disabled in configuration ({last_error})"
         ));
     }
     Err(format!(
