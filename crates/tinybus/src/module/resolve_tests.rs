@@ -592,6 +592,63 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn callback_load_rejects_a_preloaded_module_without_its_binding() {
+        use crate::module::HostCallbackEndpoint;
+
+        let record = record("resolver_callback_preloaded_without_binding");
+        let runtime = shared_runtime();
+        let mut manifest = super::module(record.id, &[], &[]);
+        manifest.bus_name = crate::BusName::new(record.bus_name).unwrap();
+        manifest.object_path = crate::ObjectPath::new(record.object_path).unwrap();
+        runtime
+            .host()
+            .attach_linked_with_config(
+                crate::module::LinkedModule {
+                    descriptor: crate::module::abi::TbAbiDescriptor::current(record.id, "1.0.0"),
+                    manifest,
+                    init: initialize_raced_module,
+                    init_with_setup: None,
+                },
+                serde_json::Value::Null,
+            )
+            .unwrap();
+        let binding = Arc::new(
+            runtime
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        let f = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: "/unused/callback-module.so".to_owned(),
+                },
+            )]),
+            None,
+        );
+
+        let error = f
+            .resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::Value::Null)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.contains("already loaded without a callback binding"),
+            "{error}"
+        );
+        assert_eq!(f.resolver.state_of(record.id), Availability::Available);
+    }
+
+    #[tokio::test]
     async fn callback_apis_hide_runtime_startup_details_and_do_not_claim_resolution() {
         use crate::module::HostCallbackEndpoint;
 
