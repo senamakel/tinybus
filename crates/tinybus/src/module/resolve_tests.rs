@@ -6,8 +6,7 @@ use crate::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
 #[tokio::test]
 async fn resolver_awaits_async_module_configuration_only_for_the_requested_module() {
-    use super::super::test_support::{Recording, record, shared_runtime};
-    use std::sync::Arc;
+    use super::test_support::{Recording, record, shared_runtime};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

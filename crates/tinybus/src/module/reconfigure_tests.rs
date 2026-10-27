@@ -890,6 +890,7 @@ async fn resolver_load_failure_is_reported_once_with_its_resolution_reason() {
             Box::pin(async { Err(crate::Error::transport("runtime not configured")) })
         }),
         module_config: Arc::new(|_| serde_json::Value::Null),
+        async_module_config: None,
         reporter,
     });
     let module = ReconfigurableModule::new(resolver, FAILED_RESOLVER_RECORD.id);
