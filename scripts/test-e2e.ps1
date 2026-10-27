@@ -66,11 +66,11 @@ $env:TINYBUS_TEST_MODULE_DIRECTORY = $mixed
 cargo test --locked --no-default-features --workspace --features uds,modules,macros,test-support,__native-fixture-support -- --ignored --skip terminal_runtime_tests::compiled_native_
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 # Retained fixture owners require a fresh process for each SDK scenario.
-$testList = cargo test --locked -p tinybus-module --features __native-fixture-support,tinybus/macros -- --list --ignored
+$testList = cargo test --locked -p tinybus-module --features __native-fixture-support,tinybus/macros,tinybus/uds -- --list --ignored
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 foreach ($line in $testList) {
   if ($line -match '^(terminal_runtime_tests::compiled_native_.*): test$') {
-    cargo test --locked -p tinybus-module --features __native-fixture-support,tinybus/macros $Matches[1] -- --ignored --exact
+    cargo test --locked -p tinybus-module --features __native-fixture-support,tinybus/macros,tinybus/uds $Matches[1] -- --ignored --exact
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   }
 }
