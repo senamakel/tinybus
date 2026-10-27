@@ -24,6 +24,56 @@ fn stream_endpoint() -> HostStreamCallbackEndpoint {
         members: vec!["Transfer".parse().unwrap()],
     }
 }
+
+#[derive(Clone)]
+struct StreamCallback;
+
+#[async_trait]
+impl Interface for StreamCallback {
+    fn name(&self) -> InterfaceName {
+        "org.example.Callback".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<MemberName> {
+        vec!["Transfer".parse().unwrap()]
+    }
+
+    async fn call(
+        &self,
+        _: &MemberName,
+        args: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        Ok(args)
+    }
+}
+
+#[test]
+fn required_endpoint_count_deduplicates_a_shared_confidential_and_stream_interface() {
+    let mut state = state(
+        "org.example.Module".parse().unwrap(),
+        "org.example.Host".parse().unwrap(),
+    );
+    Arc::get_mut(&mut state).unwrap().stream_endpoints = vec![stream_endpoint()];
+    assert_eq!(state.required_endpoint_count(), 1);
+}
+
+#[test]
+fn directed_signal_requires_a_live_module_recipient() {
+    let state = state(
+        "org.example.Module".parse().unwrap(),
+        "org.example.Host".parse().unwrap(),
+    );
+    state.lifetime.lock().unwrap().module = None;
+    assert!(
+        state
+            .signal_destination(
+                &"/callback".parse().unwrap(),
+                &"org.example.Callback".parse().unwrap(),
+                &"WatchChanged".parse().unwrap(),
+            )
+            .is_err()
+    );
+}
 fn state(source: BusName, destination: BusName) -> Arc<CallbackState> {
     Arc::new(CallbackState {
         destination,
@@ -1534,12 +1584,39 @@ async fn host_stream_callbacks_are_bound_to_the_declared_module_peer() {
         .await
         .unwrap();
     let module_peer = module.unique_name().unwrap();
+    binding
+        .serve_at("/callback".parse().unwrap(), StreamCallback)
+        .await
+        .unwrap();
     {
         let mut state = binding.state.lifetime.lock().unwrap();
         state.active = true;
         state.module = Some(module_peer.clone());
     }
     let context = CallContext::brokered(Some(&module_peer), false);
+    assert!(
+        binding
+            .authorized_stream_module(&CallContext::brokered(Some(&module_peer), true))
+            .is_err()
+    );
+    assert!(
+        binding
+            .authorized_stream_module(&CallContext::brokered(
+                Some(&"org.example.Outsider".parse().unwrap()),
+                false,
+            ))
+            .is_err()
+    );
+    let proxy = module
+        .proxy(binding.unique_name(), "/callback", "org.example.Callback")
+        .unwrap();
+    assert_eq!(
+        proxy
+            .call::<serde_json::Value>("Transfer", serde_json::json!({ "ok": true }))
+            .await
+            .unwrap(),
+        serde_json::json!({ "ok": true })
+    );
 
     let mut module_to_host = module
         .open_stream(binding.unique_name(), StreamDescriptor::with_len(5))
