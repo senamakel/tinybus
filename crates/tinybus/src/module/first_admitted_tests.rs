@@ -1,6 +1,6 @@
-use super::{load_first_admitted, ReleaseAsset, ReleasePlan};
+use super::{ReleaseAsset, ReleasePlan, load_first_admitted};
 use crate::broker::Broker;
-use crate::module::{artifact_dir, ModuleHost};
+use crate::module::{ModuleHost, artifact_dir};
 
 const ASSET: ReleaseAsset<'static> = ReleaseAsset {
     host_key: "ubuntu-24.04-x86_64",
@@ -421,6 +421,57 @@ async fn callback_release_loader_skips_unbuildable_bundle_and_cache_paths() {
 }
 
 #[tokio::test]
+async fn callback_preparation_failure_stops_before_trying_another_candidate() {
+    let runtime = crate::module::ModuleRuntime::start(
+        &crate::module::RuntimeNames {
+            thread: "callback-prepare-failure-test".into(),
+            worker: "callback-prepare-failure-worker".into(),
+        },
+        None,
+    )
+    .unwrap();
+    let bundled = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let assets = [
+        ReleaseAsset {
+            host_key: "candidate-one",
+            archive: "one.tar.gz",
+            ..ASSET
+        },
+        ReleaseAsset {
+            host_key: "candidate-two",
+            archive: "two.tar.gz",
+            ..ASSET
+        },
+    ];
+    let first_dir = artifact_dir(bundled.path(), "demo", "1.0.0", assets[0].host_key).unwrap();
+    std::fs::create_dir_all(&first_dir).unwrap();
+    std::fs::write(first_dir.join(assets[0].archive), b"candidate archive").unwrap();
+    let plan = ReleasePlan {
+        bundled_root: Some(bundled.path()),
+        ..plan(&assets, cache.path(), Some(bundled.path()))
+    };
+    let mut attempts = Vec::new();
+
+    let error = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        |attempt| {
+            attempts.push(attempt);
+            async { Err("callback authority could not be prepared".to_owned()) }
+        },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error, "callback authority could not be prepared");
+    assert_eq!(attempts, [0]);
+    assert!(!cache.path().join("demo").exists());
+}
+
+#[tokio::test]
 async fn callback_release_loader_skips_bundle_candidates_without_an_archive_or_marker() {
     let runtime = crate::module::ModuleRuntime::start(
         &crate::module::RuntimeNames {
@@ -630,17 +681,19 @@ async fn callback_release_loader_admits_a_pinned_installer_module_and_retains_it
     .unwrap();
 
     assert_eq!(info.manifest.bus_name.as_str(), "org.example.EagerCallback");
-    assert!(runtime
-        .host()
-        .retains_host_callback_binding("org.example.EagerCallback", &selected));
+    assert!(
+        runtime
+            .host()
+            .retains_host_callback_binding("org.example.EagerCallback", &selected)
+    );
 }
 
 #[tokio::test]
 async fn callback_release_loader_reports_uncached_candidate_when_downloads_are_disabled() {
     use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     #[derive(Clone)]
