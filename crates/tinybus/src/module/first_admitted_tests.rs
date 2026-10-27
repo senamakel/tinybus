@@ -512,7 +512,8 @@ async fn callback_release_loader_rejects_a_present_invalid_bundle_without_using_
         "/org/example/Demo",
     )
     .await
-    .unwrap_err();
+    .err()
+    .expect("a corrupt installer archive cannot be admitted");
 
     assert!(error.contains("installer bundle"), "{error}");
     assert!(!user_cache.path().join("demo").exists());
