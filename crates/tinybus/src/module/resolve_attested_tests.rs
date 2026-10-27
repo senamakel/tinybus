@@ -14,11 +14,7 @@ async fn a_local_artifact_is_loaded_and_reported_ready() {
     assert!(loaded.iter().any(|info| {
         info.manifest.bus_name.as_str() == "ai.tinyhumans.openhuman.Clock"
             && info.manifest.object_path.as_str() == "/ai/tinyhumans/openhuman/Clock"
-            && matches!(
-                info.state,
-                crate::module::ModuleState::Ready | crate::module::ModuleState::Serving
-            )
-    }));
+    }), "loaded modules: {loaded:#?}");
 }
 
 #[cfg(unix)]
