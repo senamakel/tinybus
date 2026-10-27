@@ -459,29 +459,53 @@ mod resolver {
         else {
             return;
         };
-        let hash = crate::module::hash::file_hex(std::fs::File::open(&source).unwrap()).unwrap();
-        // Keep the artifact below the checkout: macOS's system temp path can
-        // include symlinked ancestors, which ModuleHost correctly refuses.
+        // Keep the bundled cache below the checkout: macOS's system temp path
+        // can include symlinked ancestors, which ModuleHost correctly refuses.
         let working_dir = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
         let root = tempfile::tempdir_in(working_dir).unwrap();
         let root_path = std::fs::canonicalize(root.path()).unwrap();
-        let module_dir = root_path.join("callback-module");
+        let host_key = Box::leak(
+            crate::module::platform::host_candidates()
+                .into_iter()
+                .next()
+                .expect("this host has a candidate")
+                .into_boxed_str(),
+        );
+        let asset = ReleaseAsset {
+            host_key,
+            archive: "callback-module.tar.gz",
+            sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            library_sha256: None,
+        };
+        let assets = Box::leak(vec![asset].into_boxed_slice());
+        let module_dir =
+            crate::module::artifact_dir(&root_path, "tinybus", "0.0.0", asset.host_key).unwrap();
         #[cfg(windows)]
         crate::module::windows_acl::create_private_dir_all(&module_dir).unwrap();
         #[cfg(not(windows))]
-        std::fs::create_dir(&module_dir).unwrap();
+        std::fs::create_dir_all(&module_dir).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&module_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        let artifact = module_dir.join(source.file_name().unwrap());
+        let artifact = module_dir.join(format!(
+            "libcallback.{}",
+            crate::module::cache::library_extension()
+        ));
         std::fs::copy(&source, &artifact).unwrap();
+        let library_hash =
+            crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+        std::fs::write(
+            module_dir.join(format!("{}.sha256", asset.archive)),
+            format!("{}\n", asset.sha256),
+        )
+        .unwrap();
         std::fs::write(
             module_dir.join("modules.toml"),
             format!(
-                "{:?} = {hash:?}\n",
-                source.file_name().unwrap().to_str().unwrap()
+                "{:?} = {library_hash:?}\n",
+                artifact.file_name().unwrap().to_str().unwrap()
             ),
         )
         .unwrap();
@@ -491,21 +515,29 @@ mod resolver {
             object_path: "/org/example/EagerCallback",
             version: "0.0.0",
             release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
-            assets: &[],
+            assets,
         }));
         let runtime = shared_runtime();
-        let resolver = fixture(
-            record,
-            true,
-            HashMap::from([(
-                record.id.to_string(),
-                ModuleSource::LocalFile {
-                    path: artifact.to_string_lossy().into_owned(),
-                },
-            )]),
-            None,
-        )
-        .resolver;
+        let resolver = Resolver::new(ResolverInputs {
+            enabled: true,
+            install_dir: Some(root_path.clone()),
+            allow_download: false,
+            bundled_dir: Some(root_path),
+            sources: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
+            search_skip: Vec::new(),
+            gate: None,
+            on_resolved: None,
+            records: vec![record],
+            terminal_marker: String::new(),
+            runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
+            module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
+            reporter: Arc::new(FailureReporter::new(Arc::new(
+                test_support::Recording::default(),
+            ))),
+        });
         let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let prepare_attempts = Arc::clone(&attempts);
         let binding = resolver
