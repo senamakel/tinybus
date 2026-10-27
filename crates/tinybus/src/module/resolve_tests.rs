@@ -539,6 +539,59 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn callback_apis_reject_linked_sources_before_preparing_authority() {
+        use crate::module::HostCallbackEndpoint;
+
+        let record = record("resolver_callback_linked_source");
+        let resolver = fixture(
+            record,
+            true,
+            HashMap::from([(record.id.to_string(), ModuleSource::Linked)]),
+            None,
+        )
+        .resolver;
+        let binding = Arc::new(
+            shared_runtime()
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+
+        let single_error = resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            single_error.contains("verified local-file source"),
+            "{single_error}"
+        );
+
+        let factory_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = Arc::clone(&factory_calls);
+        let factory_error = resolver
+            .ensure_loaded_with_host_callback_factory(record.id, move |_| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async {
+                    Err("callback authority must not be prepared for a linked source".to_owned())
+                }
+            })
+            .await
+            .err()
+            .expect("linked modules cannot carry resolver callback authority");
+        assert!(
+            factory_error.contains("callback source cannot preserve admitted identity"),
+            "{factory_error}"
+        );
+        assert_eq!(factory_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(resolver.state_of(record.id), Availability::Available);
+    }
+
+    #[tokio::test]
     async fn callback_resolution_does_not_join_a_generic_in_flight_load() {
         use crate::module::HostCallbackEndpoint;
         use std::sync::{Condvar, Mutex};
