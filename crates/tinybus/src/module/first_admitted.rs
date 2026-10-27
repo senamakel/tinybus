@@ -337,7 +337,7 @@ where
 
     if !plan.allow_download {
         Err(format!(
-            "module '{id}' is unavailable: no local artifact is installed and downloads are disabled in configuration"
+            "module '{id}' is unavailable: no usable local artifact is installed and downloads are disabled in configuration ({last_error})"
         ))
     } else {
         Err(format!(
