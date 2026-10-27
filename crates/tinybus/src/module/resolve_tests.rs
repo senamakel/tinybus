@@ -592,6 +592,72 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn callback_apis_hide_runtime_startup_details_and_do_not_claim_resolution() {
+        use crate::module::HostCallbackEndpoint;
+
+        let record = record("resolver_callback_runtime_failure");
+        let resolver = Resolver::new(ResolverInputs {
+            enabled: true,
+            install_dir: None,
+            allow_download: false,
+            bundled_dir: None,
+            sources: HashMap::new(),
+            linked: Arc::new(LinkedRegistry::new()),
+            search_paths: None,
+            search_skip: Vec::new(),
+            gate: None,
+            on_resolved: None,
+            records: vec![record],
+            terminal_marker: String::new(),
+            runtime: Arc::new(|| {
+                Box::pin(async { Err(crate::Error::failed("private runtime detail")) })
+            }),
+            module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
+            reporter: Arc::new(FailureReporter::new(Arc::new(Recording::default()))),
+        });
+        let binding = Arc::new(
+            shared_runtime()
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+
+        let single_error = resolver
+            .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            single_error.contains("the module bus could not start"),
+            "{single_error}"
+        );
+        assert!(!single_error.contains("private runtime detail"));
+
+        let factory_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = Arc::clone(&factory_calls);
+        let factory_error = resolver
+            .ensure_loaded_with_host_callback_factory(record.id, move |_| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { Err("the factory must not run".to_owned()) }
+            })
+            .await
+            .err()
+            .expect("runtime startup failure should be reported");
+        assert!(
+            factory_error.contains("the module bus could not start"),
+            "{factory_error}"
+        );
+        assert!(!factory_error.contains("private runtime detail"));
+        assert_eq!(factory_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(resolver.state_of(record.id), Availability::Available);
+    }
+
+    #[tokio::test]
     async fn callback_resolution_does_not_join_a_generic_in_flight_load() {
         use crate::module::HostCallbackEndpoint;
         use std::sync::{Condvar, Mutex};
