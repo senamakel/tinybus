@@ -1,9 +1,9 @@
 use super::*;
 
 #[cfg(unix)]
-#[test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 #[ignore = "requires TINYBUS_TEST_MODULE to point at the built module_clock cdylib"]
-fn a_local_artifact_is_loaded_and_reported_ready() {
+async fn a_local_artifact_is_loaded_and_reported_ready() {
     let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
     let runtime =
         crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap();
