@@ -206,8 +206,8 @@ async fn release_callback_resolution_uses_a_fresh_binding_for_each_rejected_cand
     use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
     use std::sync::{Arc, Mutex};
 
-    let Some(fixture) = std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE")
-        .map(std::path::PathBuf::from)
+    let Some(fixture) =
+        std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").map(std::path::PathBuf::from)
     else {
         return;
     };
@@ -362,6 +362,218 @@ async fn callback_release_loader_reports_empty_candidates_without_preparing_auth
     .expect("the missing archive cannot be admitted");
     assert!(error.contains("not available for this platform"));
     assert_eq!(attempts, 0);
+}
+
+#[tokio::test]
+async fn callback_release_loader_skips_unbuildable_bundle_and_cache_paths() {
+    let runtime = crate::module::ModuleRuntime::start(
+        &crate::module::RuntimeNames {
+            thread: "callback-unbuildable-path-test".into(),
+            worker: "callback-unbuildable-path-worker".into(),
+        },
+        None,
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let bad = ReleaseAsset {
+        host_key: "../escape",
+        ..ASSET
+    };
+    let assets = [bad];
+    let plan = ReleasePlan {
+        bundled_root: Some(bundle.path()),
+        ..plan(&assets, cache.path(), Some(bundle.path()))
+    };
+    let mut attempts = 0;
+    let error = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        |_| {
+            attempts += 1;
+            async { Err("no candidate should prepare authority".into()) }
+        },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("downloads are disabled"), "{error}");
+    assert_eq!(attempts, 0);
+
+    let mut downloadable = plan;
+    downloadable.allow_download = true;
+    let error = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &downloadable,
+        |_| async { Err("unbuildable paths must skip the factory".into()) },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("restart the app"), "{error}");
+}
+
+#[tokio::test]
+async fn callback_release_loader_refuses_a_present_bundle_with_an_invalid_marker() {
+    use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
+    use std::sync::Arc;
+
+    let runtime = Arc::new(
+        ModuleRuntime::start(
+            &RuntimeNames {
+                thread: "callback-invalid-marker-test".into(),
+                worker: "callback-invalid-marker-worker".into(),
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let bundled = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let directory = artifact_dir(bundled.path(), "demo", "1.0.0", ASSET.host_key).unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join(format!("{}.sha256", ASSET.archive)),
+        format!("{}\n", "f".repeat(64)),
+    )
+    .unwrap();
+    let assets = [ASSET];
+    let plan = plan(&assets, cache.path(), Some(bundled.path()));
+    let for_prepare = Arc::clone(&runtime);
+    let error = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        move |_| {
+            let runtime = Arc::clone(&for_prepare);
+            async move {
+                let binding = Arc::new(
+                    runtime
+                        .host()
+                        .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                            path: "/callback".parse().unwrap(),
+                            interface: "org.example.Callback".parse().unwrap(),
+                            members: vec!["Observe".parse().unwrap()],
+                        }])
+                        .await
+                        .map_err(|error| error.to_string())?,
+                );
+                Ok((binding, serde_json::json!({})))
+            }
+        },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("installer bundle"), "{error}");
+    assert!(error.contains("does not match the pin"), "{error}");
+    assert!(!cache.path().join("demo").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn callback_release_loader_admits_a_pinned_installer_module_and_retains_its_binding() {
+    use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
+    use std::sync::Arc;
+
+    let Some(fixture) = std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE")
+        .map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    let runtime = Arc::new(
+        ModuleRuntime::start(
+            &RuntimeNames {
+                thread: "callback-bundled-admission-test".into(),
+                worker: "callback-bundled-admission-worker".into(),
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let root = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(root.path()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let asset = ReleaseAsset {
+        host_key: ASSET.host_key,
+        archive: "tinybus-callback.tar.gz",
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        library_sha256: None,
+    };
+    let directory = artifact_dir(&root, "tinybus", "0.0.0", asset.host_key).unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join(format!("{}.sha256", asset.archive)),
+        format!("{}\n", asset.sha256),
+    )
+    .unwrap();
+    let module = directory.join(format!(
+        "libcallback.{}",
+        crate::module::cache::library_extension()
+    ));
+    std::fs::copy(&fixture, &module).unwrap();
+    let library_hash = crate::module::hash::file_hex(std::fs::File::open(&module).unwrap()).unwrap();
+    std::fs::write(
+        directory.join("modules.toml"),
+        format!("{:?} = {library_hash:?}\n", module.file_name().unwrap().to_str().unwrap()),
+    )
+    .unwrap();
+    let assets = [asset];
+    let plan = ReleasePlan {
+        id: "tinybus",
+        version: "0.0.0",
+        release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
+        assets: &assets,
+        install_root: &root,
+        bundled_root: Some(&root),
+        allow_download: false,
+    };
+    let factory_runtime = Arc::clone(&runtime);
+    let (info, selected) = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        move |_| {
+            let runtime = Arc::clone(&factory_runtime);
+            async move {
+                let binding = Arc::new(
+                    runtime
+                        .host()
+                        .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                            path: "/callback".parse().unwrap(),
+                            interface: "org.example.Callback".parse().unwrap(),
+                            members: vec!["Observe".parse().unwrap()],
+                        }])
+                        .await
+                        .map_err(|error| error.to_string())?,
+                );
+                binding
+                    .serve_at(
+                        "/callback".parse().unwrap(),
+                        TestCallback(binding.unique_name().clone()),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let config = serde_json::json!({ "host": binding.unique_name().as_str() });
+                Ok((binding, config))
+            }
+        },
+        "org.example.EagerCallback",
+        "/org/example/EagerCallback",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(info.manifest.bus_name.as_str(), "org.example.EagerCallback");
+    assert!(runtime
+        .host()
+        .retains_host_callback_binding("org.example.EagerCallback", &selected));
 }
 
 #[tokio::test]
