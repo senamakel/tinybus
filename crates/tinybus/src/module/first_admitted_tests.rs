@@ -330,6 +330,189 @@ async fn release_callback_resolution_uses_a_fresh_binding_for_each_rejected_cand
     assert!(Arc::ptr_eq(&bindings[1], &selected));
 }
 
+#[tokio::test]
+async fn callback_release_loader_reports_empty_candidates_without_preparing_authority() {
+    let runtime = crate::module::ModuleRuntime::start(
+        &crate::module::RuntimeNames {
+            thread: "empty-callback-candidate-test".into(),
+            worker: "empty-callback-candidate-worker".into(),
+        },
+        None,
+    )
+    .unwrap();
+    let plan = ReleasePlan {
+        assets: &[],
+        ..plan(&[], std::path::Path::new("."), None)
+    };
+    let mut attempts = 0;
+    let error = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        |_| {
+            attempts += 1;
+            async { Err("must not prepare an empty candidate".into()) }
+        },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("not available for this platform"));
+    assert_eq!(attempts, 0);
+}
+
+#[tokio::test]
+async fn callback_release_loader_reports_uncached_candidate_when_downloads_are_disabled() {
+    use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+    #[derive(Clone)]
+    struct Callback;
+    #[async_trait::async_trait]
+    impl crate::Interface for Callback {
+        fn name(&self) -> crate::InterfaceName {
+            "org.example.Callback".parse().unwrap()
+        }
+        fn members(&self) -> Vec<crate::MemberName> {
+            vec!["Observe".parse().unwrap()]
+        }
+        async fn call(
+            &self,
+            _: &crate::MemberName,
+            _: serde_json::Value,
+        ) -> crate::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+    }
+
+    let runtime = Arc::new(
+        ModuleRuntime::start(
+            &RuntimeNames {
+                thread: "uncached-callback-candidate-test".into(),
+                worker: "uncached-callback-candidate-worker".into(),
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let root = tempfile::tempdir().unwrap();
+    let assets = [ASSET];
+    let plan = plan(&assets, root.path(), None);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let runtime_for_prepare = Arc::clone(&runtime);
+    let attempts_for_prepare = Arc::clone(&attempts);
+    let error = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        move |_| {
+            let runtime = Arc::clone(&runtime_for_prepare);
+            attempts_for_prepare.fetch_add(1, Ordering::SeqCst);
+            async move {
+                let binding = Arc::new(
+                    runtime
+                        .host()
+                        .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                            path: "/callback".parse().unwrap(),
+                            interface: "org.example.Callback".parse().unwrap(),
+                            members: vec!["Observe".parse().unwrap()],
+                        }])
+                        .await
+                        .map_err(|error| error.to_string())?,
+                );
+                binding
+                    .serve_at("/callback".parse().unwrap(), Callback)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok((binding, serde_json::json!({})))
+            }
+        },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("downloads are disabled"), "{error}");
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn callback_release_loader_rejects_a_present_invalid_bundle_without_using_user_cache() {
+    use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct Callback;
+    #[async_trait::async_trait]
+    impl crate::Interface for Callback {
+        fn name(&self) -> crate::InterfaceName {
+            "org.example.Callback".parse().unwrap()
+        }
+        fn members(&self) -> Vec<crate::MemberName> {
+            vec!["Observe".parse().unwrap()]
+        }
+        async fn call(
+            &self,
+            _: &crate::MemberName,
+            _: serde_json::Value,
+        ) -> crate::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+    }
+
+    let runtime = Arc::new(
+        ModuleRuntime::start(
+            &RuntimeNames {
+                thread: "invalid-bundle-callback-test".into(),
+                worker: "invalid-bundle-callback-worker".into(),
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let bundled = tempfile::tempdir().unwrap();
+    let user_cache = tempfile::tempdir().unwrap();
+    let dir = artifact_dir(bundled.path(), "demo", "1.0.0", ASSET.host_key).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(ASSET.archive), b"not a module archive").unwrap();
+    let assets = [ASSET];
+    let plan = plan(&assets, user_cache.path(), Some(bundled.path()));
+    let runtime_for_prepare = Arc::clone(&runtime);
+    let error = super::load_first_admitted_with_host_callbacks(
+        runtime.host(),
+        &plan,
+        move |_| {
+            let runtime = Arc::clone(&runtime_for_prepare);
+            async move {
+                let binding = Arc::new(
+                    runtime
+                        .host()
+                        .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                            path: "/callback".parse().unwrap(),
+                            interface: "org.example.Callback".parse().unwrap(),
+                            members: vec!["Observe".parse().unwrap()],
+                        }])
+                        .await
+                        .map_err(|error| error.to_string())?,
+                );
+                binding
+                    .serve_at("/callback".parse().unwrap(), Callback)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok((binding, serde_json::json!({})))
+            }
+        },
+        "org.example.Demo",
+        "/org/example/Demo",
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("installer bundle"), "{error}");
+    assert!(!user_cache.path().join("demo").exists());
+}
+
 /// A marker-style bundle entry whose library and allowlist agree, so nothing
 /// about its bytes is refused before the loader reaches the directory gate.
 #[cfg(unix)]
