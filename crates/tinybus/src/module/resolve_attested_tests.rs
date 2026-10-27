@@ -8,7 +8,7 @@ fn a_local_artifact_is_loaded_and_reported_ready() {
     let runtime =
         crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap();
 
-    ResolveLoaders::load_local(&runtime, &artifact, "clock", serde_json::Value::Null).unwrap();
+    Resolver::load_local(&runtime, &artifact, "clock", serde_json::Value::Null).unwrap();
 
     let loaded = runtime.host().list();
     assert!(loaded.iter().any(|info| {
