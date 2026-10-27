@@ -649,6 +649,50 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn callback_load_fails_closed_when_admission_races_the_search_path() {
+        let record = record("resolver_callback_search_race");
+        let mut f = fixture(record, true, HashMap::new(), None);
+        f.resolver.after_initial_host_check = Some(Arc::new(|runtime, record| {
+            let mut manifest = super::module(record.id, &[], &[]);
+            manifest.bus_name = crate::BusName::new(record.bus_name).unwrap();
+            manifest.object_path = crate::ObjectPath::new(record.object_path).unwrap();
+            runtime
+                .host()
+                .attach_linked_with_config(
+                    crate::module::LinkedModule {
+                        descriptor: crate::module::abi::TbAbiDescriptor::current(
+                            record.id, "1.0.0",
+                        ),
+                        manifest,
+                        init: initialize_raced_module,
+                        init_with_setup: None,
+                    },
+                    serde_json::Value::Null,
+                )
+                .unwrap();
+        }));
+        let factory_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = Arc::clone(&factory_calls);
+
+        let error = f
+            .resolver
+            .ensure_loaded_with_host_callback_factory(record.id, move |_| {
+                let calls = Arc::clone(&calls);
+                async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err("callback factory should not run after admission".to_owned())
+                }
+            })
+            .await
+            .err()
+            .expect("a concurrent unbound admission must fail closed");
+
+        assert!(error.contains("was loaded without the requested callback binding"));
+        assert_eq!(factory_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(f.resolver.state_of(record.id), Availability::Failed);
+    }
+
+    #[tokio::test]
     async fn callback_apis_hide_runtime_startup_details_and_do_not_claim_resolution() {
         use crate::module::HostCallbackEndpoint;
 
