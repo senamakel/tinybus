@@ -548,7 +548,7 @@ async fn callback_release_loader_refuses_a_present_bundle_with_an_invalid_marker
     let assets = [ASSET];
     let plan = plan(&assets, cache.path(), Some(bundled.path()));
     let for_prepare = Arc::clone(&runtime);
-    let error = super::load_first_admitted_with_host_callbacks(
+    let Err(error) = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &plan,
         move |_| {
