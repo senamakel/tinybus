@@ -688,6 +688,7 @@ mod resolver {
             terminal_marker: "This is terminal for the running process".into(),
             runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(f.sink.clone())),
         });
         f.resolver.after_initial_host_check = Some(Arc::new(|runtime, _| {
@@ -761,6 +762,7 @@ mod resolver {
                     .unwrap();
                 serde_json::json!({})
             }),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(sink)),
         });
 
@@ -988,6 +990,7 @@ mod resolver {
                 Box::pin(async { Ok(shared_runtime()) })
             }),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(sink.clone())),
         });
         let refused = f
@@ -1048,6 +1051,7 @@ mod resolver {
             terminal_marker: String::new(),
             runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(f.sink.clone())),
         });
         let error = f.resolver.ensure_loaded(record.id).await.unwrap_err();
@@ -1079,6 +1083,7 @@ mod resolver {
             terminal_marker: String::new(),
             runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(sink)),
         });
         let _ = resolver.ensure_loaded(record.id).await;
@@ -1123,6 +1128,7 @@ mod resolver {
             terminal_marker: String::new(),
             runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(f.sink.clone())),
         });
         let error = f.resolver.ensure_loaded(record.id).await.unwrap_err();
@@ -1159,6 +1165,7 @@ mod resolver {
             terminal_marker: String::new(),
             runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(f.sink.clone())),
         });
         let (state, detail) = gated.status_of(record);
@@ -1185,6 +1192,7 @@ mod resolver {
             terminal_marker: String::new(),
             runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(sink)),
         });
         let outcome = resolver
@@ -1251,6 +1259,7 @@ mod resolver {
                 Box::pin(async { Err(crate::Error::Transport("no runtime".to_string())) })
             }),
             module_config: Arc::new(|_| serde_json::json!({})),
+            async_module_config: None,
             reporter: Arc::new(FailureReporter::new(f.sink.clone())),
         });
         assert_eq!(
@@ -1428,6 +1437,7 @@ async fn resolver_inputs_configure_the_runtime_host_search_paths() {
         terminal_marker: String::new(),
         runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
         module_config: Arc::new(|_| serde_json::Value::Null),
+        async_module_config: None,
         reporter: Arc::new(FailureReporter::new(Arc::new(ResolverSearchSink))),
     });
 

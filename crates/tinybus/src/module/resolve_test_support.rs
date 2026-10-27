@@ -75,6 +75,7 @@ pub(super) fn fixture(
             counted.fetch_add(1, Ordering::SeqCst);
             serde_json::json!({})
         }),
+        async_module_config: None,
         reporter: Arc::new(FailureReporter::new(sink.clone())),
     });
     Fixture {

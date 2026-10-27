@@ -103,6 +103,7 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
         terminal_marker: "This is terminal for the running process".to_string(),
         runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
         module_config: Arc::new(|_| serde_json::json!({})),
+        async_module_config: None,
         reporter: Arc::new(crate::module::FailureReporter::new(sink)),
     });
 
