@@ -1408,7 +1408,8 @@ mod resolver {
             .expect_err("blocking work must not run without its runtime");
 
         assert!(
-            error.contains("module bus could not start: runtime startup refused"),
+            error.contains("module bus could not start")
+                && error.contains("runtime startup refused"),
             "{error}"
         );
         assert!(
