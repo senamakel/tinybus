@@ -738,11 +738,13 @@ mod resolver {
         )
         .resolver;
 
-        let error = resolver
+        let error = match resolver
             .ensure_loaded_with_host_callbacks(record.id, binding, serde_json::Value::Null)
             .await
-            .err()
-            .expect("a cached ready slot cannot substitute for its callback binding");
+        {
+            Ok(()) => panic!("a cached ready slot cannot substitute for its callback binding"),
+            Err(error) => error,
+        };
 
         assert!(
             error.contains("was loaded without the requested callback binding"),
