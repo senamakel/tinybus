@@ -270,6 +270,18 @@ pub type RuntimeProvider = Arc<dyn Fn() -> RuntimeFuture + Send + Sync>;
 /// Builds the configuration blob handed to a module when it is initialised.
 pub type ModuleConfigProvider = Arc<dyn Fn(&str) -> serde_json::Value + Send + Sync>;
 
+/// Asynchronous per-module initialisation configuration. When supplied, this
+/// provider takes precedence over [`ModuleConfigProvider`] during resolution.
+/// The synchronous provider remains available for hosts whose configuration
+/// is already in memory.
+pub type AsyncModuleConfigProvider = Arc<
+    dyn for<'a> Fn(
+            &'a str,
+        ) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send + 'a>>
+        + Send
+        + Sync,
+>;
+
 /// Decides, per module id, whether host policy switches the module off. Returns
 /// a short label (e.g. the setting that did it) when it is off, which the
 /// resolver returns as [`LoadError::Disabled`] before it resolves, reports or
@@ -417,6 +429,9 @@ pub struct ResolverInputs {
     pub runtime: RuntimeProvider,
     /// Per-module initialisation configuration.
     pub module_config: ModuleConfigProvider,
+    /// Optional asynchronous configuration provider for secret-backed hosts.
+    /// When present, this is awaited only for a module actually being loaded.
+    pub async_module_config: Option<AsyncModuleConfigProvider>,
     /// Terminal-outcome reporting. Share one across the process.
     pub reporter: Arc<FailureReporter>,
 }
@@ -440,6 +455,13 @@ impl Resolver {
             inner: Arc::new(inputs),
             #[cfg(test)]
             after_initial_host_check: None,
+        }
+    }
+
+    async fn module_config(&self, id: &str) -> serde_json::Value {
+        match &self.inner.async_module_config {
+            Some(provider) => provider(id).await,
+            None => (self.inner.module_config)(id),
         }
     }
 
@@ -1003,7 +1025,7 @@ impl Resolver {
                     }
                     result
                 } else {
-                    let module_config = (self.inner.module_config)(record.id);
+                    let module_config = self.module_config(record.id).await;
                     self.blocking(move || {
                         Self::load_local(runtime, &path, record.id, module_config)
                     })
@@ -1022,7 +1044,7 @@ impl Resolver {
                     ));
                 }
                 let factory = self.inner.linked.get(record.id);
-                let module_config = (self.inner.module_config)(record.id);
+                let module_config = self.module_config(record.id).await;
                 let result = self
                     .blocking(move || Self::load_linked(runtime, record, factory, module_config))
                     .await;
@@ -1083,7 +1105,7 @@ impl Resolver {
             return recover_admission(error, &runtime.host().list(), record);
         };
         let allow_download = self.inner.allow_download;
-        let module_config = (self.inner.module_config)(record.id);
+        let module_config = self.module_config(record.id).await;
         let cache_root = root.clone();
         let bundled = self.inner.bundled_dir.clone();
         let result = if let Some(callbacks) = callbacks.as_ref() {
