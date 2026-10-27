@@ -54,6 +54,7 @@ fn resolver(runtime_ready: bool) -> Resolver {
         terminal_marker: String::new(),
         runtime,
         module_config: Arc::new(|_| serde_json::Value::Null),
+        async_module_config: None,
         reporter: Arc::new(FailureReporter::new(Arc::new(Quiet))),
     })
 }

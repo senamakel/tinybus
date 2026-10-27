@@ -35,9 +35,48 @@ use crate::module::platform::host_candidates;
 use crate::module::resolution::{self, Claim, Resolution, ResolutionState, Waited};
 use crate::module::runtime::ModuleRuntime;
 use crate::module::{
-    Availability, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord, SearchPathConfig,
-    load_first_admitted, prune_stale_versions,
+    Availability, HostCallbackBinding, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord,
+    SearchPathConfig, load_first_admitted, prune_stale_versions,
 };
+
+type HostCallbackFactory = Arc<
+    dyn Fn(
+            usize,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<(Arc<HostCallbackBinding>, serde_json::Value), String>>
+                    + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
+enum CallbackLoad {
+    Single(Arc<HostCallbackBinding>, serde_json::Value),
+    PerAttempt {
+        factory: HostCallbackFactory,
+        selected: Arc<Mutex<Option<Arc<HostCallbackBinding>>>>,
+    },
+}
+
+impl CallbackLoad {
+    async fn prepare(
+        &self,
+        attempt: usize,
+    ) -> Result<(Arc<HostCallbackBinding>, serde_json::Value), String> {
+        match self {
+            Self::Single(binding, config) => Ok((Arc::clone(binding), config.clone())),
+            Self::PerAttempt { factory, .. } => factory(attempt).await,
+        }
+    }
+
+    fn retain_selected(&self, binding: Arc<HostCallbackBinding>) {
+        if let Self::PerAttempt { selected, .. } = self {
+            *selected.lock().expect("callback selection lock") = Some(binding);
+        }
+    }
+}
 
 fn recover_admission(
     result: Result<(), String>,
@@ -76,17 +115,22 @@ pub(crate) fn resolve(
     manifests: &[ModuleManifest],
     initially_available: &HashSet<String>,
 ) -> LoadOrder {
-    let duplicate_modules = duplicates(manifests.iter().map(|manifest| &manifest.module.name));
-    let duplicate_bus_names = duplicates(manifests.iter().map(|manifest| &manifest.bus_name));
+    let duplicate_modules = duplicates(
+        manifests
+            .iter()
+            .map(|manifest| manifest.module.name.as_str()),
+    );
+    let duplicate_bus_names =
+        duplicates(manifests.iter().map(|manifest| manifest.bus_name.as_str()));
     let mut unresolved = Vec::new();
     let mut pending = Vec::new();
     for (index, manifest) in manifests.iter().enumerate() {
-        if duplicate_modules.contains(&manifest.module.name) {
+        if duplicate_modules.contains(manifest.module.name.as_str()) {
             unresolved.push((
                 index,
                 "two artifacts declare the same module name".to_string(),
             ));
-        } else if duplicate_bus_names.contains(&manifest.bus_name) {
+        } else if duplicate_bus_names.contains(manifest.bus_name.as_str()) {
             unresolved.push((index, "two modules claim the same bus name".to_string()));
         } else {
             pending.push(index);
@@ -160,7 +204,7 @@ pub(crate) fn resolve(
     LoadOrder { order, unresolved }
 }
 
-fn duplicates<T: Eq + std::hash::Hash>(values: impl Iterator<Item = T>) -> HashSet<T> {
+fn duplicates<'a>(values: impl Iterator<Item = &'a str>) -> HashSet<&'a str> {
     let mut counts = HashMap::new();
     for value in values {
         *counts.entry(value).or_insert(0usize) += 1;
@@ -230,6 +274,16 @@ pub type RuntimeProvider = Arc<dyn Fn() -> RuntimeFuture + Send + Sync>;
 
 /// Builds the configuration blob handed to a module when it is initialised.
 pub type ModuleConfigProvider = Arc<dyn Fn(&str) -> serde_json::Value + Send + Sync>;
+
+/// Asynchronous per-module initialisation configuration. When supplied, this
+/// provider takes precedence over [`ModuleConfigProvider`] during resolution.
+/// The synchronous provider remains available for hosts whose configuration
+/// is already in memory.
+pub type AsyncModuleConfigProvider = Arc<
+    dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send + 'a>>
+        + Send
+        + Sync,
+>;
 
 /// Decides, per module id, whether host policy switches the module off. Returns
 /// a short label (e.g. the setting that did it) when it is off, which the
@@ -378,6 +432,9 @@ pub struct ResolverInputs {
     pub runtime: RuntimeProvider,
     /// Per-module initialisation configuration.
     pub module_config: ModuleConfigProvider,
+    /// Optional asynchronous configuration provider for secret-backed hosts.
+    /// When present, this is awaited only for a module actually being loaded.
+    pub async_module_config: Option<AsyncModuleConfigProvider>,
     /// Terminal-outcome reporting. Share one across the process.
     pub reporter: Arc<FailureReporter>,
 }
@@ -401,6 +458,13 @@ impl Resolver {
             inner: Arc::new(inputs),
             #[cfg(test)]
             after_initial_host_check: None,
+        }
+    }
+
+    async fn module_config(&self, id: &str) -> serde_json::Value {
+        match &self.inner.async_module_config {
+            Some(provider) => provider(id).await,
+            None => (self.inner.module_config)(id),
         }
     }
 
@@ -458,9 +522,87 @@ impl Resolver {
     ///
     /// A message fit for a user or a model when the module cannot be loaded.
     pub async fn ensure_loaded(&self, id: &str) -> Result<(), String> {
-        self.ensure_loaded_within(id, None)
+        self.ensure_loaded_inner(id, None, None)
             .await
             .map_err(LoadError::into_message)
+    }
+
+    /// Resolve a local artifact while binding one prepared host callback set to
+    /// the exact registry identity before initialization. The capability is
+    /// retained by the admitted module for its lifetime. Linked, search-path,
+    /// and release-cache sources fail closed until their admission paths can
+    /// preserve the same identity binding.
+    ///
+    /// A callback load cannot join a generic in-flight or already-loaded
+    /// resolution. Its binding must belong to this resolver's host and all
+    /// declared endpoints must already be served.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe load error if the module is unavailable, the binding is
+    /// invalid, or the configured source cannot preserve callback identity.
+    pub async fn ensure_loaded_with_host_callbacks(
+        &self,
+        id: &str,
+        binding: Arc<HostCallbackBinding>,
+        module_config: serde_json::Value,
+    ) -> Result<(), String> {
+        self.ensure_loaded_inner(id, None, Some(CallbackLoad::Single(binding, module_config)))
+            .await
+            .map_err(LoadError::into_message)
+    }
+
+    /// Resolve a pinned release while preparing a fresh callback binding for
+    /// each candidate artifact. Failed candidates consume and revoke only their
+    /// own binding; the returned capability is retained by the exact admitted
+    /// artifact. Linked, search-path and generic in-flight loads fail closed.
+    pub async fn ensure_loaded_with_host_callback_factory<F, Fut>(
+        &self,
+        id: &str,
+        factory: F,
+    ) -> Result<Arc<HostCallbackBinding>, String>
+    where
+        F: Fn(usize) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(Arc<HostCallbackBinding>, serde_json::Value), String>>
+            + Send
+            + 'static,
+    {
+        let factory: HostCallbackFactory = Arc::new(move |attempt| Box::pin(factory(attempt)));
+        self.ensure_loaded_with_host_callback_factory_inner(id, factory)
+            .await
+    }
+
+    async fn ensure_loaded_with_host_callback_factory_inner(
+        &self,
+        id: &str,
+        factory: HostCallbackFactory,
+    ) -> Result<Arc<HostCallbackBinding>, String> {
+        let selected = Arc::new(Mutex::new(None));
+        self.ensure_loaded_inner(
+            id,
+            None,
+            Some(CallbackLoad::PerAttempt {
+                factory,
+                selected: Arc::clone(&selected),
+            }),
+        )
+        .await
+        .map_err(LoadError::into_message)?;
+
+        if let Some(binding) = selected.lock().expect("callback selection lock").clone() {
+            return Ok(binding);
+        }
+        let record = self
+            .find(id)
+            .ok_or_else(|| format!("unknown module '{id}'"))?;
+        let runtime = self
+            .runtime()
+            .await
+            .map_err(|_| format!("module '{id}' is unavailable: the module bus could not start"))?;
+        runtime
+            .host()
+            .retained_host_callback_binding(record.bus_name)
+            .ok_or_else(|| format!("module '{id}' has no retained callback binding"))
     }
 
     /// Resolve, initialize and wait for a module without sending a business
@@ -501,6 +643,15 @@ impl Resolver {
         id: &str,
         within: Option<Duration>,
     ) -> Result<(), LoadError> {
+        self.ensure_loaded_inner(id, within, None).await
+    }
+
+    async fn ensure_loaded_inner(
+        &self,
+        id: &str,
+        within: Option<Duration>,
+        callbacks: Option<CallbackLoad>,
+    ) -> Result<(), LoadError> {
         if !self.inner.enabled {
             if let Some(record) = self.find(id) {
                 self.report(record, Reason::Disabled);
@@ -521,8 +672,113 @@ impl Resolver {
             return Err(LoadError::Disabled(label));
         }
 
+        if let Some(callbacks) = callbacks.as_ref() {
+            let runtime = self.runtime().await.map_err(|_| {
+                LoadError::Failed(format!(
+                    "module '{id}' is unavailable: the module bus could not start"
+                ))
+            })?;
+            match callbacks {
+                CallbackLoad::Single(binding, _) => {
+                    if !matches!(
+                        self.inner.sources.get(id),
+                        Some(ModuleSource::LocalFile { .. })
+                    ) {
+                        return Err(LoadError::Failed(format!(
+                            "module '{id}' host callbacks require a verified local-file source"
+                        )));
+                    }
+                    if runtime
+                        .host()
+                        .list()
+                        .iter()
+                        .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
+                    {
+                        if runtime
+                            .host()
+                            .retains_host_callback_binding(record.bus_name, binding)
+                        {
+                            return Ok(());
+                        }
+                        return Err(LoadError::Failed(format!(
+                            "module '{id}' is already loaded without this callback binding"
+                        )));
+                    }
+                    runtime
+                        .host()
+                        .validate_host_callback_binding(binding)
+                        .map_err(|error| {
+                            LoadError::Failed(format!(
+                                "module '{id}' callback binding is invalid: {error}"
+                            ))
+                        })?;
+                }
+                CallbackLoad::PerAttempt { selected, .. } => {
+                    if !matches!(
+                        self.inner.sources.get(id),
+                        None | Some(ModuleSource::Pinned | ModuleSource::LocalFile { .. })
+                    ) {
+                        return Err(LoadError::Failed(format!(
+                            "module '{id}' callback source cannot preserve admitted identity"
+                        )));
+                    }
+                    if runtime
+                        .host()
+                        .list()
+                        .iter()
+                        .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
+                    {
+                        let binding = runtime
+                            .host()
+                            .retained_host_callback_binding(record.bus_name)
+                            .ok_or_else(|| {
+                                LoadError::Failed(format!(
+                                    "module '{id}' is already loaded without a callback binding"
+                                ))
+                            })?;
+                        *selected.lock().expect("callback selection lock") = Some(binding);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         let receiver = match resolution::global().claim(id) {
-            Claim::Done(Resolution::Ready) => return Ok(()),
+            Claim::Done(Resolution::Ready) => {
+                if let Some(CallbackLoad::Single(binding, _)) = callbacks.as_ref() {
+                    let runtime = self.runtime().await.map_err(|_| {
+                        LoadError::Failed(format!(
+                            "module '{id}' is unavailable: the module bus could not start"
+                        ))
+                    })?;
+                    if runtime
+                        .host()
+                        .retains_host_callback_binding(record.bus_name, binding)
+                    {
+                        return Ok(());
+                    }
+                    return Err(LoadError::Failed(format!(
+                        "module '{id}' was loaded without the requested callback binding"
+                    )));
+                }
+                if let Some(CallbackLoad::PerAttempt { selected, .. }) = callbacks.as_ref() {
+                    let runtime = self.runtime().await.map_err(|_| {
+                        LoadError::Failed(format!(
+                            "module '{id}' is unavailable: the module bus could not start"
+                        ))
+                    })?;
+                    let binding = runtime
+                        .host()
+                        .retained_host_callback_binding(record.bus_name)
+                        .ok_or_else(|| {
+                            LoadError::Failed(format!(
+                                "module '{id}' was loaded without a callback binding"
+                            ))
+                        })?;
+                    *selected.lock().expect("callback selection lock") = Some(binding);
+                }
+                return Ok(());
+            }
             Claim::Done(Resolution::Failed(reason)) => {
                 // The original resolution may have completed before a reporting
                 // client was bound. Revisit reporting at the cached caller; the
@@ -530,7 +786,14 @@ impl Resolver {
                 self.report(record, Reason::ResolutionFailed);
                 return Err(LoadError::Failed(reason));
             }
-            Claim::Wait(receiver) => receiver,
+            Claim::Wait(receiver) => {
+                if callbacks.is_some() {
+                    return Err(LoadError::Failed(format!(
+                        "module '{id}' is already resolving without this callback binding"
+                    )));
+                }
+                receiver
+            }
             Claim::Run { sender, receiver } => {
                 // Runtime startup can itself be slow, and a task spawned on the
                 // caller's executor would be cancelled if that executor shuts
@@ -547,7 +810,11 @@ impl Resolver {
                             .build();
                         match startup_runtime {
                             Ok(runtime) => {
-                                runtime.block_on(resolver.start_resolution(record, task_sender));
+                        runtime.block_on(resolver.start_resolution(
+                            record,
+                            task_sender,
+                            callbacks,
+                        ));
                             }
                             Err(error) => {
                                 let reason = format!(
@@ -647,6 +914,7 @@ impl Resolver {
         &self,
         record: &'static ReleaseRecord,
         sender: tokio::sync::watch::Sender<Option<Resolution>>,
+        callbacks: Option<CallbackLoad>,
     ) {
         let this = self.clone();
         let id = record.id;
@@ -656,7 +924,7 @@ impl Resolver {
                 version = record.version,
                 "[tinybus::module] resolving"
             );
-            let resolution = match this.ladder(record).await {
+            let resolution = match this.ladder(record, callbacks).await {
                 Ok(()) => {
                     tracing::info!(module = id, "[tinybus::module] serving");
                     Resolution::Ready
@@ -690,7 +958,11 @@ impl Resolver {
     }
 
     /// Get `record` serving: loaded, override, search path, release cache, prune.
-    async fn ladder(&self, record: &'static ReleaseRecord) -> Result<(), String> {
+    async fn ladder(
+        &self,
+        record: &'static ReleaseRecord,
+        callbacks: Option<CallbackLoad>,
+    ) -> Result<(), String> {
         let runtime = self.runtime().await.map_err(|_| {
             format!(
                 "module '{}' is unavailable: the module bus could not start",
@@ -706,6 +978,12 @@ impl Resolver {
             .iter()
             .any(|info| is_live_match(info, record))
         {
+            if callbacks.is_some() {
+                return Err(format!(
+                    "module '{}' is already loaded without the requested callback binding",
+                    record.id
+                ));
+            }
             return Ok(());
         }
 
@@ -720,15 +998,65 @@ impl Resolver {
         match self.inner.sources.get(record.id) {
             Some(ModuleSource::LocalFile { path }) => {
                 let path = PathBuf::from(path);
-                let module_config = (self.inner.module_config)(record.id);
-                let result = self
-                    .blocking(move || Self::load_local(runtime, &path, record.id, module_config))
-                    .await;
+                let result = if let Some(callbacks) = callbacks.as_ref() {
+                    let (binding, module_config) = callbacks.prepare(0).await?;
+                    let host = runtime.host();
+                    let handle = tokio::runtime::Handle::current();
+                    let retained_binding = Arc::clone(&binding);
+                    let result = tokio::task::spawn_blocking(move || {
+                        handle.block_on(async move {
+                            host.load_file_with_host_callbacks_for(
+                                path,
+                                module_config,
+                                &binding,
+                                record.bus_name,
+                                record.object_path,
+                            )
+                            .await
+                            .map_err(|error| {
+                                format!("module '{}' callback load failed: {error}", record.id)
+                            })?;
+                            host.retain_host_callback_binding(record.bus_name, binding)
+                                .map_err(|error| {
+                                    format!(
+                                        "module '{}' callback retention failed: {error}",
+                                        record.id
+                                    )
+                                })
+                        })
+                    })
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "module '{}' callback loader did not finish: {error}",
+                            record.id
+                        )
+                    })?;
+                    if result.is_ok() {
+                        callbacks.retain_selected(retained_binding);
+                    }
+                    result
+                } else {
+                    let module_config = self.module_config(record.id).await;
+                    self.blocking(move || {
+                        Self::load_local(runtime, &path, record.id, module_config)
+                    })
+                    .await
+                };
+                if callbacks.is_some() {
+                    return result;
+                }
                 return recover_admission(result, &runtime.host().list(), record);
             }
             Some(ModuleSource::Linked) => {
+                if callbacks.is_some() {
+                    return Err(format!(
+                        "module '{}' cannot use host callbacks from a linked source",
+                        record.id
+                    ));
+                }
                 let factory = self.inner.linked.get(record.id);
-                let module_config = (self.inner.module_config)(record.id);
+                let module_config = self.module_config(record.id).await;
                 let result = self
                     .blocking(move || Self::load_linked(runtime, record, factory, module_config))
                     .await;
@@ -753,6 +1081,12 @@ impl Resolver {
         .await
         .unwrap_or(false);
         if found_on_search_path {
+            if callbacks.is_some() {
+                return Err(format!(
+                    "module '{}' was loaded from a search path without the requested callback binding",
+                    record.id
+                ));
+            }
             return Ok(());
         }
         // A direct host load can win admission while the search-path rung is
@@ -763,6 +1097,12 @@ impl Resolver {
             .iter()
             .any(|info| is_live_match(info, record))
         {
+            if callbacks.is_some() {
+                return Err(format!(
+                    "module '{}' was loaded without the requested callback binding",
+                    record.id
+                ));
+            }
             return Ok(());
         }
 
@@ -777,11 +1117,39 @@ impl Resolver {
             return recover_admission(error, &runtime.host().list(), record);
         };
         let allow_download = self.inner.allow_download;
-        let module_config = (self.inner.module_config)(record.id);
+        let module_config = self.module_config(record.id).await;
         let cache_root = root.clone();
         let bundled = self.inner.bundled_dir.clone();
-        let result = self
-            .blocking(move || {
+        let result = if let Some(callbacks) = callbacks.as_ref() {
+            let selected = callbacks;
+            let assets: Vec<ReleaseAsset<'static>> = host_candidates()
+                .iter()
+                .filter_map(|key| record.asset_for(key))
+                .copied()
+                .collect();
+            let plan = ReleasePlan {
+                id: record.id,
+                version: record.version,
+                release_url: record.release_url,
+                assets: &assets,
+                install_root: &cache_root,
+                bundled_root: bundled.as_deref(),
+                allow_download,
+            };
+            let (info, binding) =
+                crate::module::first_admitted::load_first_admitted_with_host_callbacks(
+                    runtime.host(),
+                    &plan,
+                    |attempt| selected.prepare(attempt),
+                    record.bus_name,
+                    record.object_path,
+                )
+                .await?;
+            selected.retain_selected(binding);
+            let _ = info;
+            Ok(())
+        } else {
+            self.blocking(move || {
                 Self::load_cached(
                     runtime,
                     record,
@@ -791,7 +1159,8 @@ impl Resolver {
                     bundled.as_deref(),
                 )
             })
-            .await;
+            .await
+        };
         if let Err(error) = result {
             return recover_admission(Err(error), &runtime.host().list(), record);
         }

@@ -1,5 +1,24 @@
-use super::test_support::fixture;
 use super::*;
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+#[ignore = "requires TINYBUS_TEST_MODULE to point at the built module_clock cdylib"]
+async fn a_local_artifact_is_loaded_and_reported_ready() {
+    let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
+    let runtime =
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap();
+
+    Resolver::load_local(&runtime, &artifact, "clock", serde_json::Value::Null).unwrap();
+
+    let loaded = runtime.host().list();
+    assert!(
+        loaded.iter().any(|info| {
+            info.manifest.bus_name.as_str() == "ai.tinyhumans.openhuman.Clock"
+                && info.manifest.object_path.as_str() == "/ai/tinyhumans/openhuman/Clock"
+        }),
+        "loaded modules: {loaded:#?}"
+    );
+}
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
@@ -82,16 +101,36 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
         release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.1.7",
         assets,
     }));
-    let fixture = fixture(
-        record,
-        true,
-        HashMap::from([(module_id.to_string(), ModuleSource::Pinned)]),
-        Some(install.path().to_path_buf()),
-    );
+    // Other ignored loader tests attach module_clock to a process-shared
+    // runtime under the same well-known bus name. Give this strict-call test
+    // its own host so parallel test execution cannot race that admission.
+    let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap(),
+    ));
+    let sink = Arc::new(super::test_support::Recording::default());
+    let resolver = Resolver::new(ResolverInputs {
+        enabled: true,
+        install_dir: Some(install.path().to_path_buf()),
+        allow_download: false,
+        bundled_dir: None,
+        sources: HashMap::from([(module_id.to_string(), ModuleSource::Pinned)]),
+        linked: Arc::new(LinkedRegistry::new()),
+        search_paths: None,
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: vec![record],
+        terminal_marker: "This is terminal for the running process".to_string(),
+        runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
+        module_config: Arc::new(|_| serde_json::json!({})),
+        async_module_config: None,
+        reporter: Arc::new(crate::module::FailureReporter::new(sink)),
+    });
 
     struct CountedResolver {
         resolver: Resolver,
         preparations: Arc<AtomicUsize>,
+        preparation_error: Arc<std::sync::Mutex<Option<String>>>,
     }
 
     impl ModuleAccess for CountedResolver {
@@ -119,7 +158,16 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
             id: &'a str,
         ) -> crate::module::AccessFuture<'a, Result<(), String>> {
             self.preparations.fetch_add(1, Ordering::SeqCst);
-            Box::pin(self.resolver.prepare_attested(id))
+            Box::pin(async move {
+                let result = self.resolver.prepare_attested(id).await;
+                if let Err(error) = &result {
+                    *self
+                        .preparation_error
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.clone());
+                }
+                result
+            })
         }
 
         fn proxy<'a>(
@@ -139,13 +187,21 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     }
 
     let preparations = Arc::new(AtomicUsize::new(0));
+    let preparation_error = Arc::new(std::sync::Mutex::new(None));
     let client = ModuleClient::new(CountedResolver {
-        resolver: fixture.resolver.clone(),
+        resolver: resolver.clone(),
         preparations: preparations.clone(),
+        preparation_error: preparation_error.clone(),
     });
     let response: std::result::Result<String, ModuleCallError> =
         client.call_attested(record.id, "Now", ()).await;
-    assert!(response.is_ok(), "{response:?}");
+    assert!(
+        response.is_ok(),
+        "{response:?}; prepare error: {:?}",
+        *preparation_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    );
     assert_eq!(preparations.load(Ordering::SeqCst), 1);
-    assert_eq!(fixture.resolver.state_of(record.id), Availability::Ready);
+    assert_eq!(resolver.state_of(record.id), Availability::Ready);
 }

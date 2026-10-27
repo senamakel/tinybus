@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-cargo build --locked --example module_clock --example module_clock_two --example module_wrong_target --example module_context --example module_context_configured --example module_context_factory --example module_context_eager --example module_trusted_migration --example module_host_callback --example module_controlled_init --example module_terminal --no-default-features --features modules,macros,__native-fixture-support
+cargo build --locked --example module_clock --example module_clock_two --example module_wrong_target --example module_context --example module_context_configured --example module_context_factory --example module_context_eager --example module_trusted_migration --example module_host_callback --example module_controlled_init --example module_terminal --no-default-features --features uds,modules,macros,__native-fixture-support
 set -euo pipefail
 target_dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 module=$(find "$target_dir/debug/examples" -maxdepth 1 -type f \( -name 'libmodule_clock.so' -o -name 'libmodule_clock.dylib' \) -print -quit)
@@ -56,9 +56,9 @@ export TINYBUS_TEST_TERMINAL_MODULE="$terminal_private/$terminal_library"
 export TINYBUS_TEST_MODULE="$module" TINYBUS_TEST_MODULE_TWO="$private/$library" TINYBUS_TEST_WRONG_TARGET="$wrong_target" TINYBUS_TEST_CONTEXT_MODULE="$context_module" TINYBUS_TEST_CONFIGURED_CONTEXT_MODULE="$configured_context_module" TINYBUS_TEST_CONTEXT_FACTORY_MODULE="$context_factory_module" TINYBUS_TEST_CONTEXT_EAGER_MODULE="$context_eager_module" TINYBUS_TEST_MIGRATION_MODULE="$trusted_migration_module" TINYBUS_TEST_HOST_CALLBACK_MODULE="$host_callback_module" TINYBUS_TEST_CONTROLLED_INIT_MODULE="$controlled_init_module"
 cargo llvm-cov --workspace --all-features --ignore-filename-regex 'crates/tinybus/src/ports/(listener|transport)\.rs$|crates/tinybus/src/module/github\.rs$|crates/tinybus/src/module/(host|mod)\.rs$|crates/tinybus/src/bin/(tinybus\.rs|tinybus/unix\.rs)$|crates/tinybus/src/connection\.rs$|crates/tinybus/src/test_support\.rs$' --no-report -- --include-ignored --skip terminal_runtime_tests::compiled_native_
 
-terminal_tests=$(cargo test --locked -p tinybus-module --all-features --features tinybus/macros -- --list --ignored | sed -n 's/^\(terminal_runtime_tests::compiled_native_.*\): test$/\1/p')
+terminal_tests=$(cargo test --locked -p tinybus-module --all-features --features tinybus/macros,tinybus/uds -- --list --ignored | sed -n 's/^\(terminal_runtime_tests::compiled_native_.*\): test$/\1/p')
 [ -n "$terminal_tests" ] || { echo "no compiled terminal scenarios found" >&2; exit 1; }
 while IFS= read -r test; do
-  cargo llvm-cov test --no-report -p tinybus-module --all-features --features tinybus/macros "$test" -- --ignored --exact
+  cargo llvm-cov test --no-report -p tinybus-module --all-features --features tinybus/macros,tinybus/uds "$test" -- --ignored --exact
 done <<< "$terminal_tests"
 cargo llvm-cov report --ignore-filename-regex 'crates/tinybus/src/ports/(listener|transport)\.rs$|crates/tinybus/src/module/github\.rs$|crates/tinybus/src/module/(host|mod)\.rs$|crates/tinybus/src/bin/(tinybus\.rs|tinybus/unix\.rs)$|crates/tinybus/src/connection\.rs$|crates/tinybus/src/test_support\.rs$' --fail-under-file-lines 90

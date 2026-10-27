@@ -510,6 +510,7 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
             })
         }),
         module_config: Arc::new(|_| serde_json::Value::Null),
+        async_module_config: None,
         reporter: Arc::new(FailureReporter::new(reports.clone())),
     });
 
@@ -714,6 +715,7 @@ async fn ordinary_binding_accepts_a_resolver_owned_linked_factory_without_librar
         terminal_marker: String::new(),
         runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
         module_config: Arc::new(|_| serde_json::Value::Null),
+        async_module_config: None,
         reporter: Arc::new(FailureReporter::new(Arc::new(DiscardReports))),
     });
 
@@ -1062,6 +1064,7 @@ async fn ordinary_binding_refuses_an_unsupported_resolver_without_proxy_or_busin
         terminal_marker: String::new(),
         runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
         module_config: Arc::new(|_| serde_json::Value::Null),
+        async_module_config: None,
         reporter: Arc::new(FailureReporter::new(reports.clone())),
     });
 

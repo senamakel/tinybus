@@ -14,6 +14,7 @@ use crate::build_info;
 use crate::error::{Error, Result, sanitize_untrusted};
 use crate::module::abi::{TB_OK, TbAbiDescriptor, TbModuleInit, TbModuleVtable, field_bytes};
 use crate::module::github::CachedRelease;
+use crate::module::host::callbacks::HostCallbackBinding;
 use crate::module::loader::{self, LoadedArtifact};
 use crate::module::manifest::{MANIFEST_SCHEMA, ModuleIdentity, ModuleManifest, PanicPolicy};
 use crate::module::transport::{ModuleTransport, StopError};
@@ -101,6 +102,9 @@ struct LoadedModule {
     callback_config: Option<[u8; 32]>,
     // Keep operation accounting after routing revocation removes the binding.
     callback_state: Option<Arc<callbacks::CallbackState>>,
+    // Keep the owning capability alive for as long as this admitted module can
+    // issue callbacks. The binding holds only a weak reference back to the host.
+    _callback_binding: Option<Arc<HostCallbackBinding>>,
 }
 
 /// Fingerprints only bytes produced by serde_json::to_vec, never arbitrary JSON.
@@ -1746,6 +1750,7 @@ impl ModuleHost {
                 lifecycle_busy: false,
                 callback_config: None,
                 callback_state: None,
+                _callback_binding: None,
             });
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| staged.start())).is_err() {
             let mut loaded = self.inner.loaded.lock().expect("module list lock");

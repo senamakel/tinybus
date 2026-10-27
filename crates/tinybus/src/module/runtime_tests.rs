@@ -118,6 +118,28 @@ async fn setup_runs_before_the_runtime_is_handed_out() {
 }
 
 #[tokio::test]
+async fn runtime_options_set_the_worker_stack_size_and_keep_the_worker_name() {
+    let names = RuntimeNames {
+        thread: "tinybus-options-runtime".into(),
+        worker: "tinybus-options-worker".into(),
+    };
+    let runtime = ModuleRuntime::start_with_options(
+        &names,
+        None,
+        RuntimeOptions {
+            thread_stack_size: Some(4 * 1024 * 1024),
+        },
+    )
+    .unwrap();
+
+    let worker_name = runtime
+        .spawn(async { std::thread::current().name().map(str::to_owned) })
+        .await
+        .unwrap();
+    assert_eq!(worker_name.as_deref(), Some(names.worker.as_str()));
+}
+
+#[tokio::test]
 async fn a_failing_setup_fails_the_start() {
     let ran = Arc::new(AtomicBool::new(false));
     let was_run = ran.clone();

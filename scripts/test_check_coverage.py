@@ -202,7 +202,7 @@ class CoverageScriptPlatformTests(unittest.TestCase):
                 "module_terminal",
                 "--no-default-features",
                 "--features",
-                "modules,macros,__native-fixture-support",
+                "uds,modules,macros,__native-fixture-support",
             ],
         )
         self.assertEqual(
@@ -241,7 +241,7 @@ class CoverageScriptPlatformTests(unittest.TestCase):
                 "tinybus-module",
                 "--all-features",
                 "--features",
-                "tinybus/macros",
+                "tinybus/macros,tinybus/uds",
                 "--",
                 "--list",
                 "--ignored",
@@ -259,7 +259,7 @@ class CoverageScriptPlatformTests(unittest.TestCase):
                     "tinybus-module",
                     "--all-features",
                     "--features",
-                    "tinybus/macros",
+                    "tinybus/macros,tinybus/uds",
                     test,
                     "--",
                     "--ignored",

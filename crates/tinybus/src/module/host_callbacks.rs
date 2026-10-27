@@ -634,6 +634,129 @@ impl<I: Interface> Interface for GuardedInterface<I> {
 }
 
 impl ModuleHost {
+    /// Check that a callback binding belongs to this host and has every
+    /// declared endpoint served. The load operation repeats this check while
+    /// atomically consuming the one-use binding.
+    pub(crate) fn validate_host_callback_binding(
+        &self,
+        binding: &HostCallbackBinding,
+    ) -> Result<()> {
+        if !Arc::ptr_eq(&self.inner.broker.router, &binding.broker.router)
+            || !binding
+                .owner
+                .upgrade()
+                .is_some_and(|owner| Arc::ptr_eq(&owner, &self.inner))
+        {
+            return Err(Error::failed(
+                "callback binding belongs to another host owner",
+            ));
+        }
+        let state = binding
+            .state
+            .lifetime
+            .lock()
+            .expect("callback lifetime lock");
+        if state.used
+            || state.revoked
+            || state.served.len() != binding.state.required_endpoint_count()
+        {
+            return Err(Error::failed(
+                "callback binding is already used or endpoints are missing",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether this exact callback capability is retained by the named module.
+    pub(crate) fn retains_host_callback_binding(
+        &self,
+        bus_name: &str,
+        binding: &Arc<HostCallbackBinding>,
+    ) -> bool {
+        let peer = {
+            let state = binding
+                .state
+                .lifetime
+                .lock()
+                .expect("callback lifetime lock");
+            if !state.active || state.revoked || !binding.state.module_live() {
+                return false;
+            }
+            state.module.clone()
+        };
+        let Some(peer) = peer else {
+            return false;
+        };
+        self.inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .any(|module| {
+                module.info.manifest.bus_name.as_str() == bus_name
+                    && module.unique_name == peer
+                    && module
+                        ._callback_binding
+                        .as_ref()
+                        .is_some_and(|retained| Arc::ptr_eq(retained, binding))
+            })
+    }
+
+    /// Return the live host callback capability retained by the exact loaded
+    /// bus peer, if it was admitted with one.
+    pub(crate) fn retained_host_callback_binding(
+        &self,
+        bus_name: &str,
+    ) -> Option<Arc<HostCallbackBinding>> {
+        let binding = self
+            .inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .find(|module| module.info.manifest.bus_name.as_str() == bus_name)?
+            ._callback_binding
+            .as_ref()?
+            .clone();
+        self.retains_host_callback_binding(bus_name, &binding)
+            .then_some(binding)
+    }
+
+    /// Retain the resolver-owned callback capability with its exact admitted
+    /// module, after verifying that the module was initialized through it.
+    pub(crate) fn retain_host_callback_binding(
+        &self,
+        bus_name: &str,
+        binding: Arc<HostCallbackBinding>,
+    ) -> Result<()> {
+        if !Arc::ptr_eq(&self.inner.broker.router, &binding.broker.router)
+            || !binding
+                .owner
+                .upgrade()
+                .is_some_and(|owner| Arc::ptr_eq(&owner, &self.inner))
+        {
+            return Err(Error::failed(
+                "callback binding belongs to another host owner",
+            ));
+        }
+        let mut loaded = self.inner.loaded.lock().expect("module list lock");
+        let module = loaded
+            .iter_mut()
+            .find(|module| module.info.manifest.bus_name.as_str() == bus_name)
+            .ok_or_else(|| Error::failed("callback module is no longer loaded"))?;
+        if !module
+            .callback_state
+            .as_ref()
+            .is_some_and(|state| Arc::ptr_eq(state, &binding.state))
+        {
+            return Err(Error::failed(
+                "callback binding does not belong to the loaded module",
+            ));
+        }
+        module._callback_binding = Some(binding);
+        Ok(())
+    }
+
     /// Create a private local recipient for at most 32 exact callback interfaces.
     /// No authority exists until a verified module is loaded with this binding.
     pub async fn prepare_host_callbacks(
@@ -830,6 +953,92 @@ impl ModuleHost {
         config: serde_json::Value,
         binding: &HostCallbackBinding,
     ) -> Result<ModuleInfo> {
+        self.load_file_with_host_callbacks_checked(path, config, binding, None, None, None)
+            .await
+    }
+
+    /// Load a verified artifact with callbacks only when its admitted bus name
+    /// and object path match the registry record the resolver selected. This
+    /// identity check runs before attachment or initialization.
+    pub(crate) async fn load_file_with_host_callbacks_for(
+        &self,
+        path: impl AsRef<Path>,
+        config: serde_json::Value,
+        binding: &HostCallbackBinding,
+        expected_bus_name: &str,
+        expected_object_path: &str,
+    ) -> Result<ModuleInfo> {
+        self.load_file_with_host_callbacks_checked(
+            path,
+            config,
+            binding,
+            Some((expected_bus_name, expected_object_path)),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Load a checksum-verified cached release with callbacks bound to the
+    /// exact registry identity before initialization.
+    pub(crate) async fn load_github_release_cached_with_host_callbacks(
+        &self,
+        release: &super::CachedRelease<'_>,
+        config: serde_json::Value,
+        binding: &Arc<HostCallbackBinding>,
+        expected_bus_name: &str,
+        expected_object_path: &str,
+    ) -> Result<ModuleInfo> {
+        let (module, archive_sha256) = crate::module::github::acquire_cached(release)?;
+        self.load_file_with_host_callbacks_checked(
+            module,
+            config,
+            binding,
+            Some((expected_bus_name, expected_object_path)),
+            Some(archive_sha256),
+            release.expected_library_sha256.map(str::to_ascii_lowercase),
+        )
+        .await
+    }
+
+    /// Load an installer-shipped digest marker with callbacks bound to the
+    /// exact registry identity before initialization.
+    pub(crate) async fn load_bundled_marked_with_host_callbacks(
+        &self,
+        directory: &Path,
+        asset_name: &str,
+        pin: &str,
+        config: serde_json::Value,
+        binding: &Arc<HostCallbackBinding>,
+        expected_identity: (&str, &str),
+    ) -> Result<ModuleInfo> {
+        let hit =
+            crate::module::cache::find_marked(directory, asset_name, pin).ok_or_else(|| {
+                Error::module_refused(
+                    directory,
+                    "bundled digest marker does not match the pin, or the extraction is unusable",
+                )
+            })?;
+        self.load_file_with_host_callbacks_checked(
+            hit.module,
+            config,
+            binding,
+            Some(expected_identity),
+            None,
+            None,
+        )
+        .await
+    }
+
+    async fn load_file_with_host_callbacks_checked(
+        &self,
+        path: impl AsRef<Path>,
+        config: serde_json::Value,
+        binding: &HostCallbackBinding,
+        expected_identity: Option<(&str, &str)>,
+        pinned_sha256: Option<String>,
+        pinned_library_sha256: Option<String>,
+    ) -> Result<ModuleInfo> {
         if !Arc::ptr_eq(&self.inner.broker.router, &binding.broker.router)
             || !binding
                 .owner
@@ -868,13 +1077,36 @@ impl ModuleHost {
             check_directory(parent)?;
         }
         check_file(path)?;
-        let hash = allowlisted_hash(path, std::fs::File::open(path)?)?.ok_or_else(|| {
-            Error::module_refused(path, "scoped callbacks require a verified artifact")
-        })?;
-        let artifact =
-            loader::load_verified(path, self.inner.strict.load(Ordering::Acquire), Some(&hash))?;
+        let allowlisted = allowlisted_hash(path, std::fs::File::open(path)?)?;
+        let hash = match (allowlisted, pinned_sha256.is_some()) {
+            (Some(hash), _) => hash,
+            (None, true) => crate::module::hash::file_hex(std::fs::File::open(path)?)?,
+            (None, false) => {
+                return Err(Error::module_refused(
+                    path,
+                    "scoped callbacks require a verified artifact",
+                ));
+            }
+        };
+        if pinned_library_sha256
+            .as_ref()
+            .is_some_and(|pinned| !pinned.eq_ignore_ascii_case(&hash))
+        {
+            return Err(Error::module_refused(
+                path,
+                "release library pin disagrees with the local module allowlist",
+            ));
+        }
+        let library_pin = pinned_library_sha256.unwrap_or_else(|| hash.clone());
+        let artifact = loader::load_verified(
+            path,
+            self.inner.strict.load(Ordering::Acquire),
+            Some(&library_pin),
+        )?;
         self.ensure_dependencies(&artifact.manifest, path)?;
-        if allowlisted_hash(path, std::fs::File::open(path)?)?.as_ref() != Some(&hash) {
+        let current_library = allowlisted_hash(path, std::fs::File::open(path)?)?
+            .or_else(|| crate::module::hash::file_hex(std::fs::File::open(path).ok()?).ok());
+        if current_library.as_ref() != Some(&library_pin) {
             return Err(Error::module_refused(
                 path,
                 "verified artifact changed during loading",
@@ -883,6 +1115,15 @@ impl ModuleHost {
         let transport = {
             let _admission = self.inner.admission.lock().expect("module admission lock");
             let admitted = self.validate(path, &artifact.descriptor, &artifact.manifest)?;
+            if expected_identity.is_some_and(|(bus_name, object_path)| {
+                admitted.manifest.bus_name.as_str() != bus_name
+                    || admitted.manifest.object_path.as_str() != object_path
+            }) {
+                return Err(Error::module_refused(
+                    path,
+                    "artifact identity does not match the requested module",
+                ));
+            }
             if self
                 .inner
                 .loaded
@@ -939,8 +1180,8 @@ impl ModuleHost {
                     lazy_init: true,
                     lazy_load: false,
                     descriptor_info: None,
-                    pinned_sha256: Some(hash.clone()),
-                    pinned_library_sha256: Some(hash),
+                    pinned_sha256: Some(pinned_sha256.unwrap_or_else(|| hash.clone())),
+                    pinned_library_sha256: Some(library_pin),
                 },
             )?;
             rollback.transport = Some(transport.clone());
