@@ -308,6 +308,23 @@ mod resolver {
         else {
             return;
         };
+        let working_dir = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        let artifact_dir = tempfile::tempdir_in(working_dir).unwrap();
+        let artifact_dir = std::fs::canonicalize(artifact_dir.path()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&artifact_dir, std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        let artifact = artifact_dir.join(source.file_name().unwrap());
+        std::fs::copy(&source, &artifact).unwrap();
+        let digest = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+        std::fs::write(
+            artifact_dir.join("modules.toml"),
+            format!("{:?} = {digest:?}\n", artifact.file_name().unwrap().to_str().unwrap()),
+        )
+        .unwrap();
         let record = Box::leak(Box::new(crate::module::ReleaseRecord {
             id: "resolver_single_callback_success",
             bus_name: "org.example.EagerCallback",
@@ -341,7 +358,7 @@ mod resolver {
             HashMap::from([(
                 record.id.to_string(),
                 ModuleSource::LocalFile {
-                    path: source.to_string_lossy().into_owned(),
+                    path: artifact.to_string_lossy().into_owned(),
                 },
             )]),
             None,
