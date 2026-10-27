@@ -92,6 +92,7 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     struct CountedResolver {
         resolver: Resolver,
         preparations: Arc<AtomicUsize>,
+        preparation_error: Arc<std::sync::Mutex<Option<String>>>,
     }
 
     impl ModuleAccess for CountedResolver {
@@ -119,7 +120,16 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
             id: &'a str,
         ) -> crate::module::AccessFuture<'a, Result<(), String>> {
             self.preparations.fetch_add(1, Ordering::SeqCst);
-            Box::pin(self.resolver.prepare_attested(id))
+            Box::pin(async move {
+                let result = self.resolver.prepare_attested(id).await;
+                if let Err(error) = &result {
+                    *self
+                        .preparation_error
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.clone());
+                }
+                result
+            })
         }
 
         fn proxy<'a>(
@@ -139,13 +149,21 @@ async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_pr
     }
 
     let preparations = Arc::new(AtomicUsize::new(0));
+    let preparation_error = Arc::new(std::sync::Mutex::new(None));
     let client = ModuleClient::new(CountedResolver {
         resolver: fixture.resolver.clone(),
         preparations: preparations.clone(),
+        preparation_error: preparation_error.clone(),
     });
     let response: std::result::Result<String, ModuleCallError> =
         client.call_attested(record.id, "Now", ()).await;
-    assert!(response.is_ok(), "{response:?}");
+    assert!(
+        response.is_ok(),
+        "{response:?}; prepare error: {:?}",
+        *preparation_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    );
     assert_eq!(preparations.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.resolver.state_of(record.id), Availability::Ready);
 }
