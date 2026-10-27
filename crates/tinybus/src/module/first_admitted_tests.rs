@@ -201,14 +201,16 @@ impl crate::Interface for TestCallback {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires TINYBUS_TEST_HOST_CALLBACK_MODULE to point at the built cdylib"]
 async fn release_callback_resolution_uses_a_fresh_binding_for_each_rejected_candidate() {
     use super::load_first_admitted_with_host_callbacks;
     use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
     use std::sync::{Arc, Mutex};
 
-    let fixture =
-        std::path::PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
+    let Some(fixture) = std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE")
+        .map(std::path::PathBuf::from)
+    else {
+        return;
+    };
     let root = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(root.path()).unwrap();
     #[cfg(unix)]

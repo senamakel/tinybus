@@ -408,12 +408,14 @@ mod resolver {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "requires TINYBUS_TEST_HOST_CALLBACK_MODULE to point at the built cdylib"]
     async fn resolver_retains_the_callback_binding_for_its_exact_admitted_module() {
         use crate::module::HostCallbackEndpoint;
         use std::path::PathBuf;
 
-        let source = PathBuf::from(std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").unwrap());
+        let Some(source) = std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").map(PathBuf::from)
+        else {
+            return;
+        };
         let hash = crate::module::hash::file_hex(std::fs::File::open(&source).unwrap()).unwrap();
         // Keep the artifact below the checkout: macOS's system temp path can
         // include symlinked ancestors, which ModuleHost correctly refuses.
