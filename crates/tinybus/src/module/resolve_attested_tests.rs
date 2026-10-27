@@ -1,6 +1,27 @@
 use super::*;
 
 #[cfg(unix)]
+#[test]
+#[ignore = "requires TINYBUS_TEST_MODULE to point at the built module_clock cdylib"]
+fn a_local_artifact_is_loaded_and_reported_ready() {
+    let artifact = PathBuf::from(std::env::var_os("TINYBUS_TEST_MODULE").unwrap());
+    let runtime =
+        crate::module::ModuleRuntime::start(&crate::module::RuntimeNames::default(), None).unwrap();
+
+    ResolveLoaders::load_local(&runtime, &artifact, "clock", serde_json::Value::Null).unwrap();
+
+    let loaded = runtime.host().list();
+    assert!(loaded.iter().any(|info| {
+        info.manifest.bus_name.as_str() == "ai.tinyhumans.openhuman.Clock"
+            && info.manifest.object_path.as_str() == "/ai/tinyhumans/openhuman/Clock"
+            && matches!(
+                info.state,
+                crate::module::ModuleState::Ready | crate::module::ModuleState::Serving
+            )
+    }));
+}
+
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 #[ignore = "requires TINYBUS_TEST_MODULE to point at the built module_clock cdylib"]
 async fn the_first_strict_call_prepares_a_real_lazy_resolver_module_without_a_probe() {
