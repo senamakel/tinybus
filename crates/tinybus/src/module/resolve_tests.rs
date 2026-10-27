@@ -1012,6 +1012,21 @@ mod resolver {
         })
     }
 
+    fn linked_success_module() -> crate::Result<LinkedModule> {
+        let mut manifest = super::module("resolver_linked_success", &[], &[]);
+        manifest.bus_name = crate::BusName::new("ai.tinyhumans.test.resolver_linked_success")?;
+        manifest.object_path = crate::ObjectPath::new("/ai/tinyhumans/test/Module")?;
+        Ok(LinkedModule {
+            descriptor: crate::module::abi::TbAbiDescriptor::current(
+                "resolver_linked_success",
+                "1.0.0",
+            ),
+            manifest,
+            init: initialize_raced_module,
+            init_with_setup: None,
+        })
+    }
+
     #[tokio::test]
     async fn a_loaded_module_with_the_registered_bus_but_wrong_object_path_does_not_satisfy_the_initial_fast_path()
      {
@@ -1108,6 +1123,26 @@ mod resolver {
                 && info.manifest.object_path.as_str() == record.object_path
         }));
         assert_eq!(f.resolver.state_of(record.id), Availability::Ready);
+    }
+
+    #[tokio::test]
+    async fn a_registered_linked_module_is_loaded_and_reported_ready() {
+        let record = record("resolver_linked_success");
+        let sources = HashMap::from([(record.id.to_string(), ModuleSource::Linked)]);
+        let f = fixture(record, true, sources, None);
+        f.resolver
+            .inner
+            .linked
+            .register(record.id, linked_success_module);
+
+        f.resolver.ensure_loaded(record.id).await.unwrap();
+
+        assert_eq!(f.resolver.state_of(record.id), Availability::Ready);
+        assert!(shared_runtime().host().list().iter().any(|info| {
+            info.manifest.bus_name.as_str() == record.bus_name
+                && info.manifest.object_path.as_str() == record.object_path
+                && matches!(info.state, ModuleState::Ready | ModuleState::Serving)
+        }));
     }
 
     #[tokio::test]
