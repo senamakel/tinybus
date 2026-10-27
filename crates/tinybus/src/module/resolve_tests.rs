@@ -1093,6 +1093,37 @@ mod resolver {
         })
     }
 
+    fn linked_conflicting_name_module() -> crate::Result<LinkedModule> {
+        let mut manifest = super::module("resolver_linked_attach_failure", &[], &[]);
+        manifest.bus_name = crate::BusName::new("ai.tinyhumans.test.conflicting_module")?;
+        manifest.object_path = crate::ObjectPath::new("/ai/tinyhumans/test/Conflict")?;
+        Ok(LinkedModule {
+            descriptor: crate::module::abi::TbAbiDescriptor::current(
+                "resolver_linked_attach_failure",
+                "1.0.0",
+            ),
+            manifest,
+            init: initialize_raced_module,
+            init_with_setup: None,
+        })
+    }
+
+    fn linked_attach_target_module() -> crate::Result<LinkedModule> {
+        let mut manifest = super::module("resolver_linked_attach_failure", &[], &[]);
+        manifest.bus_name =
+            crate::BusName::new("ai.tinyhumans.test.resolver_linked_attach_failure")?;
+        manifest.object_path = crate::ObjectPath::new("/ai/tinyhumans/test/Module")?;
+        Ok(LinkedModule {
+            descriptor: crate::module::abi::TbAbiDescriptor::current(
+                "resolver_linked_attach_failure",
+                "1.0.0",
+            ),
+            manifest,
+            init: initialize_raced_module,
+            init_with_setup: None,
+        })
+    }
+
     #[tokio::test]
     async fn a_loaded_module_with_the_registered_bus_but_wrong_object_path_does_not_satisfy_the_initial_fast_path()
      {
@@ -1204,11 +1235,44 @@ mod resolver {
         f.resolver.ensure_loaded(record.id).await.unwrap();
 
         assert_eq!(f.resolver.state_of(record.id), Availability::Ready);
+        assert_eq!(f.resolver.status_of(record), (Availability::Ready, None));
         assert!(shared_runtime().host().list().iter().any(|info| {
             info.manifest.bus_name.as_str() == record.bus_name
                 && info.manifest.object_path.as_str() == record.object_path
                 && matches!(info.state, ModuleState::Ready | ModuleState::Serving)
         }));
+    }
+
+    #[tokio::test]
+    async fn a_linked_attach_collision_returns_a_terminal_failure() {
+        let record = record("resolver_linked_attach_failure");
+        let runtime = shared_runtime();
+        runtime
+            .host()
+            .attach_linked_with_config(
+                linked_conflicting_name_module().unwrap(),
+                serde_json::Value::Null,
+            )
+            .unwrap();
+        let resolver = fixture(
+            record,
+            true,
+            HashMap::from([(record.id.to_string(), ModuleSource::Linked)]),
+            None,
+        )
+        .resolver;
+        resolver
+            .inner
+            .linked
+            .register(record.id, linked_attach_target_module);
+
+        let error = resolver.ensure_loaded(record.id).await.unwrap_err();
+
+        assert!(
+            error.contains("could not be attached from the linked executable"),
+            "{error}"
+        );
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
     }
 
     #[tokio::test]
