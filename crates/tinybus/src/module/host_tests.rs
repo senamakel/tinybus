@@ -20,6 +20,13 @@ static BLOCKING_REINIT_RECEIVER: OnceLock<StdMutex<Option<std::sync::mpsc::Recei
     OnceLock::new();
 static BLOCKING_REINIT_STARTED: AtomicBool = AtomicBool::new(false);
 
+#[test]
+fn module_host_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_send_sync::<ModuleHost>();
+}
+
 struct FakeModule {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
 }
