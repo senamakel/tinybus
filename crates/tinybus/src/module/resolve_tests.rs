@@ -4,6 +4,54 @@ use crate::module::manifest::{
 };
 use crate::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
+#[tokio::test]
+async fn resolver_awaits_async_module_configuration_only_for_the_requested_module() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let record = record("resolver_async_module_config");
+    let sources = HashMap::from([(record.id.to_string(), ModuleSource::Linked)]);
+    let async_calls = Arc::new(AtomicUsize::new(0));
+    let sync_calls = Arc::new(AtomicUsize::new(0));
+    let async_counter = Arc::clone(&async_calls);
+    let sync_counter = Arc::clone(&sync_calls);
+    let async_module_config: AsyncModuleConfigProvider = Arc::new(move |id| {
+        let counter = Arc::clone(&async_counter);
+        let id = id.to_owned();
+        Box::pin(async move {
+            assert_eq!(id, "resolver_async_module_config");
+            counter.fetch_add(1, Ordering::SeqCst);
+            serde_json::json!({ "loaded_async": true })
+        })
+    });
+    let resolver = Resolver::new(ResolverInputs {
+        enabled: true,
+        install_dir: None,
+        allow_download: false,
+        bundled_dir: None,
+        sources,
+        linked: Arc::new(LinkedRegistry::new()),
+        search_paths: None,
+        search_skip: Vec::new(),
+        gate: None,
+        on_resolved: None,
+        records: vec![record],
+        terminal_marker: String::new(),
+        runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
+        module_config: Arc::new(move |_| {
+            sync_counter.fetch_add(1, Ordering::SeqCst);
+            serde_json::json!({ "loaded_sync": true })
+        }),
+        async_module_config: Some(async_module_config),
+        reporter: Arc::new(FailureReporter::new(Arc::new(Recording::default()))),
+    });
+
+    let error = resolver.ensure_loaded(record.id).await.unwrap_err();
+    assert!(error.contains("linked factory"), "{error}");
+    assert_eq!(async_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(sync_calls.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn reconfiguration_classifies_only_closed_lifecycle_wire_names() {
     let cases = [
