@@ -422,7 +422,7 @@ mod resolver {
         let root_path = std::fs::canonicalize(root.path()).unwrap();
         let module_dir = root_path.join("callback-module");
         #[cfg(windows)]
-        super::super::windows_acl::create_private_dir_all(&module_dir).unwrap();
+        crate::module::windows_acl::create_private_dir_all(&module_dir).unwrap();
         #[cfg(not(windows))]
         std::fs::create_dir(&module_dir).unwrap();
         #[cfg(unix)]
