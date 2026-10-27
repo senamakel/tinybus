@@ -319,10 +319,14 @@ mod resolver {
         }
         let artifact = artifact_dir.join(source.file_name().unwrap());
         std::fs::copy(&source, &artifact).unwrap();
-        let digest = crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
+        let digest =
+            crate::module::hash::file_hex(std::fs::File::open(&artifact).unwrap()).unwrap();
         std::fs::write(
             artifact_dir.join("modules.toml"),
-            format!("{:?} = {digest:?}\n", artifact.file_name().unwrap().to_str().unwrap()),
+            format!(
+                "{:?} = {digest:?}\n",
+                artifact.file_name().unwrap().to_str().unwrap()
+            ),
         )
         .unwrap();
         let record = Box::leak(Box::new(crate::module::ReleaseRecord {
