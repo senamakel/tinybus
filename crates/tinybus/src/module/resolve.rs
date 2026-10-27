@@ -35,8 +35,8 @@ use crate::module::platform::host_candidates;
 use crate::module::resolution::{self, Claim, Resolution, ResolutionState, Waited};
 use crate::module::runtime::ModuleRuntime;
 use crate::module::{
-    load_first_admitted, prune_stale_versions, Availability, HostCallbackBinding, LinkedModule,
-    ReleaseAsset, ReleasePlan, ReleaseRecord, SearchPathConfig,
+    Availability, HostCallbackBinding, LinkedModule, ReleaseAsset, ReleasePlan, ReleaseRecord,
+    SearchPathConfig, load_first_admitted, prune_stale_versions,
 };
 
 type HostCallbackFactory = Arc<
@@ -562,8 +562,17 @@ impl Resolver {
             + Send
             + 'static,
     {
-        let selected = Arc::new(Mutex::new(None));
         let factory: HostCallbackFactory = Arc::new(move |attempt| Box::pin(factory(attempt)));
+        self.ensure_loaded_with_host_callback_factory_inner(id, factory)
+            .await
+    }
+
+    async fn ensure_loaded_with_host_callback_factory_inner(
+        &self,
+        id: &str,
+        factory: HostCallbackFactory,
+    ) -> Result<Arc<HostCallbackBinding>, String> {
+        let selected = Arc::new(Mutex::new(None));
         self.ensure_loaded_inner(
             id,
             None,
