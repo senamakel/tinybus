@@ -571,7 +571,6 @@ mod resolver {
             .unwrap();
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
         let guard = binding.guard();
-        let config = serde_json::json!({ "host": binding.unique_name() });
         let info = runtime
             .host()
             .list()
@@ -589,10 +588,13 @@ mod resolver {
 
         // Repeated resolution with this same retained capability is idempotent;
         // a different or ordinary load cannot borrow its authority.
-        resolver
-            .ensure_loaded_with_host_callbacks(record.id, binding, config)
+        let repeated = resolver
+            .ensure_loaded_with_host_callback_factory(record.id, |_| async {
+                panic!("an already loaded callback binding is reused")
+            })
             .await
             .unwrap();
+        assert!(Arc::ptr_eq(&binding, &repeated));
     }
 
     fn admitted_info(record: &ReleaseRecord, state: ModuleState) -> ModuleInfo {
