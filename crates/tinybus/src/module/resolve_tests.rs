@@ -687,7 +687,10 @@ mod resolver {
             .err()
             .expect("a concurrent unbound admission must fail closed");
 
-        assert!(error.contains("was loaded without the requested callback binding"));
+        assert!(
+            error.contains("was loaded without the requested callback binding"),
+            "{error}"
+        );
         assert_eq!(factory_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(f.resolver.state_of(record.id), Availability::Failed);
     }
