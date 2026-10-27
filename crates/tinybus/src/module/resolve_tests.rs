@@ -403,6 +403,16 @@ mod resolver {
             )
             .await
             .unwrap();
+        // A repeated single-binding request is accepted only when the
+        // resolver's completed result still retains this exact binding.
+        resolver
+            .ensure_loaded_with_host_callbacks(
+                record.id,
+                Arc::clone(&binding),
+                serde_json::json!({ "host": binding.unique_name().as_str() }),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(resolver.state_of(record.id), Availability::Ready);
         assert!(
