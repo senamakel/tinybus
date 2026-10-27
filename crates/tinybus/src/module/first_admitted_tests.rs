@@ -732,7 +732,7 @@ async fn callback_release_loader_reports_uncached_candidate_when_downloads_are_d
     let attempts = Arc::new(AtomicUsize::new(0));
     let runtime_for_prepare = Arc::clone(&runtime);
     let attempts_for_prepare = Arc::clone(&attempts);
-    let Err(error) = super::load_first_admitted_with_host_callbacks(
+    let error = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &plan,
         move |_| {
