@@ -435,12 +435,22 @@ async fn callback_release_loader_skips_bundle_candidates_without_an_archive_or_m
     let assets = [ASSET];
     let plan = plan(&assets, cache.path(), Some(bundle.path()));
     let mut attempts = 0;
+    let host = runtime.host();
     let Err(error) = super::load_first_admitted_with_host_callbacks(
-        runtime.host(),
+        host,
         &plan,
-        |_| {
+        |_| async {
             attempts += 1;
-            async { Err("an absent bundle must not prepare a callback".into()) }
+            let binding = std::sync::Arc::new(
+                host.prepare_host_callbacks(vec![crate::module::HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+            );
+            Ok((binding, serde_json::json!({})))
         },
         "org.example.Demo",
         "/org/example/Demo",
@@ -451,7 +461,8 @@ async fn callback_release_loader_skips_bundle_candidates_without_an_archive_or_m
     };
 
     assert!(error.contains("downloads are disabled"), "{error}");
-    assert_eq!(attempts, 0);
+    assert!(!error.contains("installer bundle"), "{error}");
+    assert_eq!(attempts, 1);
 }
 
 #[tokio::test]
