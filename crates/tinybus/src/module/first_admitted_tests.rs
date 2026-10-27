@@ -397,9 +397,8 @@ async fn callback_release_loader_skips_unbuildable_bundle_and_cache_paths() {
         "/org/example/Demo",
     )
     .await
-    else {
-        panic!("unbuildable candidates should be rejected");
-    };
+    .err()
+    .expect("unbuildable candidates should be rejected");
 
     assert!(error.contains("downloads are disabled"), "{error}");
     assert_eq!(attempts, 0);
@@ -453,7 +452,7 @@ async fn callback_preparation_failure_stops_before_trying_another_candidate() {
     };
     let mut attempts = Vec::new();
 
-    let Err(error) = super::load_first_admitted_with_host_callbacks(
+    let error = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &plan,
         |attempt| {
