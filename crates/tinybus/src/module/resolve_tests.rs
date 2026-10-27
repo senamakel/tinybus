@@ -737,7 +737,10 @@ mod resolver {
             .err()
             .expect("a cached ready slot cannot substitute for its callback binding");
 
-        assert!(error.contains("was loaded without the requested callback binding"));
+        assert!(
+            error.contains("was loaded without the requested callback binding"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
