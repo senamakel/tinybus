@@ -6,8 +6,10 @@ use crate::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
 #[tokio::test]
 async fn resolver_awaits_async_module_configuration_only_for_the_requested_module() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use super::super::test_support::{Recording, record, shared_runtime};
     use std::sync::Arc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let record = record("resolver_async_module_config");
     let sources = HashMap::from([(record.id.to_string(), ModuleSource::Linked)]);

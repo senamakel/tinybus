@@ -275,9 +275,7 @@ pub type ModuleConfigProvider = Arc<dyn Fn(&str) -> serde_json::Value + Send + S
 /// The synchronous provider remains available for hosts whose configuration
 /// is already in memory.
 pub type AsyncModuleConfigProvider = Arc<
-    dyn for<'a> Fn(
-            &'a str,
-        ) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send + 'a>>
+    dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send + 'a>>
         + Send
         + Sync,
 >;

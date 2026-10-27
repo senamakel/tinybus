@@ -83,9 +83,8 @@ pub use release::{ReleaseAsset, ReleaseRecord};
 #[cfg(feature = "modules")]
 pub use resolve::{
     AsyncModuleConfigProvider, LinkedFactory, LinkedRegistry, LoadError, ModuleConfigProvider,
-    ModuleGate, ModuleSource,
-    ResolvedHook, Resolver, ResolverInputs, RuntimeFuture, RuntimeProvider, resolve_bundled_dir,
-    set_bundled_releases_dir,
+    ModuleGate, ModuleSource, ResolvedHook, Resolver, ResolverInputs, RuntimeFuture,
+    RuntimeProvider, resolve_bundled_dir, set_bundled_releases_dir,
 };
 #[cfg(feature = "modules")]
 pub use runtime::{
