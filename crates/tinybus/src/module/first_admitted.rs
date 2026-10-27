@@ -19,12 +19,14 @@
 //! about its bytes. The release cache then gets the same pinned release, held
 //! to the same digest, in a directory this user owns.
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use super::cache::{digest_marker_path, secure_release_cache};
 use super::host::is_placement_refusal;
-use super::{artifact_dir, CachedRelease, ModuleHost, ModuleInfo, ReleaseAsset};
+use super::{CachedRelease, ModuleHost, ModuleInfo, ReleaseAsset, artifact_dir};
 
 /// The pinned release and where its artifacts live on this machine.
 #[derive(Debug, Clone, Copy)]
@@ -185,6 +187,14 @@ pub fn load_first_admitted(
 /// Load the first admitted pinned artifact while preparing a fresh callback
 /// binding for each candidate. A failed load consumes only its own binding;
 /// the successful binding is retained with the exact registry peer.
+type PreparedCallbacks = Result<
+    (
+        std::sync::Arc<crate::module::HostCallbackBinding>,
+        serde_json::Value,
+    ),
+    String,
+>;
+
 pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
     host: &ModuleHost,
     plan: &ReleasePlan<'_>,
@@ -200,16 +210,34 @@ pub async fn load_first_admitted_with_host_callbacks<F, Fut>(
 >
 where
     F: FnMut(usize) -> Fut,
-    Fut: std::future::Future<
-        Output = Result<
-            (
-                std::sync::Arc<crate::module::HostCallbackBinding>,
-                serde_json::Value,
-            ),
-            String,
-        >,
-    >,
+    Fut: std::future::Future<Output = PreparedCallbacks>,
 {
+    let mut boxed_prepare = |attempt| {
+        Box::pin(prepare(attempt)) as Pin<Box<dyn Future<Output = PreparedCallbacks> + '_>>
+    };
+    load_first_admitted_with_host_callbacks_inner(
+        host,
+        plan,
+        &mut boxed_prepare,
+        expected_bus_name,
+        expected_object_path,
+    )
+    .await
+}
+
+async fn load_first_admitted_with_host_callbacks_inner<'a>(
+    host: &ModuleHost,
+    plan: &ReleasePlan<'_>,
+    prepare: &mut (dyn FnMut(usize) -> Pin<Box<dyn Future<Output = PreparedCallbacks> + 'a>> + 'a,),
+    expected_bus_name: &str,
+    expected_object_path: &str,
+) -> Result<
+    (
+        ModuleInfo,
+        std::sync::Arc<crate::module::HostCallbackBinding>,
+    ),
+    String,
+> {
     let id = plan.id;
     if plan.assets.is_empty() {
         return Err(format!(
