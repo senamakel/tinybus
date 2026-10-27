@@ -251,16 +251,7 @@ mod resolver {
         use crate::module::runtime::{ModuleRuntime, RuntimeNames};
 
         let record = record("resolver_foreign_callback_binding");
-        let runtime = Box::leak(Box::new(
-            crate::module::ModuleRuntime::start(
-                &crate::module::RuntimeNames {
-                    thread: "single-callback-local-test".into(),
-                    worker: "single-callback-local-worker".into(),
-                },
-                None,
-            )
-            .unwrap(),
-        ));
+        let runtime = shared_runtime();
         let foreign_runtime = ModuleRuntime::start(
             &RuntimeNames {
                 thread: "tinybus-test-foreign-callback".to_owned(),
@@ -352,7 +343,16 @@ mod resolver {
             release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
             assets: &[],
         }));
-        let runtime = shared_runtime();
+        let runtime = Box::leak(Box::new(
+            crate::module::ModuleRuntime::start(
+                &crate::module::RuntimeNames {
+                    thread: "single-callback-local-test".into(),
+                    worker: "single-callback-local-worker".into(),
+                },
+                None,
+            )
+            .unwrap(),
+        ));
         let binding = Arc::new(
             runtime
                 .host()
