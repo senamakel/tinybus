@@ -420,12 +420,17 @@ mod resolver {
         let working_dir = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
         let root = tempfile::tempdir_in(working_dir).unwrap();
         let root_path = std::fs::canonicalize(root.path()).unwrap();
+        let module_dir = root_path.join("callback-module");
+        #[cfg(windows)]
+        super::super::windows_acl::create_private_dir_all(&module_dir).unwrap();
+        #[cfg(not(windows))]
+        std::fs::create_dir(&module_dir).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&root_path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&module_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        let artifact = root_path.join(source.file_name().unwrap());
+        let artifact = module_dir.join(source.file_name().unwrap());
         std::fs::copy(&source, &artifact).unwrap();
         std::fs::write(
             root_path.join("modules.toml"),
