@@ -479,8 +479,8 @@ async fn callback_release_loader_admits_a_pinned_installer_module_and_retains_it
     use crate::module::{HostCallbackEndpoint, ModuleRuntime, RuntimeNames};
     use std::sync::Arc;
 
-    let Some(fixture) = std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE")
-        .map(std::path::PathBuf::from)
+    let Some(fixture) =
+        std::env::var_os("TINYBUS_TEST_HOST_CALLBACK_MODULE").map(std::path::PathBuf::from)
     else {
         return;
     };
@@ -519,10 +519,14 @@ async fn callback_release_loader_admits_a_pinned_installer_module_and_retains_it
         crate::module::cache::library_extension()
     ));
     std::fs::copy(&fixture, &module).unwrap();
-    let library_hash = crate::module::hash::file_hex(std::fs::File::open(&module).unwrap()).unwrap();
+    let library_hash =
+        crate::module::hash::file_hex(std::fs::File::open(&module).unwrap()).unwrap();
     std::fs::write(
         directory.join("modules.toml"),
-        format!("{:?} = {library_hash:?}\n", module.file_name().unwrap().to_str().unwrap()),
+        format!(
+            "{:?} = {library_hash:?}\n",
+            module.file_name().unwrap().to_str().unwrap()
+        ),
     )
     .unwrap();
     let assets = [asset];
@@ -571,9 +575,11 @@ async fn callback_release_loader_admits_a_pinned_installer_module_and_retains_it
     .unwrap();
 
     assert_eq!(info.manifest.bus_name.as_str(), "org.example.EagerCallback");
-    assert!(runtime
-        .host()
-        .retains_host_callback_binding("org.example.EagerCallback", &selected));
+    assert!(
+        runtime
+            .host()
+            .retains_host_callback_binding("org.example.EagerCallback", &selected)
+    );
 }
 
 #[tokio::test]
