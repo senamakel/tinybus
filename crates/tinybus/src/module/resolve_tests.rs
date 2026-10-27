@@ -468,6 +468,74 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn callback_factory_failure_is_cached_without_retrying_or_loading() {
+        let host_key = Box::leak(
+            crate::module::platform::host_candidates()
+                .into_iter()
+                .next()
+                .expect("this host has a release candidate")
+                .into_boxed_str(),
+        );
+        let assets = Box::leak(
+            vec![ReleaseAsset {
+                host_key,
+                archive: "callback-factory.tar.gz",
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                library_sha256: None,
+            }]
+            .into_boxed_slice(),
+        );
+        let record = Box::leak(Box::new(crate::module::ReleaseRecord {
+            id: "resolver_callback_factory_failure",
+            bus_name: "ai.tinyhumans.test.resolver_callback_factory_failure",
+            object_path: "/ai/tinyhumans/test/Module",
+            version: "0.0.0",
+            release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
+            assets,
+        }));
+        let install_dir = tempfile::tempdir().unwrap();
+        let resolver = fixture(
+            record,
+            true,
+            HashMap::new(),
+            Some(install_dir.path().to_path_buf()),
+        )
+        .resolver;
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let factory_attempts = Arc::clone(&attempts);
+
+        let error = resolver
+            .ensure_loaded_with_host_callback_factory(record.id, move |_| {
+                let attempts = Arc::clone(&factory_attempts);
+                async move {
+                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err("callback setup was refused".to_owned())
+                }
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "callback setup was refused");
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let cached_error = resolver
+            .ensure_loaded_with_host_callback_factory(record.id, |_| async {
+                panic!("a cached callback failure must not rerun its factory")
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(cached_error, error);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            !shared_runtime()
+                .host()
+                .list()
+                .iter()
+                .any(|info| info.manifest.bus_name.as_str() == record.bus_name)
+        );
+    }
+
+    #[tokio::test]
     async fn callback_resolution_does_not_join_a_generic_in_flight_load() {
         use crate::module::HostCallbackEndpoint;
         use std::sync::{Condvar, Mutex};
