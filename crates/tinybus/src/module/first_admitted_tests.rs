@@ -347,7 +347,7 @@ async fn callback_release_loader_reports_empty_candidates_without_preparing_auth
         ..plan(&[], std::path::Path::new("."), None)
     };
     let mut attempts = 0;
-    let Err(error) = super::load_first_admitted_with_host_callbacks(
+    let error = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &plan,
         |_| {
@@ -358,9 +358,8 @@ async fn callback_release_loader_reports_empty_candidates_without_preparing_auth
         "/org/example/Demo",
     )
     .await
-    else {
-        panic!("callback preparation failure must stop resolution");
-    };
+    .err()
+    .expect("the missing archive cannot be admitted");
     assert!(error.contains("not available for this platform"));
     assert_eq!(attempts, 0);
 }
@@ -454,7 +453,7 @@ async fn callback_preparation_failure_stops_before_trying_another_candidate() {
     };
     let mut attempts = Vec::new();
 
-    let error = super::load_first_admitted_with_host_callbacks(
+    let Err(error) = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &plan,
         |attempt| {
@@ -465,8 +464,9 @@ async fn callback_preparation_failure_stops_before_trying_another_candidate() {
         "/org/example/Demo",
     )
     .await
-    .err()
-    .expect("the missing archive cannot be admitted");
+    else {
+        panic!("callback preparation failure must stop resolution");
+    };
 
     assert_eq!(error, "callback authority could not be prepared");
     assert_eq!(attempts, [0]);
@@ -762,8 +762,6 @@ async fn callback_release_loader_reports_uncached_candidate_when_downloads_are_d
         "/org/example/Demo",
     )
     .await
-    .err()
-    .expect("a corrupt installer archive cannot be admitted");
     .err()
     .expect("a corrupt installer archive cannot be admitted");
 
