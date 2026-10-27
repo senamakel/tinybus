@@ -386,7 +386,7 @@ async fn callback_release_loader_skips_unbuildable_bundle_and_cache_paths() {
         ..plan(&assets, cache.path(), Some(bundle.path()))
     };
     let mut attempts = 0;
-    let error = super::load_first_admitted_with_host_callbacks(
+    let Err(error) = super::load_first_admitted_with_host_callbacks(
         runtime.host(),
         &plan,
         |_| {
@@ -471,7 +471,9 @@ async fn callback_release_loader_refuses_a_present_bundle_with_an_invalid_marker
         "/org/example/Demo",
     )
     .await
-    .unwrap_err();
+    else {
+        panic!("invalid installer marker should be rejected");
+    };
 
     assert!(error.contains("installer bundle"), "{error}");
     assert!(error.contains("does not match the pin"), "{error}");
