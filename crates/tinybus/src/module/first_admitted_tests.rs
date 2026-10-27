@@ -49,8 +49,7 @@ fn an_invalid_installer_bundle_is_reported_without_falling_back_to_the_cache() {
         &plan(&assets, user_cache.path(), Some(bundled.path())),
         &serde_json::json!({}),
     )
-    .err()
-    .expect("an empty release has no admitted callback module");
+    .unwrap_err();
 
     assert!(error.contains("installer bundle"), "{error}");
     assert!(error.contains("repairing the installation"), "{error}");
@@ -68,8 +67,7 @@ fn an_absent_installer_bundle_uses_the_release_cache_path() {
         &plan(&assets, user_cache.path(), Some(bundled.path())),
         &serde_json::json!({}),
     )
-    .err()
-    .expect("the missing archive cannot be admitted");
+    .unwrap_err();
 
     assert!(error.contains("downloads are disabled"), "{error}");
     assert!(!error.contains("installer bundle"), "{error}");
@@ -89,8 +87,7 @@ fn an_unbuildable_cache_path_falls_through_then_reports_the_miss() {
         &plan(&assets, root.path(), None),
         &serde_json::json!({}),
     )
-    .err()
-    .expect("a corrupt installer archive cannot be admitted");
+    .unwrap_err();
     assert!(error.contains("downloads are disabled"), "{error}");
 }
 
@@ -359,7 +356,8 @@ async fn callback_release_loader_reports_empty_candidates_without_preparing_auth
         "/org/example/Demo",
     )
     .await
-    .unwrap_err();
+    .err()
+    .expect("the missing archive cannot be admitted");
     assert!(error.contains("not available for this platform"));
     assert_eq!(attempts, 0);
 }
@@ -436,7 +434,8 @@ async fn callback_release_loader_reports_uncached_candidate_when_downloads_are_d
         "/org/example/Demo",
     )
     .await
-    .unwrap_err();
+    .err()
+    .expect("a corrupt installer archive cannot be admitted");
 
     assert!(error.contains("downloads are disabled"), "{error}");
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
