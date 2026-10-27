@@ -1,14 +1,14 @@
 use super::*;
 use crate::module::manifest::{
-    Dependency, ModuleIdentity, PanicPolicy, ProvidedInterface, MANIFEST_SCHEMA,
+    Dependency, MANIFEST_SCHEMA, ModuleIdentity, PanicPolicy, ProvidedInterface,
 };
 use crate::{BusName, InterfaceName, InterfaceVersion, ObjectPath, Version};
 
 #[tokio::test]
 async fn resolver_awaits_async_module_configuration_only_for_the_requested_module() {
-    use super::test_support::{record, shared_runtime, Recording};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use super::test_support::{Recording, record, shared_runtime};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let record = record("resolver_async_module_config");
     let sources = HashMap::from([(record.id.to_string(), ModuleSource::Linked)]);
@@ -136,9 +136,11 @@ fn a_required_dependency_no_module_provides_leaves_the_module_unresolved_and_nam
     )];
     let result = resolve(&manifests, &HashSet::new());
     assert!(result.order.is_empty());
-    assert!(result.unresolved[0]
-        .1
-        .contains("ai.tinyhumans.module.Missing"));
+    assert!(
+        result.unresolved[0]
+            .1
+            .contains("ai.tinyhumans.module.Missing")
+    );
 }
 
 #[test]
@@ -167,10 +169,12 @@ fn a_dependency_cycle_is_reported_rather_than_loaded() {
     ];
     let result = resolve(&manifests, &HashSet::new());
     assert!(result.order.is_empty());
-    assert!(result
-        .unresolved
-        .iter()
-        .all(|(_, reason)| reason == "module dependency cycle detected"));
+    assert!(
+        result
+            .unresolved
+            .iter()
+            .all(|(_, reason)| reason == "module dependency cycle detected")
+    );
 }
 
 #[test]
@@ -185,10 +189,12 @@ fn a_module_blocked_behind_an_unresolved_provider_is_not_reported_as_a_cycle() {
     ];
     let result = resolve(&manifests, &HashSet::new());
     assert!(result.order.is_empty());
-    assert!(result
-        .unresolved
-        .iter()
-        .all(|(_, reason)| reason.contains("has no provider")));
+    assert!(
+        result
+            .unresolved
+            .iter()
+            .all(|(_, reason)| reason.contains("has no provider"))
+    );
 }
 
 #[test]
@@ -211,7 +217,7 @@ fn two_modules_claiming_one_bus_name_are_both_reported_and_neither_is_initialize
 }
 
 mod resolver {
-    use super::super::test_support::{fixture, record, shared_runtime, Recording};
+    use super::super::test_support::{Recording, fixture, record, shared_runtime};
 
     struct ResolverCallback(crate::BusName);
 
@@ -236,8 +242,8 @@ mod resolver {
 
     #[tokio::test]
     async fn callback_resolution_rejects_a_binding_from_another_host_without_claiming_the_slot() {
-        use crate::module::runtime::{ModuleRuntime, RuntimeNames};
         use crate::module::HostCallbackEndpoint;
+        use crate::module::runtime::{ModuleRuntime, RuntimeNames};
 
         let record = record("resolver_foreign_callback_binding");
         let runtime = shared_runtime();
@@ -326,15 +332,21 @@ mod resolver {
         .resolver;
 
         let error = resolver
-            .ensure_loaded_with_host_callbacks(record.id, Arc::clone(&binding), serde_json::json!({}))
+            .ensure_loaded_with_host_callbacks(
+                record.id,
+                Arc::clone(&binding),
+                serde_json::json!({}),
+            )
             .await
             .unwrap_err();
 
         assert!(error.contains("callback load failed"), "{error}");
         assert_eq!(resolver.state_of(record.id), Availability::Failed);
-        assert!(!runtime
-            .host()
-            .retains_host_callback_binding(record.bus_name, &binding));
+        assert!(
+            !runtime
+                .host()
+                .retains_host_callback_binding(record.bus_name, &binding)
+        );
     }
 
     #[tokio::test]
@@ -620,9 +632,11 @@ mod resolver {
             .find(|info| info.manifest.bus_name.as_str() == record.bus_name)
             .expect("the requested registry identity should be loaded");
         assert_eq!(info.manifest.object_path.as_str(), record.object_path);
-        assert!(runtime
-            .host()
-            .retains_host_callback_binding(record.bus_name, &binding));
+        assert!(
+            runtime
+                .host()
+                .retains_host_callback_binding(record.bus_name, &binding)
+        );
         let peer = guard
             .module_peer()
             .expect("the callback is bound to a peer");
@@ -735,8 +749,8 @@ mod resolver {
     }
 
     #[tokio::test]
-    async fn a_loaded_module_with_the_registered_bus_but_wrong_object_path_does_not_satisfy_the_initial_fast_path(
-    ) {
+    async fn a_loaded_module_with_the_registered_bus_but_wrong_object_path_does_not_satisfy_the_initial_fast_path()
+     {
         let record = record("resolver_wrong_object_path_fast_path");
         let runtime = shared_runtime();
         let mut manifest = super::module(record.id, &[], &[]);
@@ -949,8 +963,8 @@ mod resolver {
     }
 
     use super::super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn a_faulted_module_is_never_retried_in_process() {
@@ -1354,10 +1368,12 @@ mod resolver {
         assert!(access.enabled());
         access.reporter().report_unknown_module();
         // A valid bus address yields a proxy once the runtime is up.
-        assert!(access
-            .proxy("ai.tinyhumans.test.Access", "/ai/tinyhumans/test/Access")
-            .await
-            .is_ok());
+        assert!(
+            access
+                .proxy("ai.tinyhumans.test.Access", "/ai/tinyhumans/test/Access")
+                .await
+                .is_ok()
+        );
         // A malformed address is a contract failure, not a transport one.
         assert_eq!(
             access.proxy("not a bus name", "/nope").await.err(),
