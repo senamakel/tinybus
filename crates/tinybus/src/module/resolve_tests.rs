@@ -343,7 +343,7 @@ mod resolver {
             release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
             assets: &[],
         }));
-        let runtime = Box::leak(Box::new(
+        let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
             crate::module::ModuleRuntime::start(
                 &crate::module::RuntimeNames {
                     thread: "single-callback-local-test".into(),
