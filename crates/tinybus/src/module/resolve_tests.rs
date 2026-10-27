@@ -296,6 +296,48 @@ mod resolver {
     }
 
     #[tokio::test]
+    async fn failed_local_callback_load_does_not_retain_its_binding() {
+        use crate::module::HostCallbackEndpoint;
+
+        let record = record("resolver_failed_local_callback_load");
+        let runtime = shared_runtime();
+        let binding = Arc::new(
+            runtime
+                .host()
+                .prepare_host_callbacks(vec![HostCallbackEndpoint {
+                    path: "/callback".parse().unwrap(),
+                    interface: "org.example.Callback".parse().unwrap(),
+                    members: vec!["Observe".parse().unwrap()],
+                }])
+                .await
+                .unwrap(),
+        );
+        let resolver = fixture(
+            record,
+            true,
+            HashMap::from([(
+                record.id.to_string(),
+                ModuleSource::LocalFile {
+                    path: "/unused/missing-callback-module.so".to_owned(),
+                },
+            )]),
+            None,
+        )
+        .resolver;
+
+        let error = resolver
+            .ensure_loaded_with_host_callbacks(record.id, Arc::clone(&binding), serde_json::json!({}))
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("callback load failed"), "{error}");
+        assert_eq!(resolver.state_of(record.id), Availability::Failed);
+        assert!(!runtime
+            .host()
+            .retains_host_callback_binding(record.bus_name, &binding));
+    }
+
+    #[tokio::test]
     async fn callback_resolution_does_not_join_a_generic_in_flight_load() {
         use crate::module::HostCallbackEndpoint;
         use std::sync::{Condvar, Mutex};
