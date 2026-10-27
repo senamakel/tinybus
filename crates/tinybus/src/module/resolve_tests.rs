@@ -1381,6 +1381,48 @@ mod resolver {
     }
 
     #[test]
+    fn status_of_distinguishes_a_resolution_that_is_still_loading() {
+        let record = record("resolver-loading-status");
+        let f = fixture(record, true, HashMap::new(), None);
+        let Claim::Run { sender, .. } = resolution::global().claim(record.id) else {
+            panic!("this test owns the process-global resolution id");
+        };
+
+        assert_eq!(f.resolver.status_of(record), (Availability::Loading, None));
+
+        resolution::global().complete(
+            record.id,
+            Resolution::Failed("test cleanup".to_owned()),
+            sender,
+        );
+    }
+
+    #[test]
+    fn invocation_failure_reports_are_not_deduplicated() {
+        let record = record("resolver-invocation-reports");
+        let f = fixture(record, true, HashMap::new(), None);
+
+        f.resolver.report_invocation(record, Reason::ModuleFault);
+        f.resolver.report_invocation(record, Reason::ModuleFault);
+
+        assert_eq!(
+            f.sink.0.lock().unwrap().as_slice(),
+            &[
+                (record.id.to_string(), Reason::ModuleFault),
+                (record.id.to_string(), Reason::ModuleFault),
+            ]
+        );
+    }
+
+    #[test]
+    fn still_loading_has_a_retry_message_for_non_bounded_callers() {
+        assert_eq!(
+            LoadError::StillLoading.into_message(),
+            "the module is still loading; try again shortly"
+        );
+    }
+
+    #[test]
     fn disabled_configuration_wins_over_a_loaded_module() {
         let record = record("resolver-disabled-status");
         let f = fixture(record, false, HashMap::new(), None);
@@ -1909,6 +1951,9 @@ fn linked_registry_replaces_factories_and_returns_the_last_registration() {
     assert!(same_global.is_registered("global-registry-test"));
     let global_result = (same_global.get("global-registry-test").unwrap())();
     assert!(matches!(global_result, Err(error) if error.to_string().contains("first factory")));
+
+    let default_registry = LinkedRegistry::default();
+    assert!(!default_registry.is_registered("registry-test"));
 }
 
 struct ResolverSearchSink;
