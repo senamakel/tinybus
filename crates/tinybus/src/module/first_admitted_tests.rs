@@ -49,7 +49,8 @@ fn an_invalid_installer_bundle_is_reported_without_falling_back_to_the_cache() {
         &plan(&assets, user_cache.path(), Some(bundled.path())),
         &serde_json::json!({}),
     )
-    .unwrap_err();
+    .err()
+    .expect("an empty release has no admitted callback module");
 
     assert!(error.contains("installer bundle"), "{error}");
     assert!(error.contains("repairing the installation"), "{error}");
@@ -67,7 +68,8 @@ fn an_absent_installer_bundle_uses_the_release_cache_path() {
         &plan(&assets, user_cache.path(), Some(bundled.path())),
         &serde_json::json!({}),
     )
-    .unwrap_err();
+    .err()
+    .expect("the missing archive cannot be admitted");
 
     assert!(error.contains("downloads are disabled"), "{error}");
     assert!(!error.contains("installer bundle"), "{error}");
@@ -87,7 +89,8 @@ fn an_unbuildable_cache_path_falls_through_then_reports_the_miss() {
         &plan(&assets, root.path(), None),
         &serde_json::json!({}),
     )
-    .unwrap_err();
+    .err()
+    .expect("a corrupt installer archive cannot be admitted");
     assert!(error.contains("downloads are disabled"), "{error}");
 }
 
