@@ -1041,7 +1041,19 @@ mod resolver {
             release_url: "https://github.com/tinyhumansai/tinybus/releases/tag/v0.0.0",
             assets,
         }));
-        let runtime = shared_runtime();
+        // The fixture module's bus name is fixed, and the shared runtime can
+        // already hold it from the other callback tests, so this test owns its
+        // runtime.
+        let runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
+            crate::module::ModuleRuntime::start(
+                &crate::module::RuntimeNames {
+                    thread: "retained-callback-binding-test".into(),
+                    worker: "retained-callback-binding-worker".into(),
+                },
+                None,
+            )
+            .unwrap(),
+        ));
         let resolver = Resolver::new(ResolverInputs {
             enabled: true,
             install_dir: Some(root_path.clone()),
@@ -1055,7 +1067,7 @@ mod resolver {
             on_resolved: None,
             records: vec![record],
             terminal_marker: String::new(),
-            runtime: Arc::new(|| Box::pin(async { Ok(shared_runtime()) })),
+            runtime: Arc::new(move || Box::pin(async move { Ok(runtime) })),
             module_config: Arc::new(|_| serde_json::json!({})),
             async_module_config: None,
             reporter: Arc::new(FailureReporter::new(Arc::new(
