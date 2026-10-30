@@ -1134,6 +1134,38 @@ mod resolver {
             .unwrap();
         assert!(Arc::ptr_eq(&binding, &repeated));
 
+        // A resolution that is ready in the process-wide table but was loaded
+        // into another runtime cannot lend this resolver a callback binding.
+        let other_runtime: &'static crate::module::ModuleRuntime = Box::leak(Box::new(
+            crate::module::ModuleRuntime::start(
+                &crate::module::RuntimeNames {
+                    thread: "retained-callback-other-test".into(),
+                    worker: "retained-callback-other-worker".into(),
+                },
+                None,
+            )
+            .unwrap(),
+        ));
+        let elsewhere = fixture_with_runtime(
+            record,
+            true,
+            HashMap::new(),
+            None,
+            Arc::new(move || Box::pin(async move { Ok(other_runtime) })),
+        )
+        .resolver;
+        let error = elsewhere
+            .ensure_loaded_with_host_callback_factory(record.id, |_| async {
+                panic!("a ready resolution never prepares a new callback binding")
+            })
+            .await
+            .err()
+            .expect("a ready module in another runtime has no retained binding");
+        assert!(
+            error.contains("loaded without a callback binding"),
+            "{error}"
+        );
+
         let direct_resolver = fixture_with_runtime(
             record,
             true,
