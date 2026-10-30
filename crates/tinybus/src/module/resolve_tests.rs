@@ -1134,7 +1134,7 @@ mod resolver {
             .unwrap();
         assert!(Arc::ptr_eq(&binding, &repeated));
 
-        let direct_resolver = fixture(
+        let direct_resolver = fixture_with_runtime(
             record,
             true,
             HashMap::from([(
@@ -1144,6 +1144,7 @@ mod resolver {
                 },
             )]),
             None,
+            Arc::new(move || Box::pin(async move { Ok(runtime) })),
         )
         .resolver;
         direct_resolver
