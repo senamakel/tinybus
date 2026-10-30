@@ -1,6 +1,8 @@
 //! Actual eager native fixture calling its fixed host during setup before READY.
+use async_trait::async_trait;
 use serde::Deserialize;
-use tinybus::{Connection, Error, Result};
+use serde_json::Value;
+use tinybus::{BusName, Connection, Error, Interface, InterfaceName, MemberName, Result};
 
 #[derive(Deserialize)]
 struct Config {
@@ -14,6 +16,28 @@ struct Config {
 fn confidential_by_default() -> bool {
     true
 }
+struct CallbackModule(Connection, BusName);
+
+#[async_trait]
+impl Interface for CallbackModule {
+    fn name(&self) -> InterfaceName {
+        "org.example.EagerCallback".parse().unwrap()
+    }
+
+    fn members(&self) -> Vec<MemberName> {
+        vec!["Observe".parse().unwrap()]
+    }
+
+    async fn call(&self, _: &MemberName, _: Value) -> Result<Value> {
+        let reply: String = self
+            .0
+            .proxy(self.1.as_str(), "/callback", "org.example.Callback")?
+            .call_confidential("Observe", ())
+            .await?;
+        Ok(serde_json::json!(reply))
+    }
+}
+
 async fn setup(connection: Connection, config: Config) -> Result<()> {
     async {
         if config.fail {
@@ -25,6 +49,12 @@ async fn setup(connection: Connection, config: Config) -> Result<()> {
         } else {
             proxy.call("Observe", ()).await?
         };
+        connection
+            .serve_at(
+                "/org/example/EagerCallback".parse()?,
+                CallbackModule(connection.clone(), config.host.clone()),
+            )
+            .await?;
         connection.request_name("org.example.EagerCallback").await
     }
     .await

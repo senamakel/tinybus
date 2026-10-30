@@ -719,6 +719,73 @@ impl ModuleHost {
         }
     }
 
+    /// Wait until the module that owns `bus_name` has finished setup, then
+    /// snapshot it.
+    ///
+    /// "Loaded" is not "serving": an eager module's `init` can return while
+    /// its setup (opening a socket, starting a server) is still running, and
+    /// that setup can fault afterwards. A caller that reports the module usable
+    /// at load time reports a module that is about to lose its name. This
+    /// returns once the module signalled ready, faulted, failed or was closed,
+    /// or after `deadline`; a module still `Initializing` in the snapshot timed
+    /// out. A lazy module that has not been asked to initialise yet is
+    /// returned at once, since nothing is running whose outcome could be
+    /// awaited. `None` when no loaded module owns the name.
+    pub(crate) async fn settle(&self, bus_name: &str, deadline: Duration) -> Option<ModuleInfo> {
+        let transport = {
+            let loaded = self.inner.loaded.lock().expect("module list lock");
+            let module = loaded
+                .iter()
+                .find(|module| module.info.manifest.bus_name.as_str() == bus_name)?;
+            if matches!(module.snapshot().state, ModuleState::Resolved) {
+                return Some(module.snapshot());
+            }
+            module.transport.clone()
+        };
+        let _ = tokio::time::timeout(deadline, transport.wait_ready()).await;
+        self.inner
+            .loaded
+            .lock()
+            .expect("module list lock")
+            .iter()
+            .find(|module| module.info.manifest.bus_name.as_str() == bus_name)
+            .map(LoadedModule::snapshot)
+    }
+
+    /// Return the broker-assigned unique peer name for a live, ready module.
+    ///
+    /// `module_name` is the module's sanitized descriptor name as returned by
+    /// [`ModuleInfo::name`], not its well-known bus name. The returned name is
+    /// the identity the broker stamps onto ordinary calls from that exact
+    /// loaded instance. This lookup is not an attestation or confidential-call
+    /// grant; confidential delivery continues to require the existing pinned
+    /// admission and callback-binding checks.
+    ///
+    /// Returns `None` for unknown, disabled, initializing, stopped, faulted,
+    /// or lifecycle-transitioning modules. A caller must not retain a name as
+    /// authority beyond the invocation that needs it.
+    #[must_use]
+    pub fn authenticated_peer(&self, module_name: &str) -> Option<BusName> {
+        let loaded = self.inner.loaded.lock().expect("module list lock");
+        let module = loaded
+            .iter()
+            .find(|module| module.info.name == module_name)?;
+        if !module.info.enabled
+            || module.lifecycle_busy
+            || module.transport.native_lifecycle_pending()
+            || !module.transport.is_ready()
+            || module.transport.is_faulted()
+            || module.transport.init_failed()
+        {
+            return None;
+        }
+        matches!(
+            module.snapshot().state,
+            ModuleState::Ready | ModuleState::Serving
+        )
+        .then(|| module.unique_name.clone())
+    }
+
     /// Load one newly installed module.
     ///
     /// A verified operator allowlist admits confidential delivery to the exact

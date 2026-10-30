@@ -14,6 +14,12 @@
 //! search path, then the release cache (verified against the host's pinned
 //! digest, downloaded on a miss when allowed), then pruning of stale versions.
 //!
+//! A module counts as serving only once its setup has finished: every rung ends
+//! by waiting for the module to signal ready, and a fault or failure during
+//! setup fails the load with the module's reason. A cached `Ready` is re-checked
+//! against the host on each call, so a module that faults later is reported as
+//! failed rather than answering every call with a bare `Unavailable`.
+//!
 //! Each module has one slot in [`super::resolution`]. The first caller runs the
 //! resolution as a process-lifetime task and every other caller waits on its
 //! outcome; two modules never queue behind each other.
@@ -101,6 +107,35 @@ fn is_live_match(info: &ModuleInfo, record: &ReleaseRecord) -> bool {
                 | ModuleState::Ready
                 | ModuleState::Serving
         )
+}
+
+/// How long a resolution waits for a loaded module to finish setup before it
+/// gives up on it. Setup (starting a server, opening a socket) runs after the
+/// module's `init` returns, so loading alone says nothing about it.
+const SETUP_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Why `info` is not serving, or `Ok` when it is serving or has nothing running
+/// whose outcome could be awaited (a lazy module that has not been called yet).
+fn setup_outcome(info: &ModuleInfo, id: &str) -> Result<(), String> {
+    match &info.state {
+        ModuleState::Faulted { reason } | ModuleState::Failed { reason } => {
+            Err(format!("module '{id}' faulted during setup: {reason}"))
+        }
+        ModuleState::Rejected { reason } | ModuleState::Unresolved { reason } => {
+            Err(format!("module '{id}' was refused: {reason}"))
+        }
+        ModuleState::Stopped | ModuleState::Disabled => {
+            Err(format!("module '{id}' is not running"))
+        }
+        ModuleState::Initializing => Err(format!(
+            "module '{id}' did not finish setup within {} seconds",
+            SETUP_DEADLINE.as_secs()
+        )),
+        ModuleState::Discovered
+        | ModuleState::Resolved
+        | ModuleState::Ready
+        | ModuleState::Serving => Ok(()),
+    }
 }
 
 /// Result indexes refer to the input manifest slice.
@@ -755,7 +790,7 @@ impl Resolver {
                         .host()
                         .retains_host_callback_binding(record.bus_name, binding)
                     {
-                        return Ok(());
+                        return self.still_serving(record).await;
                     }
                     return Err(LoadError::Failed(format!(
                         "module '{id}' was loaded without the requested callback binding"
@@ -777,7 +812,7 @@ impl Resolver {
                         })?;
                     *selected.lock().expect("callback selection lock") = Some(binding);
                 }
-                return Ok(());
+                return self.still_serving(record).await;
             }
             Claim::Done(Resolution::Failed(reason)) => {
                 // The original resolution may have completed before a reporting
@@ -802,6 +837,7 @@ impl Resolver {
                 // the actual load work to that process-owned runtime.
                 let resolver = self.clone();
                 let task_sender = sender.clone();
+                let startup_callbacks = callbacks.clone();
                 let thread = std::thread::Builder::new()
                     .name("tinybus-resolution-startup".to_string())
                     .spawn(move || {
@@ -813,7 +849,7 @@ impl Resolver {
                         runtime.block_on(resolver.start_resolution(
                             record,
                             task_sender,
-                            callbacks,
+                            startup_callbacks,
                         ));
                             }
                             Err(error) => {
@@ -842,13 +878,57 @@ impl Resolver {
             }
         };
         match resolution::global().wait(id, receiver, within).await {
-            Waited::Ready => Ok(()),
+            Waited::Ready => {
+                self.still_serving(record).await?;
+                if let Some(CallbackLoad::Single(binding, _)) = callbacks.as_ref() {
+                    let runtime = self.runtime().await.map_err(|_| {
+                        LoadError::Failed(format!(
+                            "module '{id}' is unavailable: the module bus could not start"
+                        ))
+                    })?;
+                    if !runtime
+                        .host()
+                        .retains_host_callback_binding(record.bus_name, binding)
+                    {
+                        return Err(LoadError::Failed(format!(
+                            "module '{id}' was loaded without the requested callback binding"
+                        )));
+                    }
+                }
+                Ok(())
+            }
             Waited::Failed(reason) => {
                 self.report(record, Reason::ResolutionFailed);
                 Err(LoadError::Failed(reason))
             }
             Waited::StillLoading => Err(LoadError::StillLoading),
         }
+    }
+
+    /// Re-check a cached `Ready` against the host. A module can fault after it
+    /// was reported ready; the host then drops its name, so serving the cached
+    /// outcome would turn every later call into a bare `Unavailable`. The slot
+    /// settles as failed instead and the caller gets the module's reason.
+    async fn still_serving(&self, record: &'static ReleaseRecord) -> Result<(), LoadError> {
+        let Ok(runtime) = self.runtime().await else {
+            return Ok(());
+        };
+        let faulted = runtime.host().list().into_iter().find_map(|info| {
+            (info.manifest.bus_name.as_str() == record.bus_name
+                && matches!(
+                    info.state,
+                    ModuleState::Faulted { .. } | ModuleState::Failed { .. }
+                ))
+            .then(|| setup_outcome(&info, record.id).err())
+            .flatten()
+        });
+        let Some(reason) = faulted else {
+            return Ok(());
+        };
+        let reason = self.mark_terminal(reason);
+        resolution::global().mark_faulted(record.id, reason.clone());
+        self.report(record, Reason::ResolutionFailed);
+        Err(LoadError::Failed(reason))
     }
 
     /// The state of `id` as the resolution table reports it, without touching it.
@@ -957,7 +1037,11 @@ impl Resolver {
         }
     }
 
-    /// Get `record` serving: loaded, override, search path, release cache, prune.
+    /// Get `record` serving: load it, then wait for its setup to finish.
+    ///
+    /// Every rung (file, linked, search path, release cache, already loaded)
+    /// ends here, so none of them can report `Ready` for a module whose setup is
+    /// still running or has faulted.
     async fn ladder(
         &self,
         record: &'static ReleaseRecord,
@@ -969,7 +1053,20 @@ impl Resolver {
                 record.id
             )
         })?;
+        self.load_rungs(runtime, record, callbacks).await?;
+        match runtime.host().settle(record.bus_name, SETUP_DEADLINE).await {
+            Some(info) => setup_outcome(&info, record.id),
+            None => Ok(()),
+        }
+    }
 
+    /// Load: loaded, override, search path, release cache, prune.
+    async fn load_rungs(
+        &self,
+        runtime: &'static ModuleRuntime,
+        record: &'static ReleaseRecord,
+        callbacks: Option<CallbackLoad>,
+    ) -> Result<(), String> {
         // Already admitted under this exact registry identity: loaded from the
         // search path at boot, or by an earlier explicit local load.
         if runtime
@@ -1043,9 +1140,6 @@ impl Resolver {
                     })
                     .await
                 };
-                if callbacks.is_some() {
-                    return result;
-                }
                 return recover_admission(result, &runtime.host().list(), record);
             }
             Some(ModuleSource::Linked) => {

@@ -27,6 +27,18 @@ fn module_host_is_send_and_sync() {
     assert_send_sync::<ModuleHost>();
 }
 
+#[cfg(unix)]
+fn make_private_tree(root: &Path, path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    for component in path
+        .ancestors()
+        .take_while(|component| component.starts_with(root))
+    {
+        std::fs::set_permissions(component, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
 struct FakeModule {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
 }
@@ -635,7 +647,10 @@ async fn cancelling_a_waiting_stop_clears_its_pending_transition() {
 
 #[tokio::test]
 async fn a_lazy_manifest_registers_an_unmapped_library_and_the_first_call_loads_it() {
-    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let temp_root = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let directory = tempfile::tempdir_in(temp_root).unwrap();
+    #[cfg(unix)]
+    make_private_tree(directory.path(), directory.path());
     let extension = if cfg!(windows) {
         "dll"
     } else if cfg!(target_os = "macos") {
@@ -706,7 +721,7 @@ async fn a_lazy_manifest_registers_an_unmapped_library_and_the_first_call_loads_
 async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_pin_differs() {
     use crate::module::{ReleaseAsset, ReleasePlan, artifact_dir, load_first_admitted};
 
-    let bundled = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let bundled = tempfile::tempdir().unwrap();
     let user_cache = tempfile::tempdir().unwrap();
     // Code signing can rewrite the bundled library after the release archive
     // was hashed. The sealed local allowlist carries the final library digest.
@@ -719,6 +734,8 @@ async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_p
     };
     let dir = artifact_dir(bundled.path(), "clock", "0.1.0", asset.host_key).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
+    #[cfg(unix)]
+    make_private_tree(bundled.path(), &dir);
     let artifact = dir.join(format!(
         "clock.{}",
         crate::module::cache::library_extension()
@@ -790,7 +807,7 @@ async fn a_bundle_marker_uses_the_post_sign_allowlist_when_the_release_library_p
 async fn a_bundle_marker_without_an_allowlist_is_refused_rather_than_loaded_unhashed() {
     use crate::module::{ReleaseAsset, ReleasePlan, artifact_dir, load_first_admitted};
 
-    let bundled = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let bundled = tempfile::tempdir().unwrap();
     let user_cache = tempfile::tempdir().unwrap();
     let asset = ReleaseAsset {
         host_key: "macos-15-arm64",
@@ -800,6 +817,8 @@ async fn a_bundle_marker_without_an_allowlist_is_refused_rather_than_loaded_unha
     };
     let dir = artifact_dir(bundled.path(), "clock", "0.1.0", asset.host_key).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
+    #[cfg(unix)]
+    make_private_tree(bundled.path(), &dir);
     let artifact = dir.join(format!(
         "clock.{}",
         crate::module::cache::library_extension()
@@ -840,7 +859,7 @@ async fn a_bundle_marker_without_an_allowlist_is_refused_rather_than_loaded_unha
 
 #[test]
 fn an_invalid_lazy_sidecar_refuses_the_artifact_instead_of_loading_it_eagerly() {
-    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
     let artifact = directory.path().join(if cfg!(windows) {
         "clock.dll"
     } else if cfg!(target_os = "macos") {
@@ -857,7 +876,7 @@ fn an_invalid_lazy_sidecar_refuses_the_artifact_instead_of_loading_it_eagerly() 
 
 #[test]
 fn a_sidecar_without_lazy_init_refuses_the_artifact_instead_of_loading_it_eagerly() {
-    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
     let artifact = directory.path().join(if cfg!(windows) {
         "clock.dll"
     } else if cfg!(target_os = "macos") {
@@ -1182,6 +1201,73 @@ async fn the_sender_on_a_module_frame_is_stamped_by_the_broker_like_any_other_pe
         .unwrap();
     let sender: Option<BusName> = proxy.call("Sender", ()).await.unwrap();
     assert_eq!(sender, connection.unique_name());
+    broker_task.abort();
+}
+
+#[tokio::test]
+async fn authenticated_peer_is_available_only_for_a_live_ready_module() {
+    let _test_guard = FAKE_MODULE_TEST_LOCK.lock().await;
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let host = ModuleHost::new(broker);
+
+    assert!(host.authenticated_peer("clock").is_none());
+    let mut lazy_manifest = manifest();
+    lazy_manifest.lazy_init = true;
+    unsafe {
+        host.attach_raw(
+            "clock.so",
+            TbAbiDescriptor::current("clock", "0.1.0"),
+            lazy_manifest,
+            lazy_echo_init,
+        )
+    }
+    .unwrap();
+    assert!(host.authenticated_peer("clock").is_none());
+    assert!(
+        host.authenticated_peer("ai.tinyhumans.module.Clock")
+            .is_none()
+    );
+
+    let connection = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = connection
+        .proxy(
+            "ai.tinyhumans.module.Clock",
+            "/ai/tinyhumans/module/Clock",
+            "ai.tinyhumans.module.Clock",
+        )
+        .unwrap();
+    let _: Option<BusName> = proxy.call("Sender", ()).await.unwrap();
+    let authenticated = host
+        .authenticated_peer("clock")
+        .expect("ready module has an authenticated peer");
+    assert!(authenticated.is_unique());
+    {
+        let mut loaded = host.inner.loaded.lock().unwrap();
+        loaded[0].info.enabled = false;
+    }
+    assert!(host.authenticated_peer("clock").is_none());
+    {
+        let mut loaded = host.inner.loaded.lock().unwrap();
+        loaded[0].info.enabled = true;
+        loaded[0].info.state = ModuleState::Faulted {
+            reason: "fixture".into(),
+        };
+    }
+    assert!(host.authenticated_peer("clock").is_none());
+    host.inner.loaded.lock().unwrap()[0].info.state = ModuleState::Ready;
+    // The fake's Sender method reports its caller (this test connection),
+    // not the module's broker-assigned identity. The compiled-module proof
+    // verifies that an outbound module call carries this identity.
+
+    host.inner
+        .stop("clock", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(host.authenticated_peer("clock").is_none());
     broker_task.abort();
 }
 
@@ -2949,7 +3035,7 @@ async fn authenticates_native_context(variable: &str) {
     assert_eq!(
         proxy.attestation().await.unwrap(),
         Some(crate::attest::Attestation {
-            name: info.manifest.bus_name,
+            name: info.manifest.bus_name.clone(),
             sha256: hash.clone(),
             library_sha256: Some(hash),
         })
@@ -2961,9 +3047,25 @@ async fn authenticates_native_context(variable: &str) {
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(
+        modules.authenticated_peer(&info.name),
+        Some(module.clone()),
+        "the peer returned by the host API must match the compiled module's broker-stamped sender"
+    );
+    assert!(
+        modules
+            .authenticated_peer(info.manifest.bus_name.as_str())
+            .is_none()
+    );
     let callback: (crate::BusName, crate::BusName) =
         proxy.call_confidential("Callback", ()).await.unwrap();
     assert_eq!(callback, (sender, module));
+    modules
+        .inner
+        .stop(&info.name, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(modules.authenticated_peer(&info.name).is_none());
     task.abort();
 }
 
@@ -3023,6 +3125,7 @@ async fn fixed_unique_module_calls_are_refused_in_terminal_states_before_detach(
         // Keep the real transport attached while setting its terminal state:
         // this probes the pre-detach window without racing the reader task.
         host.inner.loaded.lock().unwrap()[0].info.state = state;
+        assert!(host.authenticated_peer("clock").is_none());
         assert!(
             host.inner
                 .unavailable_for(&client.unique_name().unwrap())

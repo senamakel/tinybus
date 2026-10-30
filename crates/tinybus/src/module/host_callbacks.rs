@@ -24,6 +24,10 @@ pub struct HostCallbackEndpoint {
 
 /// A finite set of ordinary (non-confidential) stream-carrying methods for
 /// one exact host callback interface.
+///
+/// Stream bytes use ordinary TinyBus `Write` calls, so these members cannot
+/// be confidential callbacks. Their authority is restricted to the exact
+/// loaded module and callback instance that declared them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostStreamCallbackEndpoint {
     /// Fixed object path; no subtree matching.
@@ -61,6 +65,11 @@ pub(crate) struct CallbackState {
     stream_endpoints: Vec<HostStreamCallbackEndpoint>,
     signals: Vec<HostCallbackSignal>,
     module_transport: Mutex<Option<std::sync::Weak<ModuleTransport>>>,
+    // A descendant callback future keeps its state alive, so retaining its parent
+    // chain lets root drain still find it after an intermediate binding is dropped.
+    // The reverse child links stay weak, avoiding an ownership cycle.
+    _parent: Option<Arc<CallbackState>>,
+    children: Mutex<Vec<std::sync::Weak<CallbackState>>>,
     lifetime: Mutex<Lifetime>,
     drained: Notify,
     physical_drained: std::sync::Condvar,
@@ -106,12 +115,39 @@ impl CallbackState {
                 .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
+        drop(state);
+        for child in self.live_children() {
+            child.wait_drained();
+        }
     }
 
     pub(crate) async fn drain(self: &Arc<Self>, deadline: Duration) -> Result<()> {
-        tokio::time::timeout(deadline, HostCallbackGuard(self.clone()).drained())
-            .await
-            .map_err(|_| Error::failed("module callback work exceeded lifecycle deadline"))
+        tokio::time::timeout(deadline, async {
+            HostCallbackGuard(self.clone()).drained().await;
+            for child in self.live_descendants() {
+                HostCallbackGuard(child).drained().await;
+            }
+        })
+        .await
+        .map_err(|_| Error::failed("module callback work exceeded lifecycle deadline"))
+    }
+    fn live_children(&self) -> Vec<Arc<CallbackState>> {
+        let mut children = self.children.lock().expect("callback children lock");
+        let live = children
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect();
+        children.retain(|child| child.strong_count() != 0);
+        live
+    }
+    fn live_descendants(&self) -> Vec<Arc<CallbackState>> {
+        let mut pending = self.live_children();
+        let mut descendants = Vec::new();
+        while let Some(child) = pending.pop() {
+            pending.extend(child.live_children());
+            descendants.push(child);
+        }
+        descendants
     }
     fn module_live(&self) -> bool {
         self.module_transport
@@ -200,6 +236,23 @@ impl CallbackState {
             .clone()
             .ok_or_else(|| Error::failed("directed signal recipient is unavailable"))
     }
+
+    fn authorized_stream_module(&self, context: &CallContext) -> Result<BusName> {
+        let state = self.lifetime.lock().expect("callback lifetime lock");
+        if context.is_confidential()
+            || self.stream_endpoints.is_empty()
+            || !self.module_live()
+            || !state.active
+            || state.module.is_none()
+            || context.authenticated_sender() != state.module.as_ref()
+        {
+            return Err(Error::failed("callback stream authority is unavailable"));
+        }
+        state
+            .module
+            .clone()
+            .ok_or_else(|| Error::failed("callback stream recipient is unavailable"))
+    }
 }
 
 /// Read-only liveness and authenticated module identity for a callback worker.
@@ -215,7 +268,10 @@ impl HostCallbackGuard {
         self.0.module_peer()
     }
 
-    /// Whether this binding remains active for this authenticated sender.
+    /// Whether this confidential callback binding remains active for this sender.
+    ///
+    /// Ordinary stream callbacks are checked separately with
+    /// [`HostCallbackGuard::authorizes_stream`].
     pub fn authorizes(&self, context: &CallContext) -> bool {
         let state = self.0.lifetime.lock().expect("callback lifetime lock");
         state.active
@@ -223,6 +279,12 @@ impl HostCallbackGuard {
             && context.is_confidential()
             && state.module.is_some()
             && context.authenticated_sender() == state.module.as_ref()
+    }
+
+    /// Whether this binding remains active for an ordinary stream callback
+    /// from its exact authenticated module sender.
+    pub fn authorizes_stream(&self, context: &CallContext) -> bool {
+        self.0.authorized_stream_module(context).is_ok()
     }
 
     /// Number of callbacks whose user futures have not yet completed or dropped.
@@ -354,8 +416,14 @@ impl HostCallbackBinding {
 
     /// Accept a stream opened by this binding's currently authorized module.
     ///
-    /// The callback context supplies the authenticated sender. Stream payloads
-    /// use ordinary TinyBus calls and are never confidential.
+    /// The raw connection remains private. The callback context supplies the
+    /// exact authenticated sender, and the stream is accepted only from that
+    /// sender while this binding remains active. This is for an explicitly
+    /// declared ordinary stream callback; stream payloads are not confidential.
+    ///
+    /// # Errors
+    /// Returns an error if the context is confidential, is not for this live
+    /// binding, or the stream was not opened by its bound module.
     pub fn accept_stream_from_module(
         &self,
         context: &CallContext,
@@ -366,6 +434,15 @@ impl HostCallbackBinding {
     }
 
     /// Open a stream to this binding's currently authorized module.
+    ///
+    /// This is the callback-side counterpart of
+    /// [`HostCallbackBinding::accept_stream_from_module`]. It does not expose
+    /// the binding's connection or permit a caller-supplied destination.
+    /// Like all streams, its payload uses ordinary TinyBus calls.
+    ///
+    /// # Errors
+    /// Returns an error if the context is confidential, is not for this live
+    /// binding, or the destination refuses the stream.
     pub async fn open_stream_to_module(
         &self,
         context: &CallContext,
@@ -379,20 +456,7 @@ impl HostCallbackBinding {
     }
 
     fn authorized_stream_module(&self, context: &CallContext) -> Result<BusName> {
-        let state = self.state.lifetime.lock().expect("callback lifetime lock");
-        if context.is_confidential()
-            || self.state.stream_endpoints.is_empty()
-            || !self.state.module_live()
-            || !state.active
-            || state.module.is_none()
-            || context.authenticated_sender() != state.module.as_ref()
-        {
-            return Err(Error::failed("callback stream authority is unavailable"));
-        }
-        state
-            .module
-            .clone()
-            .ok_or_else(|| Error::failed("callback stream recipient is unavailable"))
+        self.state.authorized_stream_module(context)
     }
 
     /// Construct an outgoing proxy using this private host connection.
@@ -450,11 +514,124 @@ impl HostCallbackBinding {
     /// Immediately and idempotently prevent new route and user-dispatch admission.
     /// Running user futures remain accounted for until actual completion/drop.
     pub fn revoke(&self) {
-        self.broker
-            .router
+        let mut router = self.broker.router.lock().expect("router lock");
+        // Serialize against child creation: it holds this lock while checking
+        // the parent and recording the child, so the walk sees every child
+        // created before revocation and later attempts fail the liveness check.
+        router.revoke_host_callbacks(&self.state);
+        let descendants = self.state.live_descendants();
+        for child in descendants {
+            router.revoke_host_callbacks(&child);
+        }
+    }
+
+    /// Create a fresh callback destination for the module bound to this live
+    /// binding. The child has only the declared endpoints, and is revoked with
+    /// this parent or when the module stops. Hosts use child bindings when a
+    /// module operation needs a new isolated host-owned capability scope.
+    ///
+    /// # Errors
+    /// Returns an error unless `context` is an authorized callback from the
+    /// exact live module, or if endpoint declarations or registration fail.
+    pub async fn create_child_binding(
+        &self,
+        context: &CallContext,
+        endpoints: Vec<HostCallbackEndpoint>,
+    ) -> Result<HostCallbackBinding> {
+        if !HostCallbackGuard(self.state.clone()).authorizes(context) {
+            return Err(Error::failed("callback child requires its live module"));
+        }
+        if endpoints.is_empty()
+            || endpoints.len() > 32
+            || endpoints.iter().any(|endpoint| {
+                endpoint.members.is_empty()
+                    || endpoint.members.len() > 64
+                    || endpoint
+                        .members
+                        .iter()
+                        .enumerate()
+                        .any(|(index, member)| endpoint.members[..index].contains(member))
+            })
+            || endpoints.iter().enumerate().any(|(index, endpoint)| {
+                endpoints[..index].iter().any(|previous| {
+                    previous.path == endpoint.path && previous.interface == endpoint.interface
+                })
+            })
+        {
+            return Err(Error::failed(
+                "callback child endpoint declaration is invalid",
+            ));
+        }
+        let (host, peer) = MemoryTransport::pair();
+        let unique = self.broker.attach(Arc::new(peer));
+        let transport = Arc::new(host);
+        let mut rollback = PeerRollback {
+            broker: self.broker.clone(),
+            peer: unique,
+            transport: transport.clone(),
+            committed: false,
+        };
+        let connection = Connection::attach(transport.clone());
+        connection.handshake().await?;
+        let destination = connection
+            .unique_name()
+            .ok_or_else(|| Error::failed("callback connection has no unique name"))?;
+        let module_transport = self
+            .state
+            .module_transport
             .lock()
-            .expect("router lock")
-            .revoke_host_callbacks(&self.state);
+            .expect("callback module lock")
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| Error::failed("callback module is no longer live"))?;
+        let child = Arc::new(CallbackState {
+            destination,
+            endpoints,
+            stream_endpoints: Vec::new(),
+            signals: Vec::new(),
+            module_transport: Mutex::new(Some(Arc::downgrade(&module_transport))),
+            _parent: Some(self.state.clone()),
+            children: Mutex::new(Vec::new()),
+            lifetime: Mutex::new(Lifetime {
+                active: true,
+                used: false,
+                revoked: false,
+                module: self.state.module_peer(),
+                running: 0,
+                served: Vec::new(),
+                registering: Vec::new(),
+            }),
+            drained: Notify::new(),
+            physical_drained: std::sync::Condvar::new(),
+            #[cfg(test)]
+            physical_wait_started: Notify::new(),
+        });
+        let mut router = self.broker.router.lock().expect("router lock");
+        if !HostCallbackGuard(self.state.clone()).authorizes(context) {
+            return Err(Error::failed("callback parent was revoked during creation"));
+        }
+        router.add_host_callbacks(child.clone())?;
+        let mut children = self.state.children.lock().expect("callback children lock");
+        children.retain(|existing| existing.strong_count() != 0);
+        children.push(Arc::downgrade(&child));
+        drop(children);
+        drop(router);
+        rollback.committed = true;
+        Ok(HostCallbackBinding {
+            owner: self.owner.clone(),
+            broker: self.broker.clone(),
+            connection,
+            state: child,
+            transport,
+            #[cfg(test)]
+            after_attach: Mutex::new(None),
+            #[cfg(test)]
+            fixture_controller: Mutex::new(None),
+            #[cfg(test)]
+            before_load_decision: Mutex::new(None),
+            #[cfg(test)]
+            after_load_termination: Mutex::new(None),
+        })
     }
     /// Revoke and close the local connection. This does not cancel running user code.
     pub async fn close(&self) -> Result<()> {
@@ -465,7 +642,7 @@ impl HostCallbackBinding {
     /// Every declared member must be implemented; duplicate registration fails.
     pub async fn serve_at(&self, path: ObjectPath, interface: impl Interface) -> Result<()> {
         let name = interface.name();
-        let endpoint = self
+        let confidential_endpoint = self
             .state
             .endpoints
             .iter()
@@ -477,11 +654,11 @@ impl HostCallbackBinding {
             .iter()
             .find(|endpoint| endpoint.path == path && endpoint.interface == name)
             .cloned();
-        if endpoint.is_none() && stream_endpoint.is_none() {
+        if confidential_endpoint.is_none() && stream_endpoint.is_none() {
             return Err(Error::failed("callback endpoint is not declared"));
         }
         let provided = interface.members();
-        if endpoint
+        if confidential_endpoint
             .iter()
             .flat_map(|endpoint| endpoint.members.iter())
             .chain(
@@ -512,7 +689,7 @@ impl HostCallbackBinding {
                 path.clone(),
                 GuardedInterface {
                     interface,
-                    endpoint,
+                    confidential_endpoint,
                     stream_endpoint,
                     state: self.state.clone(),
                 },
@@ -543,7 +720,7 @@ impl Drop for HostCallbackBinding {
 
 struct GuardedInterface<I> {
     interface: I,
-    endpoint: Option<HostCallbackEndpoint>,
+    confidential_endpoint: Option<HostCallbackEndpoint>,
     stream_endpoint: Option<HostStreamCallbackEndpoint>,
     state: Arc<CallbackState>,
 }
@@ -567,7 +744,7 @@ impl Drop for Running {
 #[async_trait]
 impl<I: Interface> Interface for GuardedInterface<I> {
     fn name(&self) -> InterfaceName {
-        self.endpoint
+        self.confidential_endpoint
             .as_ref()
             .map(|endpoint| endpoint.interface.clone())
             .or_else(|| {
@@ -575,18 +752,17 @@ impl<I: Interface> Interface for GuardedInterface<I> {
                     .as_ref()
                     .map(|endpoint| endpoint.interface.clone())
             })
-            .expect("a guarded callback has a declared endpoint")
+            .expect("declared callback interface")
     }
     fn members(&self) -> Vec<MemberName> {
-        self.endpoint
+        self.confidential_endpoint
             .iter()
-            .flat_map(|endpoint| endpoint.members.iter())
+            .flat_map(|endpoint| endpoint.members.iter().cloned())
             .chain(
                 self.stream_endpoint
                     .iter()
-                    .flat_map(|endpoint| endpoint.members.iter()),
+                    .flat_map(|endpoint| endpoint.members.iter().cloned()),
             )
-            .cloned()
             .collect()
     }
     async fn call(&self, _: &MemberName, _: serde_json::Value) -> Result<serde_json::Value> {
@@ -603,7 +779,7 @@ impl<I: Interface> Interface for GuardedInterface<I> {
         let _running = {
             let mut state = self.state.lifetime.lock().expect("callback lifetime lock");
             let confidential_member = self
-                .endpoint
+                .confidential_endpoint
                 .as_ref()
                 .is_some_and(|endpoint| endpoint.members.contains(member));
             let stream_member = self
@@ -612,7 +788,8 @@ impl<I: Interface> Interface for GuardedInterface<I> {
                 .is_some_and(|endpoint| endpoint.members.contains(member));
             if !self.state.module_live()
                 || confidential_member == stream_member
-                || context.is_confidential() != confidential_member
+                || confidential_member && !context.is_confidential()
+                || stream_member && context.is_confidential()
                 || !state.active
                 || state.module.is_none()
                 || context.authenticated_sender() != state.module.as_ref()
@@ -634,9 +811,8 @@ impl<I: Interface> Interface for GuardedInterface<I> {
 }
 
 impl ModuleHost {
-    /// Check that a callback binding belongs to this host and has every
-    /// declared endpoint served. The load operation repeats this check while
-    /// atomically consuming the one-use binding.
+    /// Check that a callback binding can be attempted without consuming it.
+    /// The loader repeats this check while atomically marking the binding used.
     pub(crate) fn validate_host_callback_binding(
         &self,
         binding: &HostCallbackBinding,
@@ -763,8 +939,28 @@ impl ModuleHost {
         &self,
         endpoints: Vec<HostCallbackEndpoint>,
     ) -> Result<HostCallbackBinding> {
-        self.prepare_host_callbacks_with_signals(endpoints, Vec::new())
+        self.prepare_host_callbacks_with_stream_endpoints(endpoints, Vec::new())
             .await
+    }
+
+    /// Create an exact callback binding with confidential endpoints and a
+    /// separate allowlist of ordinary stream-carrying methods.
+    ///
+    /// Stream endpoints are never treated as confidential: their handles and
+    /// payload use ordinary TinyBus calls. They remain restricted to the
+    /// binding's exact destination, active lifetime, and verified module
+    /// sender. Members cannot overlap the confidential endpoint declarations.
+    pub async fn prepare_host_callbacks_with_stream_endpoints(
+        &self,
+        endpoints: Vec<HostCallbackEndpoint>,
+        stream_endpoints: Vec<HostStreamCallbackEndpoint>,
+    ) -> Result<HostCallbackBinding> {
+        self.prepare_host_callbacks_with_signals_and_stream_endpoints(
+            endpoints,
+            Vec::new(),
+            stream_endpoints,
+        )
+        .await
     }
 
     /// Create a private callback recipient with a finite directed-signal set.
@@ -785,21 +981,6 @@ impl ModuleHost {
             endpoints,
             signals,
             Vec::new(),
-        )
-        .await
-    }
-
-    /// Create a callback binding with confidential methods and ordinary stream
-    /// methods on separate, finite member allowlists.
-    pub async fn prepare_host_callbacks_with_stream_endpoints(
-        &self,
-        endpoints: Vec<HostCallbackEndpoint>,
-        stream_endpoints: Vec<HostStreamCallbackEndpoint>,
-    ) -> Result<HostCallbackBinding> {
-        self.prepare_host_callbacks_with_signals_and_stream_endpoints(
-            endpoints,
-            Vec::new(),
-            stream_endpoints,
         )
         .await
     }
@@ -831,6 +1012,7 @@ impl ModuleHost {
                 declared_interfaces.push((path, interface));
             }
         }
+        let all_endpoint_count = declared_interfaces.len();
         let invalid_stream_endpoint =
             stream_endpoints.iter().any(|endpoint| {
                 endpoint.members.is_empty()
@@ -852,9 +1034,10 @@ impl ModuleHost {
                             .any(|member| confidential.members.contains(member))
                 })
             });
-        if declared_interfaces.is_empty()
-            || declared_interfaces.len() > 32
+        if all_endpoint_count == 0
+            || all_endpoint_count > 32
             || invalid_stream_endpoint
+            || endpoints.is_empty() && !signals.is_empty()
             || endpoints.iter().any(|endpoint| {
                 endpoint.members.is_empty()
                     || endpoint.members.len() > 64
@@ -924,6 +1107,8 @@ impl ModuleHost {
                 stream_endpoints,
                 signals,
                 module_transport: Mutex::new(None),
+                _parent: None,
+                children: Mutex::new(Vec::new()),
                 lifetime: Mutex::new(Lifetime {
                     active: false,
                     used: false,
@@ -957,10 +1142,11 @@ impl ModuleHost {
             .await
     }
 
-    /// Load a verified artifact with callbacks only when its admitted bus name
-    /// and object path match the registry record the resolver selected. This
-    /// identity check runs before attachment or initialization.
-    pub(crate) async fn load_file_with_host_callbacks_for(
+    /// Load a verified module with callbacks only if its manifest has the exact
+    /// registry identity expected by the caller. Identity is checked before the
+    /// initializer runs, so the callback recipient cannot observe configuration
+    /// intended for a different module.
+    pub async fn load_file_with_host_callbacks_for(
         &self,
         path: impl AsRef<Path>,
         config: serde_json::Value,

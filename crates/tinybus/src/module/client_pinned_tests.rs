@@ -676,7 +676,9 @@ async fn ordinary_binding_timeout_keeps_resolver_owned_initialization_for_retry(
     runtime_task.await.unwrap();
     assert_eq!(runtime_task_rx.await.unwrap(), 7);
     assert_eq!(RESOLVER_LINKED_STARTS.load(Ordering::SeqCst), 1);
-    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 4);
+    // The bind above revisits the cached `Ready` slot, which re-checks the host
+    // for a module that faulted after load: one more runtime lookup.
+    assert_eq!(runtime_provider_calls.load(Ordering::SeqCst), 5);
     assert_eq!(RESOLVER_LINKED_DELIVERIES.load(Ordering::SeqCst), 0);
     assert_eq!(proxy_calls.load(Ordering::SeqCst), 1);
     assert_eq!(

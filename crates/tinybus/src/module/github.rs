@@ -52,9 +52,14 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const RECV_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Bulk transfer of an archive on whatever link the user has. Generous because
-/// a slow link is a fact, not a fault; the other budgets bound the stalls.
-const RECV_BODY_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// How long one read may wait for bytes. It restarts on every read, so a slow
+/// link that keeps delivering is never cut off, while a stalled transfer fails
+/// within this budget instead of waiting out the whole body ceiling.
+const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Outer bound on one body transfer. ponytail: a peer that trickles one byte
+/// per [`STALL_TIMEOUT`] is only stopped here; resume with `Range` if that
+/// ever matters.
+const RECV_BODY_CEILING: Duration = Duration::from_secs(60 * 60);
 
 /// A pinned release a host wants loaded through a persistent, verified cache.
 #[derive(Debug, Clone)]
@@ -110,17 +115,17 @@ pub(crate) fn acquire(
     asset_name: &str,
     expected_sha256: Option<&str>,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
+    check_asset_name(asset_name)?;
     let (owner, repo, tag) = parse_release_url(release_url)?;
     let agent = agent();
     let located = locate(&agent, owner, repo, tag, asset_name)?;
     let manifest_sha = manifest_digest(&located, asset_name, expected_sha256)?;
 
-    let temp =
-        tempfile::tempdir().map_err(|_| refused("module extraction directory is unavailable"))?;
+    let temp = private_extraction_tempdir()?;
     let archive_path = temp.path().join(asset_name);
     download(&agent, &located.archive_url, &archive_path)?;
     verify_archive(&archive_path, &manifest_sha)?;
-    extract(asset_name, &archive_path, temp.path())?;
+    extract_private(asset_name, &archive_path, temp.path())?;
     let module = canonical_module(cache::find_module(temp.path())?)?;
     Ok((temp, module))
 }
@@ -140,6 +145,7 @@ pub(crate) fn acquire(
 /// downloads are disabled, the release cannot be fetched or fails verification,
 /// or the cache directory cannot be written.
 pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, String)> {
+    check_asset_name(release.asset_name)?;
     let (owner, repo, tag) = parse_release_url(release.release_url)?;
     if let Some(hit) = cache::find_verified(
         release.cache_dir,
@@ -167,10 +173,11 @@ pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, St
     )?;
 
     let staging = cache::stage(release.cache_dir)?;
+    restrict_extraction_directory(staging.path())?;
     let archive_path = staging.path().join(release.asset_name);
     download(&agent, &located.archive_url, &archive_path)?;
     verify_archive(&archive_path, &manifest_sha)?;
-    extract(release.asset_name, &archive_path, staging.path())?;
+    extract_private(release.asset_name, &archive_path, staging.path())?;
     let module = cache::find_module(staging.path())?;
     verify_library_digest(&module, release.expected_library_sha256)?;
     let relative = module
@@ -178,15 +185,41 @@ pub(crate) fn acquire_cached(release: &CachedRelease<'_>) -> Result<(PathBuf, St
         .map_err(|_| refused("release module is outside its staging directory"))?
         .to_path_buf();
     cache::write_digest_marker(staging.path(), release.asset_name, &manifest_sha)?;
+    commit_or_reuse(staging, release, &relative, manifest_sha)
+}
 
-    if let Err(error) = cache::commit(staging, release.cache_dir) {
-        // Another process may have committed the same release first; its files
-        // are as good as ours if they verify. Otherwise the failure stands.
-        if let Some(hit) = cache::find_verified(
+/// Move a verified staging directory into the cache, unless another process
+/// filled it while this one downloaded. [`cache::commit`] replaces whatever is
+/// there, and a directory that already verifies may hold a module a running
+/// sibling has mapped; its files are as good as ours, so they are kept.
+///
+/// ponytail: a sibling can still commit between the check and the rename; a
+/// cross-process `File::lock` closes that window once the Rust floor is 1.89.
+fn commit_or_reuse(
+    staging: tempfile::TempDir,
+    release: &CachedRelease<'_>,
+    relative: &Path,
+    manifest_sha: String,
+) -> Result<(PathBuf, String)> {
+    let concurrent_fill = || {
+        cache::find_verified(
             release.cache_dir,
             release.asset_name,
             release.expected_sha256,
-        ) {
+        )
+    };
+    if let Some(hit) = concurrent_fill() {
+        verify_library_digest(&hit.module, release.expected_library_sha256)?;
+        info!(
+            asset = release.asset_name,
+            "release cache: a concurrent fill already verifies; keeping it"
+        );
+        return Ok((hit.module, hit.sha256));
+    }
+    if let Err(error) = cache::commit(staging, release.cache_dir) {
+        // Another process may have committed the same release first; its files
+        // are as good as ours if they verify. Otherwise the failure stands.
+        if let Some(hit) = concurrent_fill() {
             verify_library_digest(&hit.module, release.expected_library_sha256)?;
             warn!(
                 asset = release.asset_name,
@@ -223,12 +256,17 @@ fn verify_library_digest(path: &Path, expected: Option<&str>) -> Result<()> {
 /// One agent per acquisition, so the three requests share a connection pool
 /// and every one of them carries the same budgets.
 fn agent() -> ureq::Agent {
+    agent_with(STALL_TIMEOUT)
+}
+
+fn agent_with(stall: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_resolve(Some(RESOLVE_TIMEOUT))
         .timeout_connect(Some(CONNECT_TIMEOUT))
         .timeout_send_request(Some(SEND_REQUEST_TIMEOUT))
         .timeout_recv_response(Some(RECV_RESPONSE_TIMEOUT))
-        .timeout_recv_body(Some(RECV_BODY_TIMEOUT))
+        .timeout_per_read(Some(stall))
+        .timeout_recv_body(Some(RECV_BODY_CEILING))
         .build()
         .new_agent()
 }
@@ -386,8 +424,14 @@ fn download(agent: &ureq::Agent, url: &str, destination: &Path) -> Result<()> {
     let mut reader = body.with_config().limit(MAX_RELEASE_BYTES + 1).reader();
     let mut file = std::fs::File::create(destination)
         .map_err(|_| refused("release asset could not be stored"))?;
-    let written = std::io::copy(&mut reader, &mut file)
-        .map_err(|_| refused("GitHub release asset could not be read"))?;
+    let written = std::io::copy(&mut reader, &mut file).map_err(|error| {
+        let error = ureq::Error::from(error);
+        if let ureq::Error::BodyExceedsLimit(_) = error {
+            return refused("GitHub release asset exceeds the 512 MiB size cap");
+        }
+        warn!(error = %error, "release asset could not be read");
+        refused("GitHub release asset could not be read")
+    })?;
     if written > MAX_RELEASE_BYTES {
         return Err(refused("GitHub release asset exceeds the 512 MiB size cap"));
     }
@@ -462,26 +506,105 @@ fn validate_hash(hash: &str) -> Result<()> {
     Ok(())
 }
 
-/// Extracts a release archive into `destination`, refusing unsafe ZIP paths and entry types.
+/// Unpacks only regular files, the same entry types the ZIP branch accepts. A
+/// symlink or hard link could point a module path outside `destination`, so it
+/// is refused. Directory entries are skipped: `unpack_in` creates parents, and
+/// an archived directory's metadata must not widen the extraction root.
+fn unpack_tar(reader: impl std::io::Read, destination: &Path) -> Result<()> {
+    let mut archive = tar::Archive::new(reader);
+    let entries = archive
+        .entries()
+        .map_err(|_| refused("release archive is invalid"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|_| refused("release archive is invalid"))?;
+        match entry.header().entry_type() {
+            tar::EntryType::Directory => {}
+            tar::EntryType::Regular | tar::EntryType::Continuous => {
+                let inside = entry
+                    .unpack_in(destination)
+                    .map_err(|_| refused("release archive extraction failed"))?;
+                if !inside {
+                    return Err(refused("release archive contains an unsafe path"));
+                }
+            }
+            _ => {
+                return Err(refused(
+                    "release archive contains an unsupported entry type",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extracts a release archive into `destination`, refusing unsafe paths and entry types.
 fn extract(name: &str, archive: &Path, destination: &Path) -> Result<()> {
     if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
         let file =
             std::fs::File::open(archive).map_err(|_| refused("release archive is unreadable"))?;
-        let decoder = flate2::read::GzDecoder::new(file);
-        tar::Archive::new(decoder)
-            .unpack(destination)
-            .map_err(|_| refused("release archive extraction failed"))?;
+        unpack_tar(flate2::read::GzDecoder::new(file), destination)?;
     } else if name.ends_with(".tar") {
         let file =
             std::fs::File::open(archive).map_err(|_| refused("release archive is unreadable"))?;
-        tar::Archive::new(file)
-            .unpack(destination)
-            .map_err(|_| refused("release archive extraction failed"))?;
+        unpack_tar(file, destination)?;
     } else if name.ends_with(".zip") {
         super::zip_extract::extract(archive, destination)?;
     } else {
         return Err(refused("release asset is not a supported archive"));
     }
+    Ok(())
+}
+
+/// Extracts an archive and restores the extraction root's private permissions.
+fn extract_private(name: &str, archive: &Path, destination: &Path) -> Result<()> {
+    let extraction = extract(name, archive, destination);
+    let restriction = restrict_extraction_directory(destination);
+    extraction?;
+    restriction
+}
+
+/// The asset name is joined onto the cache and extraction directories, so it
+/// must name one file inside them before anything touches the filesystem.
+fn check_asset_name(asset_name: &str) -> Result<()> {
+    if cache::is_safe_path_component(asset_name) {
+        Ok(())
+    } else {
+        Err(refused(format!(
+            "release asset name `{asset_name}` is not a plain file name"
+        )))
+    }
+}
+
+fn private_extraction_tempdir() -> Result<tempfile::TempDir> {
+    let temp = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+        }
+        #[cfg(not(unix))]
+        {
+            tempfile::tempdir()
+        }
+    }
+    .map_err(|_| refused("module extraction directory is unavailable"))?;
+    restrict_extraction_directory(temp.path())?;
+    Ok(temp)
+}
+
+#[cfg(unix)]
+fn restrict_extraction_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| refused("release extraction directory permissions could not be secured"))
+}
+
+#[cfg(not(unix))]
+fn restrict_extraction_directory(_path: &Path) -> Result<()> {
     Ok(())
 }
 
