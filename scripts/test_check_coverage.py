@@ -26,6 +26,7 @@ LIBRARIES = (
     "module_context_eager",
     "module_trusted_migration",
     "module_host_callback",
+    "module_host_stream_callback",
     "module_controlled_init",
     "module_terminal",
 )
@@ -69,6 +70,7 @@ if args and args[0] == "build":
         "module_context_eager",
         "module_trusted_migration",
         "module_host_callback",
+        "module_host_stream_callback",
         "module_controlled_init",
         "module_terminal",
     ):
@@ -86,6 +88,7 @@ elif args[:2] == ["llvm-cov", "--workspace"]:
         "TINYBUS_TEST_CONTEXT_EAGER_MODULE",
         "TINYBUS_TEST_MIGRATION_MODULE",
         "TINYBUS_TEST_HOST_CALLBACK_MODULE",
+        "TINYBUS_TEST_HOST_STREAM_CALLBACK_MODULE",
         "TINYBUS_TEST_CONTROLLED_INIT_MODULE",
         "TINYBUS_TEST_TERMINAL_MODULE",
     )
@@ -196,6 +199,8 @@ class CoverageScriptPlatformTests(unittest.TestCase):
                 "module_trusted_migration",
                 "--example",
                 "module_host_callback",
+                "--example",
+                "module_host_stream_callback",
                 "--example",
                 "module_controlled_init",
                 "--example",
